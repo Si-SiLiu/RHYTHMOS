@@ -357,7 +357,7 @@ class PipelineRunner:
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Run the Daily Recovery Coach sync pipeline.")
+    parser = argparse.ArgumentParser(description="Run the RHYTHMOS｜律衡 sync pipeline.")
     parser.add_argument("--dry-run", action="store_true", help="Validate steps without database writes.")
     parser.add_argument("--only", choices=tuple(DEFAULT_STEPS), help="Run one pipeline step.")
     parser.add_argument("--resume", action="store_true", help="Resume the latest interrupted run.")

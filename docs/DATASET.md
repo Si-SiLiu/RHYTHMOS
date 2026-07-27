@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document describes the local dataset used by Daily Recovery Coach. It does
+This document describes the local dataset used by RHYTHMOS｜律衡. It does
 not publish the data itself. Machine-readable counts and coverage are generated
 in [project_state.json](../project_state.json).
 

@@ -109,7 +109,7 @@ def build_icon_assets(source_path: Path = DEFAULT_SOURCE, output_dir: Path = DEF
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Daily Recovery Coach icon assets locally")
+    parser = argparse.ArgumentParser(description="Build RHYTHMOS｜律衡 icon assets locally")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     args = parser.parse_args()

@@ -1,5 +1,7 @@
 # Architecture
 
+The presentation layer is branded **RHYTHMOS｜律衡** (Personal Performance OS / 个人表现与恢复系统); this does not change service, database, API, or route contracts.
+
 ## Sleep Regularity Engine 2.0 boundary (2026-07-22)
 
 `src.sleep_regularity.SleepRegularityService` owns canonical sleep validation,

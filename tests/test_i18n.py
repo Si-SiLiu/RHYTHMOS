@@ -181,12 +181,12 @@ class InternationalizationTests(unittest.TestCase):
 
     def test_chinese_report(self):
         content = report.render_report(self.sample_report(), "zh-CN")
-        self.assertIn("# 每日恢复报告", content)
+        self.assertIn("# RHYTHMOS｜律衡 每日状态报告", content)
         self.assertIn("恢复分数：86", content)
 
     def test_english_report(self):
         content = report.render_report(self.sample_report(), "en")
-        self.assertIn("# Daily Recovery Report", content)
+        self.assertIn("# RHYTHMOS｜律衡 Daily Report", content)
         self.assertIn("Recovery Score: 86", content)
 
     def test_report_language_directories(self):

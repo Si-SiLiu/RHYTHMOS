@@ -1,5 +1,7 @@
 # Roadmap
 
+Product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现与恢复系统.
+
 ## Completed 2026-07-22 — Sleep Regularity Engine 2.0
 
 - Completed canonical sleep validation and source adapter boundary.

@@ -1,4 +1,4 @@
-"""Build a project-local macOS app bundle for the Recovery Dashboard."""
+"""Build a project-local RHYTHMOS｜律衡 macOS dashboard bundle."""
 
 from __future__ import annotations
 
@@ -102,12 +102,12 @@ def build_app_bundle(
         executable_path.chmod(0o755)
 
     info = {
-        "CFBundleDisplayName": "Daily Recovery Coach",
+        "CFBundleDisplayName": "RHYTHMOS｜律衡",
         "CFBundleExecutable": "daily-recovery-coach",
         "CFBundleIdentifier": "local.daily-recovery-coach.dashboard",
         "CFBundleIconFile": "app_icon.icns",
         "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": "Daily Recovery Coach",
+        "CFBundleName": "RHYTHMOS｜律衡",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": app_version,
         "CFBundleVersion": app_version,

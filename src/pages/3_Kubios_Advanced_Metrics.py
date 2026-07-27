@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import get_kubios_advanced_metrics
 from src.demo_sandbox import configure_demo_runtime
 from src.i18n import format_date, get_translator
@@ -24,7 +24,7 @@ from src.i18n.ui import current_language, render_sidebar
 
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
-st.set_page_config(page_title=get_translator(PAGE_LANGUAGE)("kubios_metrics.advanced_title"), page_icon=load_page_icon(), layout="wide")
+st.set_page_config(page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("kubios_metrics.advanced_title")), page_icon=load_page_icon(), layout="wide")
 LANGUAGE, TR = render_sidebar(st, "kubios_advanced")
 
 GROUPS = {

@@ -1,1 +1,1 @@
-"""Daily Recovery Coach application package."""
+"""RHYTHMOS｜律衡 application package."""

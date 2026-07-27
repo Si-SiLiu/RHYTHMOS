@@ -267,7 +267,7 @@ def launch_dashboard(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="启动本地 Daily Recovery Coach 看板")
+    parser = argparse.ArgumentParser(description="启动本地 RHYTHMOS｜律衡 看板")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="首选本地端口")
     return parser.parse_args(argv)

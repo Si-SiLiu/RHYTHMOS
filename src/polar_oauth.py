@@ -53,7 +53,7 @@ def index():
     missing = get_missing_polar_config()
     if missing:
         return f"""
-        <h2>Daily Recovery Coach - Polar 授权</h2>
+        <h2>RHYTHMOS｜律衡 - Polar 授权</h2>
         <p>Flask 服务已启动。</p>
         <p>请先在 .env 里填写：{", ".join(missing)}</p>
         """, 503
@@ -73,7 +73,7 @@ def index():
     auth_link = AUTH_URL + "?" + urllib.parse.urlencode(params)
 
     return f"""
-    <h2>Daily Recovery Coach - Polar 授权</h2>
+    <h2>RHYTHMOS｜律衡 - Polar 授权</h2>
     <p>点击下面链接，登录 Polar Flow 并授权。</p>
     <a href="{auth_link}">授权 Polar Flow 数据访问</a>
     """

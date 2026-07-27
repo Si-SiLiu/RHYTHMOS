@@ -1,6 +1,15 @@
-# Daily Recovery Coach
+# RHYTHMOS｜律衡
 
-Current App version: 0.28.0. The App sidebar has six top-level sections:
+**Personal Performance OS · 个人表现与恢复系统**
+
+> Know your state. Shape your day.
+> 读懂状态，掌控节奏。
+
+RHYTHMOS（律衡）是一套面向高表现生活人群的个人表现与恢复系统。它通过整合睡眠、心率变异性、静息心率、训练负荷、主观疲劳及生活行为等数据，帮助用户理解当前状态，并为当天的训练、工作与恢复安排提供参考。
+
+RHYTHMOS is a personal performance and recovery system designed for high-performing individuals. It integrates sleep, heart rate variability, resting heart rate, training load, subjective fatigue, and lifestyle data to help users understand their current state and make better decisions about training, work, and recovery.
+
+The app sidebar has six top-level sections:
 **Training**, **Sleep**, **Recovery**, **Nutrition**, **My Profile**, and **Settings**.
 The former Kubios Screenshot Import and Kubios Advanced Metrics entries are no
 longer top-level navigation items; their local implementation and stored data
@@ -102,12 +111,15 @@ Build the local app bundle once:
 .venv/bin/python scripts/build_macos_app.py
 ```
 
-Then double-click `dist/Daily Recovery Coach.app`. It opens a native macOS
+Then double-click `dist/Daily Recovery Coach.app`. Its Finder display name is
+RHYTHMOS｜律衡, while the legacy bundle filename is intentionally retained so
+existing launch paths and shortcuts remain valid. It opens a native macOS
 window containing the local Streamlit App. The local service
 binds to loopback only; repeated launches reuse a matching runtime, while a
 code/locale/version change safely restarts an owned stale service. Structured
 Pipeline and Dashboard logs stay under `logs/`; LaunchAgent standard streams
-stay local under `~/Library/Logs/Daily Recovery Coach/`.
+stay local under `~/Library/Logs/Daily Recovery Coach/` for LaunchAgent
+compatibility.
 
 ## Scheduled Polar sync
 

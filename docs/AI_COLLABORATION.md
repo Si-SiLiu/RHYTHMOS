@@ -1,5 +1,7 @@
 # AI Collaboration
 
+Current product identity: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现与恢复系统.
+
 ## Sleep Regularity Engine 2.0 handoff
 
 The authoritative implementation is `src/sleep_regularity.py`; the page is a

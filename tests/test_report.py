@@ -82,7 +82,7 @@ class ReportTests(unittest.TestCase):
         content = report.render_report(data)
 
         for expected in (
-            "# 每日恢复报告 - 2026-07-10",
+            "# RHYTHMOS｜律衡 每日状态报告 - 2026-07-10",
             "恢复分数：86",
             "训练建议：正常训练",
             "步数：1234",

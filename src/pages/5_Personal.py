@@ -16,7 +16,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.db import connect
 from src.demo_sandbox import configure_demo_runtime
 from src.i18n import format_date, get_translator
@@ -38,7 +38,7 @@ from src.ui_controls import render_manual_input_styles
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
 st.set_page_config(
-    page_title=get_translator(PAGE_LANGUAGE)("personal_info.title"),
+    page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("personal_info.title")),
     page_icon=load_page_icon(),
     layout="wide",
 )

@@ -11,7 +11,7 @@ health age. Recovery, Confidence, and Local Coach model versions are unchanged.
 ## Kubios Screenshot OCR clarification
 
 macOS Vision text recognition is a local operating-system capability, not the
-unreleased Daily Recovery Coach AI model. OCR confidence describes text
+unreleased RHYTHMOS｜律衡 AI model. OCR confidence describes text
 recognition only; it is never interpreted as recovery confidence, physiology,
 diagnosis, or treatment. Human review is mandatory before import. Cloud AI
 Runtime remains false and AI Model remains unreleased.
@@ -21,7 +21,7 @@ remains `unreleased`; exported files are user-reviewed context, not model output
 
 ## Model Name
 
-Daily Recovery Coach Recovery Engine.
+RHYTHMOS｜律衡 Recovery Engine.
 
 ## Version
 
@@ -175,7 +175,7 @@ bias, missing-data bias, behavioral feedback, or temporal confounding.
 
 ## Medical Disclaimer
 
-Daily Recovery Coach is not a medical device. Changes in RMSSD, heart rate,
+RHYTHMOS｜律衡 is not a medical device. Changes in RMSSD, heart rate,
 respiration, sleep, or activity are nonspecific and must not be interpreted as
 diagnosis of illness or injury.
 

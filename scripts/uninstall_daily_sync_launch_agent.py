@@ -1,4 +1,4 @@
-"""Idempotently remove the Daily Recovery Coach user LaunchAgent."""
+"""Idempotently remove the RHYTHMOS｜律衡 user LaunchAgent."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from src.scheduler.launch_agent import DEFAULT_PLIST_PATH, uninstall_launch_agen
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Uninstall the Daily Recovery Coach sync LaunchAgent."
+        description="Uninstall the RHYTHMOS｜律衡 sync LaunchAgent."
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--plist", type=Path, default=DEFAULT_PLIST_PATH)

@@ -2,7 +2,7 @@
 
 ## Research positioning
 
-Daily Recovery Coach is a personal training decision-support platform and a
+RHYTHMOS｜律衡 is a personal performance and recovery system and a
 potential N-of-1 research instrument. It combines wearable, self-measurement,
 and training data into reproducible daily features. It is not a clinically
 validated model, medical device, diagnostic system, or population health
@@ -139,8 +139,8 @@ significance alone is insufficient; effect size and uncertainty are required.
 ## Comparing with Polar and Kubios scores
 
 Comparison should preserve each vendor's intended meaning. The project should
-not treat Polar sleep or Nightly Recharge scores, Kubios readiness, and Daily
-Recovery Coach as interchangeable labels.
+not treat Polar sleep or Nightly Recharge scores, Kubios readiness, and
+RHYTHMOS｜律衡 as interchangeable labels.
 
 A defensible comparison plan would:
 

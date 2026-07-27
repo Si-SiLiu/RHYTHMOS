@@ -1,6 +1,6 @@
 # Scheduled Polar Sync
 
-Daily Recovery Coach uses the user-level macOS LaunchAgent
+RHYTHMOS｜律衡 uses the user-level macOS LaunchAgent
 `com.daily-recovery-coach.sync` to start the existing One-Click Sync Pipeline at
 two-hour intervals from 00:00 through 22:00 in the Mac's local time zone. The
 scheduler contains no Fetch, Import, Recovery, or reporting business logic and
@@ -42,7 +42,7 @@ runner establishes the project directory before importing the Pipeline. This
 avoids a macOS privacy restriction that prevents `launchd` itself from opening a
 Desktop/Documents path as `WorkingDirectory` while preserving the same runtime
 directory for Pipeline code. Standard streams go to
-`~/Library/Logs/Daily Recovery Coach/`; the Pipeline's structured safe log
+`~/Library/Logs/Daily Recovery Coach/` (legacy compatibility path); the Pipeline's structured safe log
 continues to use the project's existing log system. The plist contains no token,
 secret, or copied environment variable.
 

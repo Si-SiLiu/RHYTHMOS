@@ -1,8 +1,12 @@
 # Streamlit Community Cloud Demo
 
+**RHYTHMOS｜律衡** — Personal Performance OS / 个人表现与恢复系统
+
+> Know your state. Shape your day. / 读懂状态，掌控节奏。
+
 ## Purpose
 
-The public demo uses synthetic recovery data. Do not enter real names, health
+The RHYTHMOS｜律衡 public demo uses synthetic recovery data. Do not enter real names, health
 records, HRV/sleep measurements, Polar credentials, or screenshots containing
 personal information.
 

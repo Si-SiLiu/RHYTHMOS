@@ -1,4 +1,9 @@
-# Daily Recovery Coach — Project
+# RHYTHMOS｜律衡 — Project
+
+**Personal Performance OS · 个人表现与恢复系统**
+
+> Know your state. Shape your day.<br>
+> 读懂状态，掌控节奏。
 
 ## Current product capability
 
@@ -6,15 +11,15 @@ The product includes a released Local Deterministic Coach that converts existing
 Recovery and Confidence results into on-device daily direction. It is distinct
 from the blocked Cloud AI Coach and does not send health data externally.
 
-> Project: Daily Recovery Coach
-> Positioning: Personal Recovery Platform
+> Project: RHYTHMOS｜律衡（原 Daily Recovery Coach）
+> Positioning: Personal Performance OS · 个人表现与恢复系统
 > Goal: Collect → Analyze → Explain → Recommend.
 > Status verified: 2026-07-10
 
 ## 项目身份
 
-- 项目名称是 Daily Recovery Coach。
-- 项目定位是 Personal Recovery Platform。
+- 项目名称是 RHYTHMOS｜律衡。
+- 项目定位是 Personal Performance OS · 个人表现与恢复系统。
 - 一句话目标是 Collect → Analyze → Explain → Recommend.
 - 项目服务对象首先是单用户本人。
 - 项目以个人历史作为比较对象。

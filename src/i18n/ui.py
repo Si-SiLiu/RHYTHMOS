@@ -6,6 +6,7 @@ import os
 from .locale import SUPPORTED_LANGUAGES, normalize_language
 from .storage import load_language_preference, save_language_preference
 from .translator import get_translator
+from ..branding import BRAND_NAME, POSITIONING_LINES
 from ..demo_sandbox import is_demo_mode, reset_demo_sandbox
 
 
@@ -49,6 +50,9 @@ def render_sidebar(st, active_page: str) -> tuple[str, object]:
     )
     language = current_language(st.session_state)
     translator = get_translator(language)
+
+    st.sidebar.markdown(f"### {BRAND_NAME}")
+    st.sidebar.caption("  \n".join(POSITIONING_LINES))
 
     # Keep the widget state separate from the global language state. This
     # avoids Streamlit's page-navigation reset of a widget-keyed preference.

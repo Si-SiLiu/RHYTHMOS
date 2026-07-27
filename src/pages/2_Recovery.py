@@ -18,7 +18,7 @@ from html import escape
 import streamlit as st
 import streamlit.components.v1 as components
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import get_latest_local_coach
 from src.db import connect
 from src.demo_sandbox import configure_demo_runtime, is_demo_mode
@@ -40,7 +40,7 @@ from src.ui_controls import render_manual_input_styles
 
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
-st.set_page_config(page_title=get_translator(PAGE_LANGUAGE)("domain.recovery.title"), page_icon=load_page_icon(), layout="wide")
+st.set_page_config(page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("domain.recovery.title")), page_icon=load_page_icon(), layout="wide")
 LANGUAGE, TR = render_sidebar(st, "recovery")
 render_manual_input_styles(st)
 

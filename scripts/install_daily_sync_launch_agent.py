@@ -22,7 +22,7 @@ from src.scheduler.launch_agent import (
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Install the Daily Recovery Coach 23:00 LaunchAgent."
+        description="Install the RHYTHMOS｜律衡 23:00 LaunchAgent."
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
