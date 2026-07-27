@@ -48,7 +48,7 @@ def _scheduler_section():
         st.subheader(TR("scheduler_ui.title"))
         st.info(
             "公开体验版使用合成数据，不连接 Polar，也不执行数据同步。"
-            if LANGUAGE == "zh-CN"
+            if LANGUAGE != "en"
             else "The public demo uses synthetic data and does not connect to Polar or run sync."
         )
         return

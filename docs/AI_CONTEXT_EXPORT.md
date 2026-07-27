@@ -47,7 +47,7 @@ values remain `null` and measured/estimated/missing status is explicit.
 
 JSON uses a stable English schema and enum codes in every interface language;
 `display_language` and `localized_summary` make presentation explicit.
-Markdown follows `zh-CN` or `en`. CSV keeps stable English flattened headers by
+Markdown follows `zh-CN`, `zh-TW` or `en`. CSV keeps stable English flattened headers by
 default so language switching does not break downstream machine processing.
 
 Resolved activity, sleep, and recovery metrics include `value`, `value_source`,

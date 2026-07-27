@@ -55,7 +55,7 @@ def _clean(value):
 
 
 def _ui(zh, en):
-    return zh if LANGUAGE == "zh-CN" else en
+    return zh if LANGUAGE != "en" else en
 
 
 def _baseline(label, item, suffix):
@@ -542,7 +542,7 @@ def main():
     if should_focus_history:
         st.session_state["recovery_history_last_scrolled_nonce"] = history_focus_nonce
 
-    st.subheader("个人恢复基线" if LANGUAGE == "zh-CN" else "Personal Recovery Baseline")
+    st.subheader("个人恢复基线" if LANGUAGE != "en" else "Personal Recovery Baseline")
     target_date = (data or {}).get("date", date.today().isoformat())
     baselines = get_recovery_baselines(target_date=target_date)
     st.markdown(RECOVERY_CORE_CARD_CSS, unsafe_allow_html=True)
@@ -563,7 +563,7 @@ def main():
             baselines.get("morning_mean_hr"),
             higher_is_better=False,
         )
-    st.subheader("恢复建议" if LANGUAGE == "zh-CN" else "Recovery Guidance")
+    st.subheader("恢复建议" if LANGUAGE != "en" else "Recovery Guidance")
     coach = get_latest_local_coach()
     if not coach: st.info(TR("local_coach.missing"))
     else: st.success(TR(f"local_coach.recovery_advice.{coach['recovery_advice'].get('status', 'insufficient_data')}"))

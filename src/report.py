@@ -164,7 +164,7 @@ def render_coach_section(coach, language="zh-CN"):
 def render_prospective_section(progress, language="zh-CN"):
     if not progress: return ""
     tr = get_translator(language)
-    separator = "：" if normalize_language(language) == "zh-CN" else ": "
+    separator = "：" if normalize_language(language) != "en" else ": "
     return f"""## {tr('local_coach.progress')}
 
 - {tr('common.status')}{separator}{progress['status']}
@@ -183,7 +183,7 @@ def render_report(data, language="zh-CN"):
     prospective_section = render_prospective_section(data.get("prospective_evaluation"), language)
     kubios = data.get("kubios_summary") or {}
     no_data = tr("common.no_data")
-    separator = "：" if language == "zh-CN" else ": "
+    separator = "：" if language != "en" else ": "
     resolved = data.get("resolved_fields") or {}
     activity_resolved = resolved.get("activity") or {}
     sleep_resolved = resolved.get("sleep") or {}
@@ -335,7 +335,7 @@ def generate_daily_report(report_date=None, connection=None, reports_dir=REPORTS
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate a localized daily recovery report.")
     parser.add_argument("--date", dest="report_date")
-    parser.add_argument("--language", choices=("zh-CN", "en"))
+    parser.add_argument("--language", choices=("zh-CN", "zh-TW", "en"))
     return parser.parse_args()
 
 

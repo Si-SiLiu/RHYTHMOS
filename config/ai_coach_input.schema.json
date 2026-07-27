@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["locale", "unit_system"],
       "properties": {
-        "locale": {"type": "string", "enum": ["zh-CN", "en-US"]},
+        "locale": {"type": "string", "enum": ["zh-CN", "zh-TW", "en-US"]},
         "unit_system": {"type": "string", "enum": ["metric", "imperial"]}
       }
     },

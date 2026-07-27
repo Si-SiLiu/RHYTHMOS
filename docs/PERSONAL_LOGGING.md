@@ -16,7 +16,7 @@ user confirmation.
 
 BMI 仅为一般性体重身高指标，不能单独判断健康或身体成分。
 
-The Daily Log supports `zh-CN` and `en`. Meal and session selectors display
+The Daily Log supports `zh-CN`, `zh-TW` and `en`. Meal and session selectors display
 localized names while storage continues to use stable codes such as
 `breakfast`, `strength`, and `hiphop`. Switching language does not clear form
 state or alter stored rows.

@@ -28,6 +28,7 @@ class InternationalizationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.zh = json.loads((BASE_DIR / "locales" / "zh-CN.json").read_text(encoding="utf-8"))
+        cls.zh_tw = json.loads((BASE_DIR / "locales" / "zh-TW.json").read_text(encoding="utf-8"))
         cls.en = json.loads((BASE_DIR / "locales" / "en.json").read_text(encoding="utf-8"))
 
     def make_connection(self):
@@ -48,13 +49,17 @@ class InternationalizationTests(unittest.TestCase):
     def test_zh_resource_loads(self):
         self.assertEqual(Translator("zh-CN")("common.no_data"), "暂无数据")
 
+    def test_zh_tw_resource_loads(self):
+        self.assertEqual(Translator("zh-TW")("common.no_data"), "暫無資料")
+
     def test_en_resource_loads(self):
         self.assertEqual(Translator("en")("common.no_data"), "No data")
 
     def test_resource_keys_match(self):
-        self.assertGreater(len(validate_matching_keys({"zh-CN": self.zh, "en": self.en})), 300)
+        self.assertGreater(len(validate_matching_keys({"zh-CN": self.zh, "zh-TW": self.zh_tw, "en": self.en})), 300)
 
     def test_nested_resources_contain_strings_only(self):
+        self.assertEqual(flatten_keys(self.zh), flatten_keys(self.zh_tw))
         self.assertEqual(flatten_keys(self.zh), flatten_keys(self.en))
 
     def test_key_mismatch_is_rejected(self):
@@ -80,6 +85,8 @@ class InternationalizationTests(unittest.TestCase):
 
     def test_locale_aliases(self):
         self.assertEqual(normalize_language("zh"), "zh-CN")
+        self.assertEqual(normalize_language("zh-Hant"), "zh-TW")
+        self.assertEqual(normalize_language("zh_tw"), "zh-TW")
         self.assertEqual(normalize_language("en-US"), "en")
 
     def test_unsupported_locale_uses_default(self):
@@ -114,6 +121,7 @@ class InternationalizationTests(unittest.TestCase):
 
     def test_chinese_date_format(self):
         self.assertEqual(format_date("2026-07-15", "zh-CN"), "2026年7月15日")
+        self.assertEqual(format_date("2026-07-15", "zh-TW"), "2026年7月15日")
 
     def test_english_date_format(self):
         self.assertEqual(format_date("2026-07-15", "en"), "July 15, 2026")
@@ -123,6 +131,7 @@ class InternationalizationTests(unittest.TestCase):
 
     def test_duration_format_in_both_languages(self):
         self.assertEqual(format_duration(95, "zh-CN"), "1 小时 35 分钟")
+        self.assertEqual(format_duration(95, "zh-TW"), "1 小時 35 分鐘")
         self.assertEqual(format_duration(95, "en"), "1 h 35 min")
 
     def test_navigation_is_localized(self):

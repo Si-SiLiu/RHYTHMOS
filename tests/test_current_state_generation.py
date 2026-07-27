@@ -66,7 +66,7 @@ class CurrentStateGenerationTests(unittest.TestCase):
             "i18n_engine_version": "1.0.0",
             "kubios_screenshot_import_version": "1.0.0",
             "kubios_data_model_version": "1.0.0",
-            "supported_languages": ["zh-CN", "en"],
+            "supported_languages": ["zh-CN", "zh-TW", "en"],
             "default_language": "zh-CN",
             "current_language": "zh-CN",
             "translation_key_count": 320,

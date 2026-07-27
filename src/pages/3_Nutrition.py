@@ -60,7 +60,7 @@ def _nutrition_number(value, suffix=""):
 
 
 def _ui(zh, en):
-    return zh if LANGUAGE == "zh-CN" else en
+    return zh if LANGUAGE != "en" else en
 
 
 def _render_html(markup, container=None):
@@ -367,7 +367,7 @@ def _recommended_meal_time(connection, meal_type, meal_date):
 
 
 def _display_food(catalog):
-    return catalog["display_name_zh" if LANGUAGE == "zh-CN" else "display_name_en"]
+    return catalog["display_name_zh" if LANGUAGE != "en" else "display_name_en"]
 
 
 def _food_rows_state(existing, item_type):
@@ -437,13 +437,13 @@ def _food_editor(connection, existing, item_type, editor_key=None):
     widget_prefix = f"food_{item_type}"
     item_label = (
         "食物" if item_type == "food" else "饮品"
-    ) if LANGUAGE == "zh-CN" else (
+    ) if LANGUAGE != "en" else (
         "Food" if item_type == "food" else "Beverage"
     )
     add_item_label = TR("simple_nutrition.add_item")
     add_item_label = (
         "添加食物" if item_type == "food" else "添加饮品"
-    ) if LANGUAGE == "zh-CN" else (
+    ) if LANGUAGE != "en" else (
         "Add Food" if item_type == "food" else "Add Beverage"
     )
     if favorites:
@@ -493,7 +493,7 @@ def _food_editor(connection, existing, item_type, editor_key=None):
             on_change=reset_food_preferences, label_visibility="collapsed",
             accept_new_options=True,
             placeholder=("选择或输入食物" if item_type == "food" else "选择或输入饮品")
-            if LANGUAGE == "zh-CN" else
+            if LANGUAGE != "en" else
             ("Select or enter food" if item_type == "food" else "Select or enter beverage"),
         ) or ""
         selected = by_display_name.get(food_name)
@@ -634,12 +634,12 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
             brand_options = [""] + common_brands + [item["brand_name"] for item in products if item.get("brand_name") and item["brand_name"] not in common_brands]
             if initial_brand and initial_brand not in brand_options:
                 brand_options.append(initial_brand)
-            brand = columns[0].selectbox(TR("supplement_products.brand"), brand_options, index=brand_options.index(initial_brand) if initial_brand else 0, key=f"supplement_brand_{product_kind}_{record_key}_{row_id}", label_visibility="collapsed", accept_new_options=True, placeholder="选择或输入品牌" if LANGUAGE == "zh-CN" else "Select or enter brand") or ""
+            brand = columns[0].selectbox(TR("supplement_products.brand"), brand_options, index=brand_options.index(initial_brand) if initial_brand else 0, key=f"supplement_brand_{product_kind}_{record_key}_{row_id}", label_visibility="collapsed", accept_new_options=True, placeholder="选择或输入品牌" if LANGUAGE != "en" else "Select or enter brand") or ""
             product_options = [""] + [item["product_name"] for item in products if item.get("product_name")]
             if initial_product_name and initial_product_name not in product_options:
                 product_options.append(initial_product_name)
             product_label = _ui("补剂类型", "Supplement Type") if product_kind == "supplement" else _ui("用药类型", "Medication Type")
-            product_name = columns[1].selectbox(product_label if LANGUAGE == "zh-CN" else TR("supplement_products.product_name"), product_options, index=product_options.index(initial_product_name) if initial_product_name else 0, key=f"supplement_product_{product_kind}_{record_key}_{row_id}", label_visibility="collapsed", accept_new_options=True, placeholder=("选择或输入补剂类型" if product_kind == "supplement" else "选择或输入药品名称") if LANGUAGE == "zh-CN" else ("Select or enter supplement" if product_kind == "supplement" else "Select or enter medication")) or ""
+            product_name = columns[1].selectbox(product_label if LANGUAGE != "en" else TR("supplement_products.product_name"), product_options, index=product_options.index(initial_product_name) if initial_product_name else 0, key=f"supplement_product_{product_kind}_{record_key}_{row_id}", label_visibility="collapsed", accept_new_options=True, placeholder=("选择或输入补剂类型" if product_kind == "supplement" else "选择或输入药品名称") if LANGUAGE != "en" else ("Select or enter supplement" if product_kind == "supplement" else "Select or enter medication")) or ""
             selected = next((item for item in products if (item.get("brand_name") or "").strip() == brand.strip() and item.get("product_name", "").strip() == product_name.strip()), None)
             unit_key = f"supplement_unit_{product_kind}_{record_key}_{row_id}"
             initial_unit = saved.get("unit") or (selected or {}).get("default_intake_unit") or "g"
@@ -736,13 +736,13 @@ def _meal_form(connection, existing, records, flash_key=None):
 
     section_options = ("diet", "supplement", "medication")
     section_labels = {
-        "diet": "🍽 饮食" if LANGUAGE == "zh-CN" else "🍽 Diet",
-        "supplement": "💊 补剂" if LANGUAGE == "zh-CN" else "💊 Supplements",
-        "medication": "用药" if LANGUAGE == "zh-CN" else "Medication",
+        "diet": "🍽 饮食" if LANGUAGE != "en" else "🍽 Diet",
+        "supplement": "💊 补剂" if LANGUAGE != "en" else "💊 Supplements",
+        "medication": "用药" if LANGUAGE != "en" else "Medication",
     }
     st.session_state.setdefault("simple_active_nutrition_section", "diet")
     active_section = st.segmented_control(
-        "分类" if LANGUAGE == "zh-CN" else "Category",
+        "分类" if LANGUAGE != "en" else "Category",
         section_options,
         format_func=lambda value: section_labels[value],
         selection_mode="single",
@@ -993,29 +993,29 @@ def _today_nutrition_table(records, day):
 
 def _personal_nutrition_baseline(records, day):
     baseline = calculate_personal_nutrition_baseline(records, day)
-    st.subheader("个人营养基线" if LANGUAGE == "zh-CN" else "Personal Nutrition Baseline")
+    st.subheader("个人营养基线" if LANGUAGE != "en" else "Personal Nutrition Baseline")
     if baseline["status"] != "ready":
         st.info(
             (f"近 {baseline['window_days']} 天只有 {baseline['sample_days']} 个有记录的日期，"
              "至少需要 3 天后才建立个人基线。")
-            if LANGUAGE == "zh-CN" else
+            if LANGUAGE != "en" else
             (f"Only {baseline['sample_days']} recorded days are available in the last "
              f"{baseline['window_days']} days; at least 3 days are needed."))
         return
     st.caption(
         f"基于近 {baseline['window_days']} 天、{baseline['sample_days']} 个有记录日期的每日摄入中位数；"
         "不包含今天。"
-        if LANGUAGE == "zh-CN" else
+        if LANGUAGE != "en" else
         f"Daily intake medians from {baseline['sample_days']} recorded days in the last "
         f"{baseline['window_days']} days; today is excluded."
     )
     labels = {
-        "calories_kcal": "热量（kcal）" if LANGUAGE == "zh-CN" else "Calories (kcal)",
-        "protein_g": "蛋白质（g）" if LANGUAGE == "zh-CN" else "Protein (g)",
-        "carbohydrate_g": "碳水化合物（g）" if LANGUAGE == "zh-CN" else "Carbohydrate (g)",
-        "fat_g": "脂肪（g）" if LANGUAGE == "zh-CN" else "Fat (g)",
-        "fiber_g": "膳食纤维（g）" if LANGUAGE == "zh-CN" else "Fiber (g)",
-        "water_ml": "水分（ml）" if LANGUAGE == "zh-CN" else "Water (ml)",
+        "calories_kcal": "热量（kcal）" if LANGUAGE != "en" else "Calories (kcal)",
+        "protein_g": "蛋白质（g）" if LANGUAGE != "en" else "Protein (g)",
+        "carbohydrate_g": "碳水化合物（g）" if LANGUAGE != "en" else "Carbohydrate (g)",
+        "fat_g": "脂肪（g）" if LANGUAGE != "en" else "Fat (g)",
+        "fiber_g": "膳食纤维（g）" if LANGUAGE != "en" else "Fiber (g)",
+        "water_ml": "水分（ml）" if LANGUAGE != "en" else "Water (ml)",
     }
     rows = [{
         labels[metric]: baseline["metrics"][metric]["median"]
@@ -1027,11 +1027,11 @@ def _personal_nutrition_baseline(records, day):
 
 def _nutrition_advice(records, day):
     baseline = calculate_personal_nutrition_baseline(records, day)
-    st.subheader("营养建议" if LANGUAGE == "zh-CN" else "Nutrition Advice")
+    st.subheader("营养建议" if LANGUAGE != "en" else "Nutrition Advice")
     if baseline["status"] != "ready":
         st.info(
             "继续记录至少 3 天后，系统会根据你的个人营养基线生成更有针对性的建议。"
-            if LANGUAGE == "zh-CN" else
+            if LANGUAGE != "en" else
             "Keep logging for at least 3 days to receive advice based on your personal baseline."
         )
         return
@@ -1050,10 +1050,10 @@ def _nutrition_advice(records, day):
 
     messages = []
     labels = {
-        "calories_kcal": "热量" if LANGUAGE == "zh-CN" else "calories",
-        "protein_g": "蛋白质" if LANGUAGE == "zh-CN" else "protein",
-        "fiber_g": "膳食纤维" if LANGUAGE == "zh-CN" else "fiber",
-        "water_ml": "水分" if LANGUAGE == "zh-CN" else "water",
+        "calories_kcal": "热量" if LANGUAGE != "en" else "calories",
+        "protein_g": "蛋白质" if LANGUAGE != "en" else "protein",
+        "fiber_g": "膳食纤维" if LANGUAGE != "en" else "fiber",
+        "water_ml": "水分" if LANGUAGE != "en" else "water",
     }
     for metric in ("calories_kcal", "protein_g", "fiber_g", "water_ml"):
         personal_value = baseline["metrics"][metric]["median"]
@@ -1063,20 +1063,20 @@ def _nutrition_advice(records, day):
         if ratio < 0.8:
             messages.append(
                 f"今日{labels[metric]}低于你的个人基线，可适度补充。"
-                if LANGUAGE == "zh-CN" else
+                if LANGUAGE != "en" else
                 f"Today's {labels[metric]} is below your personal baseline; consider a moderate addition."
             )
         elif ratio > 1.2 and metric != "water_ml":
             messages.append(
                 f"今日{labels[metric]}高于你的个人基线，后续可适当平衡。"
-                if LANGUAGE == "zh-CN" else
+                if LANGUAGE != "en" else
                 f"Today's {labels[metric]} is above your personal baseline; consider balancing later intake."
             )
 
     if not messages:
         messages.append(
             "今日已记录的营养摄入整体接近你的个人基线，继续保持记录即可。"
-            if LANGUAGE == "zh-CN" else
+            if LANGUAGE != "en" else
             "Today's recorded intake is broadly close to your personal baseline; keep logging consistently."
         )
     for message in messages:

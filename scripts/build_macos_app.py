@@ -11,9 +11,10 @@ import subprocess
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = BASE_DIR / "dist" / "Daily Recovery Coach.app"
+DEFAULT_OUTPUT = BASE_DIR / "dist" / "RHYTHMOS.app"
 SWIFT_TEMPLATE = BASE_DIR / "scripts" / "macos_dashboard_app.swift"
 ICON_PATH = BASE_DIR / "assets" / "app_icon.icns"
+STARTUP_SPLASH_PATH = BASE_DIR / "assets" / "startup_splash.png"
 VERSIONS_PATH = BASE_DIR / "config" / "versions.json"
 
 
@@ -78,6 +79,8 @@ def build_app_bundle(
         raise RuntimeError("DASHBOARD_PYTHON_NOT_FOUND")
     if not ICON_PATH.is_file():
         raise RuntimeError("DASHBOARD_APP_ICON_NOT_FOUND")
+    if not STARTUP_SPLASH_PATH.is_file():
+        raise RuntimeError("DASHBOARD_STARTUP_SPLASH_NOT_FOUND")
     try:
         app_version = json.loads(VERSIONS_PATH.read_text(encoding="utf-8"))["app_version"]
     except (OSError, KeyError, json.JSONDecodeError) as exc:
@@ -95,6 +98,7 @@ def build_app_bundle(
     source_path = resources_dir / "DashboardApp.swift"
     source_path.write_text(render_swift_source(project_root), encoding="utf-8")
     shutil.copy2(ICON_PATH, resources_dir / "app_icon.icns")
+    shutil.copy2(STARTUP_SPLASH_PATH, resources_dir / "startup_splash.png")
     if should_compile:
         compile_native_app(source_path, executable_path)
     else:

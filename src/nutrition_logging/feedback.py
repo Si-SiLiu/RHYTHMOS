@@ -18,7 +18,7 @@ METRICS = BASELINE_METRICS
 
 
 def _text(language: str, zh: str, en: str) -> str:
-    return zh if language == "zh-CN" else en
+    return zh if language != "en" else en
 
 
 def _empty_summary() -> dict[str, Any]:

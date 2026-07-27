@@ -62,7 +62,7 @@ Gate Result: **PASS** after 604-test regression, i18n, SQLite and browser checks
 - [x] Recovery, Baseline and Confidence formulas remain unchanged.
 - [x] No cloud AI or credential access is introduced.
 - [x] SQLite integrity is `ok`; the migration ledger contains schema 0.12.0 once.
-- [x] Simplified Chinese and English coverage passes with no direct page literals.
+- [x] Simplified Chinese, Traditional Chinese and English coverage passes with no direct page literals.
 - [x] 589/589 tests pass, including migration, constraints, catalog, UI contract,
   summaries, AI Context and existing deterministic-engine regressions.
 - [x] Browser smoke testing confirms fish oil → 粒, creatine → 克,
@@ -174,7 +174,7 @@ governance readiness; it does not establish medical or clinical validity.
 
 ## Internationalization Gate
 
-- `zh-CN` and `en` resources load and expose identical keys.
+- `zh-CN`, `zh-TW` and `en` resources load and expose identical keys.
 - Language selection is immediate, persisted locally, and does not clear forms.
 - Database values, internal enums, calculation results, AI Context JSON schema,
   and default CSV headers remain stable.

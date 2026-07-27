@@ -92,7 +92,7 @@ def _number(value, suffix=""):
 
 
 def _ui(zh, en):
-    return zh if LANGUAGE == "zh-CN" else en
+    return zh if LANGUAGE != "en" else en
 
 
 def _field(data, name):
@@ -708,7 +708,7 @@ def _historical_sleep_row(item):
 
 def _historical_sleep_record_table(history):
     """Keep the historical record table separate and make its rows selectable."""
-    title = "历史睡眠数据" if LANGUAGE == "zh-CN" else "Historical Sleep Data"
+    title = "历史睡眠数据" if LANGUAGE != "en" else "Historical Sleep Data"
     st.subheader(title)
     if not history:
         st.info(TR("common.no_data"))
@@ -719,7 +719,7 @@ def _historical_sleep_record_table(history):
         selected_date = history_dates[0]
         st.session_state["sleep_history_selected"] = selected_date
     rows = [_historical_sleep_row(item) for item in history]
-    headers = list(rows[0].keys()) + ["操作" if LANGUAGE == "zh-CN" else "Action"]
+    headers = list(rows[0].keys()) + ["操作" if LANGUAGE != "en" else "Action"]
     widths = [1.0, .75, .95, .95, 1.05, 1.05, 1.05, 1.05, 1.05, 1.0, 1.0, 1.0, 1.0, 1.05]
     with st.container(height=430, border=True):
         header_columns = st.columns(widths)
@@ -732,7 +732,7 @@ def _historical_sleep_record_table(history):
                 cell_html = f'<div style="text-align:center;">{escape(str(row[label]))}</div>'
                 column.markdown(cell_html, unsafe_allow_html=True)
             if columns[-1].button(
-                "查看" if LANGUAGE == "zh-CN" else "View",
+                "查看" if LANGUAGE != "en" else "View",
                 key=f"sleep_history_view_{item['date']}",
                 use_container_width=True,
             ):
@@ -752,9 +752,9 @@ def _render_historical_sleep_interaction(history, persisted_baselines):
 
 def _historical_sleep_situation(history, selected_date, persisted_baselines, *, auto_expand=False, focus_nonce=0):
     """Show only the selected historical night's data and details."""
-    situation_title = "历史睡眠情况" if LANGUAGE == "zh-CN" else "Historical Sleep Situation"
-    data_title = "历史睡眠数据" if LANGUAGE == "zh-CN" else "Historical Sleep Data"
-    details_title = "历史睡眠详情" if LANGUAGE == "zh-CN" else "Historical Sleep Details"
+    situation_title = "历史睡眠情况" if LANGUAGE != "en" else "Historical Sleep Situation"
+    data_title = "历史睡眠数据" if LANGUAGE != "en" else "Historical Sleep Data"
+    details_title = "历史睡眠详情" if LANGUAGE != "en" else "Historical Sleep Details"
     focus_target_id = "sleep-history-details-focus-target"
     focus_anchor = f'<div id="{focus_target_id}"></div>'
     st.markdown(focus_anchor, unsafe_allow_html=True)
@@ -1041,7 +1041,7 @@ def main():
         exclude_date=(detail_data or {}).get("date"),
     )
 
-    today_section = "今日睡眠数据" if LANGUAGE == "zh-CN" else "Today's Sleep Data"
+    today_section = "今日睡眠数据" if LANGUAGE != "en" else "Today's Sleep Data"
     st.subheader(today_section)
     _today_sleep_data(data)
 
@@ -1070,11 +1070,11 @@ def main():
     if should_focus_history:
         st.session_state["sleep_history_details_last_scrolled_nonce"] = history_focus_nonce
 
-    st.subheader("个人睡眠基线" if LANGUAGE == "zh-CN" else "Personal Sleep Baseline")
+    st.subheader("个人睡眠基线" if LANGUAGE != "en" else "Personal Sleep Baseline")
     _personal_baseline(detail_data, history)
 
     st.info(TR("domain.sleep.missing_notice"))
-    st.subheader("睡眠建议" if LANGUAGE == "zh-CN" else "Sleep Guidance")
+    st.subheader("睡眠建议" if LANGUAGE != "en" else "Sleep Guidance")
     coach = get_latest_local_coach()
     if not coach:
         st.info(TR("local_coach.missing"))

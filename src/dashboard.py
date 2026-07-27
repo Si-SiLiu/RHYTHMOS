@@ -80,7 +80,7 @@ def _baseline(label_key, baseline, suffix="", formatter=None):
 
 
 def _catalog_name(item):
-    return item["display_name_zh" if LANGUAGE == "zh-CN" else "display_name_en"]
+    return item["display_name_zh" if LANGUAGE != "en" else "display_name_en"]
 
 
 def _session_source(item):
@@ -93,7 +93,7 @@ def _session_source(item):
 
 def _history(sessions):
     st.subheader(TR("history.activity_title"))
-    history_view_label = "查看" if LANGUAGE == "zh-CN" else "View"
+    history_view_label = "查看" if LANGUAGE != "en" else "View"
     rows = []
     for item in sessions:
         rows.append({
@@ -588,7 +588,7 @@ def _exercise_editor(connection, session):
                 TR("training_logging.history_exercise"), history_ids,
                 format_func=lambda value: next(
                     (by_id.get(item.get("exercise_catalog_id"), {}).get(
-                        "display_name_zh" if LANGUAGE == "zh-CN" else "display_name_en"
+                        "display_name_zh" if LANGUAGE != "en" else "display_name_en"
                     ) or item.get("custom_exercise_name") or TR("common.no_data"))
                     for item in history if item["id"] == value
                 ), key=f"history_exercise_{session['id']}",
@@ -628,8 +628,8 @@ def _summary(session, show_title=True):
 
 
 def _details(connection, session, *, auto_expand=False):
-    historical_data_title = ("历史" + TR("training_logging.title")) if LANGUAGE == "zh-CN" else TR("training_logging.title")
-    historical_details_title = ("历史" + TR("training_logging.combined_details")) if LANGUAGE == "zh-CN" else TR("training_logging.combined_details")
+    historical_data_title = ("历史" + TR("training_logging.title")) if LANGUAGE != "en" else TR("training_logging.title")
+    historical_details_title = ("历史" + TR("training_logging.combined_details")) if LANGUAGE != "en" else TR("training_logging.combined_details")
     with st.expander(historical_data_title, expanded=auto_expand):
         _session_header(session)
         left, right = st.columns(2)
@@ -741,7 +741,7 @@ def _training_metric_card(title, item, suffix=""):
     )
     pct = item.get("percent_difference")
     pct_text = "—" if pct is None else f"{'↑' if pct > 0 else '↓' if pct < 0 else '→'} {abs(pct):.1f}%"
-    window_label = "28天基线" if LANGUAGE == "zh-CN" else "28-day baseline"
+    window_label = "28天基线" if LANGUAGE != "en" else "28-day baseline"
     card_html = (
         f"<div class='drc-load-card'><div class='drc-load-title'>{escape(title)} · {escape(window_label)}</div>"
         f"<div class='drc-load-value'>{escape(_training_value(item.get('current_value'), suffix))}</div>"
@@ -756,7 +756,7 @@ def _training_metric_card(title, item, suffix=""):
 def _render_training_baseline():
     view = get_training_baseline_view()
     baseline_title = TR("training_baseline.title")
-    if LANGUAGE == "zh-CN":
+    if LANGUAGE != "en":
         baseline_title = "个人训练基线"
     st.subheader(baseline_title)
     st.markdown(TRAINING_BASELINE_CSS, unsafe_allow_html=True)
@@ -811,7 +811,7 @@ def main():
                 if should_focus:
                     render_interaction_focus(components, target_id=focus_target_id, nonce=focus_nonce)
                     st.session_state["training_details_last_scrolled_nonce"] = focus_nonce
-                history_training_title = ("历史" + TR("domain.exercise.title")) if LANGUAGE == "zh-CN" else TR("domain.exercise.title")
+                history_training_title = ("历史" + TR("domain.exercise.title")) if LANGUAGE != "en" else TR("domain.exercise.title")
                 st.subheader(history_training_title)
                 _details(connection, selected_session, auto_expand=auto_expand)
                 if training_notice:
@@ -823,7 +823,7 @@ def main():
 
     _render_training_baseline()
 
-    st.subheader("训练建议" if LANGUAGE == "zh-CN" else "Training Guidance")
+    st.subheader("训练建议" if LANGUAGE != "en" else "Training Guidance")
     coach = get_latest_local_coach()
     if not coach: st.info(TR("local_coach.missing"))
     else:

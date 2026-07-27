@@ -32,7 +32,7 @@ History combines an optional component note with its active dose, for example
 `鱼油：1 粒 (EPA+DHA 840 毫克)`.
 
 ## Internationalization
-All supplement fields and units support Simplified Chinese and English.
+All supplement fields and units support Simplified Chinese, Traditional Chinese and English.
 
 ## Nutrition Summary Behavior
 Only matching name/unit pairs aggregate; unlike units remain separate.

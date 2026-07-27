@@ -61,7 +61,7 @@ Product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现�
   Required；本地 OCR、人工确认、Migration 0.6.0 与批量处理已完成，下一阶段是
   Kubios Screenshot Usability Evaluation，不取消人工确认、不接入云端 OCR。
 
-- Internationalization v1.0 标记 Completed；支持简体中文与 English，下一阶段为 Internationalization Usability Review，不立即增加第三种语言。
+- Internationalization v1.0 标记 Completed；现支持简体中文、繁體中文与 English，后续继续进行多语言可用性评审。
 
 - Personal Logging & AI Context Export v1.0 标记 Completed；下一阶段为
   Personal Logging Usability Evaluation，不是自动云端 AI。

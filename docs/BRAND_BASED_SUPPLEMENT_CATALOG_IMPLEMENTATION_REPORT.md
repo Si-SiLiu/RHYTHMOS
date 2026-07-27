@@ -92,7 +92,7 @@ Product creation/search/information/confirmation is local and separate.
 
 ## Internationalization
 
-Simplified Chinese and English product, verification, source and medication
+Simplified Chinese, Traditional Chinese and English product, verification, source and medication
 labels were added.
 
 ## AI Context Changes

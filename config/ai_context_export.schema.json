@@ -9,7 +9,7 @@
     "export_generated_at": {"type": "string", "format": "date-time"},
     "date": {"type": "string", "format": "date"},
     "range_days": {"enum": [1, 7, 14, 30]},
-    "display_language": {"enum": ["zh-CN", "en"]},
+    "display_language": {"enum": ["zh-CN", "zh-TW", "en"]},
     "localized_summary": {"type": "string", "minLength": 1},
     "data_freshness": {"type": "object"},
     "body_summary": {"type": "object"},

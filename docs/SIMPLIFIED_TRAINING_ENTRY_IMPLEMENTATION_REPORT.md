@@ -50,7 +50,7 @@ No simple row renders eight to ten inputs. Primary fields are capped at four plu
 
 # Internationalization
 
-All new labels exist with matching leaf keys in Simplified Chinese and English. The i18n coverage check reports zero direct Streamlit literals.
+All new labels exist with matching leaf keys in Simplified Chinese, Traditional Chinese and English. The i18n coverage check reports zero direct Streamlit literals.
 
 # Tests
 

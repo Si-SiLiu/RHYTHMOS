@@ -73,8 +73,8 @@ Open `http://127.0.0.1:5000`.
 
 ## Language / 语言
 
-Use the sidebar language selector to switch immediately between 简体中文 and
-English. The preference is saved locally and reused by Dashboard, Daily Log,
+Use the sidebar language selector to switch immediately between 简体中文、繁體中文
+and English. The preference is saved locally and reused by Dashboard, Daily Log,
 Markdown reports, and AI Context Markdown. Health data, internal enum codes,
 CSV headers, and calculation results do not change. See
 [Internationalization](docs/INTERNATIONALIZATION.md).
@@ -93,17 +93,23 @@ than repeated daily manual entry.
 
 ### Application icon
 
-The canonical source is `assets/app_icon.png`. Rebuild all optimized PNG and
-macOS ICNS assets offline with:
+The canonical RHYTHMOS｜律衡 icon source is `assets/app_icon.png` (the approved
+blue symbol). The former wordmark is preserved at
+`assets/app_icon_daily_recovery_coach_legacy.png`. Rebuild all optimized PNG
+and macOS ICNS assets offline with:
 
 ```bash
 .venv/bin/python scripts/build_app_icon.py
 .venv/bin/python scripts/build_macos_app.py
 ```
 
-To replace the icon later, preserve the old source, put a new square RGB/RGBA
-PNG at `assets/app_icon.png`, rerun both commands, and verify the Dashboard and
-Finder icon before release.
+To replace the icon later, preserve the current source, put a new square
+RGB/RGBA PNG at `assets/app_icon.png`, rerun both commands, and verify the
+Dashboard and Finder icon before release.
+
+The native startup page uses the transparent `assets/startup_splash.png` brand
+art. Its WebKit page uses the system `prefers-color-scheme` setting, so the
+surrounding background and loading text follow macOS Light/Dark mode.
 
 Build the local app bundle once:
 
@@ -111,15 +117,18 @@ Build the local app bundle once:
 .venv/bin/python scripts/build_macos_app.py
 ```
 
-Then double-click `dist/Daily Recovery Coach.app`. Its Finder display name is
-RHYTHMOS｜律衡, while the legacy bundle filename is intentionally retained so
-existing launch paths and shortcuts remain valid. It opens a native macOS
+Then double-click `dist/RHYTHMOS.app`. Its Finder display name is
+RHYTHMOS｜律衡. The previous `dist/Daily Recovery Coach.app` bundle is retained
+as a legacy rollback artifact until existing launch paths and shortcuts have
+been manually verified. It opens a native macOS
 window containing the local Streamlit App. The local service
 binds to loopback only; repeated launches reuse a matching runtime, while a
 code/locale/version change safely restarts an owned stale service. Structured
 Pipeline and Dashboard logs stay under `logs/`; LaunchAgent standard streams
 stay local under `~/Library/Logs/Daily Recovery Coach/` for LaunchAgent
 compatibility.
+
+Use `⌘M` to minimize, `⌘W` to close the current Dashboard window, and `⌘Q` to quit the app.
 
 ## Scheduled Polar sync
 

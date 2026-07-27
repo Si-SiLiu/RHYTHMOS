@@ -54,7 +54,7 @@ Completeness is identified foods divided by recorded foods. Unknown nutrition is
 excluded rather than counted as zero.
 
 ## Internationalization
-All new actions, states, summaries and units support Simplified Chinese and English.
+All new actions, states, summaries and units support Simplified Chinese, Traditional Chinese and English.
 
 ## AI Context Preparation
 Completed meal summaries are structured; food-level details and free text are excluded.
