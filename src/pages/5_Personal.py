@@ -143,11 +143,17 @@ div[data-testid="stForm"]:has(div[data-testid="stNumberInput"]):has(div[data-tes
     font-weight: 400 !important;
     line-height: 1.5 !important;
 }
+div[data-testid="stForm"]:has(div[data-testid="stNumberInput"]):has(div[data-testid="stSelectbox"])
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] * {
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
+}
 div[data-testid="stForm"] div[data-testid="stDateInput"] input {
     text-align: center !important;
 }
 div[data-testid="stForm"] div[data-testid="stDateInput"] label {
-    transform: translateX(-1.8125rem) !important;
+    transform: translateX(0.5625rem) !important;
 }
 .personal-form-age {
     margin: .8rem 0 1rem;

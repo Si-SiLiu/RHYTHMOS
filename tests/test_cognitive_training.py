@@ -29,8 +29,7 @@ class CognitiveTrainingTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def payload(self, session_id="s1", mode="standard", interrupted=False):
-        plan = "focus_alertness"
+    def payload(self, session_id="s1", mode="standard", interrupted=False, plan="focus_alertness"):
         return {
             "id": session_id,
             "training_plan": plan,
@@ -44,6 +43,25 @@ class CognitiveTrainingTests(unittest.TestCase):
             "device_context": {"viewport": {"width": 390}, "input_mode": "touch"},
             "tasks": [task(name, i + 1) for i, name in enumerate(PLANS[plan])],
         }
+
+    def test_every_plan_and_mode_accepts_its_complete_three_task_run(self):
+        """All three Studio choices must submit the exact task sequence in both modes."""
+        saved_task_types = []
+        for plan, expected_types in PLANS.items():
+            for mode in ("quick", "standard"):
+                with self.subTest(plan=plan, mode=mode):
+                    result = save_training_session(
+                        self.payload(f"{plan}-{mode}", mode=mode, plan=plan), self.path
+                    )
+                    self.assertTrue(result["completed"])
+                    self.assertFalse(result["interrupted"])
+                    self.assertEqual(
+                        [item["task_type"] for item in result["tasks"]], list(expected_types)
+                    )
+                    saved_task_types.extend(item["task_type"] for item in result["tasks"])
+
+        self.assertEqual(len(saved_task_types), len(PLANS) * 2 * 3)
+        self.assertEqual(set(saved_task_types), {task_type for tasks in PLANS.values() for task_type in tasks})
 
     def test_d_prime_is_finite_at_extreme_rates(self):
         self.assertTrue(abs(bounded_d_prime(10, 10, 0, 10)) < 10)
@@ -272,6 +290,9 @@ class CognitiveTrainingTests(unittest.TestCase):
         self.assertIn(".gonogo-instruction:has(#startTargetPractice)>h3{display:none}", full_source)
         self.assertIn("startPracticeCountdown=function(){clearPracticeShell();practiceState='countdown';let began=now(),countdownMs=1200", full_source)
         self.assertIn("targetPracticeCountdown=function(){clearTargetPracticeTimers();targetPracticeState='countdown';let began=now(),countdownMs=1200", full_source)
+        self.assertIn("let taskEndTimer=null;setup=function(seconds)", full_source)
+        self.assertIn("taskEndTimer=setTimeout(finishTask,seconds*1000+30)", full_source)
+        self.assertIn("finishTask=function(){if(done)return;clearInterval(taskTimer);clearTimeout(taskEndTimer)", full_source)
         self.assertIn(".gonogo-instruction:has(#startPractice)>h3", full_source)
         self.assertIn(".gonogo-instruction:has(#practiceCountdown)>p.small", full_source)
         self.assertIn(".gonogo-instruction:has(#targetPracticeCountdown)>p.small", full_source)
