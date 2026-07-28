@@ -8,6 +8,8 @@ future product record carries explicit nutrient information.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
+import math
 from typing import Any
 
 from .food_catalog import NUTRIENT_COLUMNS, calculate_food_values, food_catalog_by_id
@@ -15,6 +17,103 @@ from .nutrition_baseline import BASELINE_METRICS, calculate_personal_nutrition_b
 
 
 METRICS = BASELINE_METRICS
+
+
+def load_nutrition_targets(connection) -> dict[str, tuple[float, float | None]]:
+    """Return the user's persisted daily targets without inventing defaults."""
+    rows = connection.execute(
+        "SELECT metric,minimum_value,maximum_value FROM nutrition_targets"
+    ).fetchall()
+    return {
+        str(row["metric"]): (
+            float(row["minimum_value"]),
+            float(row["maximum_value"]) if row["maximum_value"] is not None else None,
+        )
+        for row in rows
+        if str(row["metric"]) in METRICS
+    }
+
+
+def save_nutrition_targets(connection, targets: Mapping[str, tuple[float | None, float | None]]) -> None:
+    """Persist only explicitly entered targets; blank metrics remain unset."""
+    with connection:
+        for metric in METRICS:
+            lower, upper = targets.get(metric, (None, None))
+            if lower is None:
+                connection.execute("DELETE FROM nutrition_targets WHERE metric=?", (metric,))
+                continue
+            lower_value = float(lower)
+            upper_value = float(upper) if upper is not None else None
+            if not math.isfinite(lower_value) or lower_value < 0:
+                raise ValueError("INVALID_NUTRITION_TARGET")
+            if upper_value is not None and (
+                not math.isfinite(upper_value) or upper_value < lower_value
+            ):
+                raise ValueError("INVALID_NUTRITION_TARGET_RANGE")
+            connection.execute(
+                """INSERT INTO nutrition_targets(metric,minimum_value,maximum_value,updated_at)
+                   VALUES(?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(metric) DO UPDATE SET minimum_value=excluded.minimum_value,
+                       maximum_value=excluded.maximum_value,updated_at=CURRENT_TIMESTAMP""",
+                (metric, lower_value, upper_value),
+            )
+
+
+def save_nutrition_target_snapshot(connection, day: str, targets) -> None:
+    """Keep a dated copy so yesterday's explicit targets can be reused."""
+    with connection:
+        connection.execute("DELETE FROM nutrition_target_snapshots WHERE date=?", (day,))
+        for metric, (lower, upper) in targets.items():
+            if lower is not None:
+                connection.execute(
+                    "INSERT INTO nutrition_target_snapshots(date,metric,minimum_value,maximum_value) VALUES(?,?,?,?)",
+                    (day, metric, float(lower), float(upper) if upper is not None else None),
+                )
+
+
+def load_nutrition_target_snapshot(connection, day: str) -> dict[str, tuple[float, float | None]]:
+    rows = connection.execute(
+        "SELECT metric,minimum_value,maximum_value FROM nutrition_target_snapshots WHERE date=?", (day,)
+    ).fetchall()
+    return {
+        str(row["metric"]): (float(row["minimum_value"]), float(row["maximum_value"]) if row["maximum_value"] is not None else None)
+        for row in rows if str(row["metric"]) in METRICS
+    }
+
+
+def recommended_nutrition_targets(connection) -> dict[str, tuple[float, float | None]]:
+    """Offer conservative, editable targets from saved body data and weight goal."""
+    body = connection.execute(
+        "SELECT weight_kg,height_cm FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC,is_primary DESC,id DESC LIMIT 1"
+    ).fetchone()
+    goals = connection.execute("SELECT target_weight_kg FROM personal_goals WHERE id=1").fetchone()
+    profile = connection.execute("SELECT gender,birth_date,height_cm FROM personal_profile WHERE id=1").fetchone()
+    current_weight = float(body["weight_kg"]) if body and body["weight_kg"] else None
+    target_weight = float(goals["target_weight_kg"]) if goals and goals["target_weight_kg"] else None
+    reference_weight = target_weight or current_weight
+    if reference_weight is None:
+        return {}
+    protein = (round(reference_weight * 1.6), round(reference_weight * 2.0))
+    fat = (round(reference_weight * .8), round(reference_weight * 1.0))
+    water = (round(reference_weight * 30), round(reference_weight * 35))
+    height = (float(profile["height_cm"]) if profile and profile["height_cm"] else (float(body["height_cm"]) if body and body["height_cm"] else None))
+    calories = None
+    if height and profile and profile["birth_date"]:
+        born = date.fromisoformat(str(profile["birth_date"]))
+        age = date.today().year - born.year - ((date.today().month, date.today().day) < (born.month, born.day))
+        gender_adjustment = 5 if profile["gender"] == "male" else -161 if profile["gender"] == "female" else -78
+        maintenance = (10 * reference_weight + 6.25 * height - 5 * age + gender_adjustment) * 1.45
+        adjustment = -350 if target_weight and current_weight and target_weight < current_weight else 250 if target_weight and current_weight and target_weight > current_weight else 0
+        calories = (round(max(0, maintenance + adjustment - 100)), round(max(0, maintenance + adjustment + 100)))
+    calorie_reference = calories[0] if calories else round(reference_weight * 30)
+    return {
+        "calories_kcal": calories,
+        "protein_g": protein,
+        "carbohydrate_g": (round(reference_weight * 3), round(reference_weight * 5)),
+        "fat_g": fat,
+        "fiber_g": (round(calorie_reference * .014), None),
+        "water_ml": water,
+    }
 
 
 def _text(language: str, zh: str, en: str) -> str:

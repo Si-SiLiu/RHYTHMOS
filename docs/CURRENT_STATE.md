@@ -1,5 +1,7 @@
 # Current State
 
+Current product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现与恢复系统.
+
 > Machine-readable authority: [../project_state.json](../project_state.json)
 > Version authority: [../config/versions.json](../config/versions.json)
 > Generator: `.venv/bin/python scripts/update_project_state.py`
@@ -24,7 +26,7 @@ new unvalidated 0–100 score. No database schema change was made.
 <!-- AUTO_STATE_START -->
 ## Automated Project State
 
-- App Version: 0.29.0
+- App Version: 0.31.0
 - Current Phase: Simplified Structured Training Entry UI
 - Phase Status: completed
 - Recovery Engine Version: 1.0.0
@@ -42,54 +44,54 @@ new unvalidated 0–100 score. No database schema change was made.
 - RPE RIR Preference Supported: true
 - Simplified Training Entry Ready: true
 - Structured Training Ready: true
-- Training Session Count: 43
+- Training Session Count: 60
 - Training Exercise Count: 0
 - Training Set Count: 0
 - Latest Training Detail Date: none
 - Supplement Unit System Version: 1.0.0
 - Supplement Catalog Version: 2.0.0
 - Supplement Product Enrichment Version: 1.0.0
-- Brand Based Supplement Logging Ready: true
-- Supplement Product Count: 0
+- Brand Based Supplement Logging Ready: false
+- Supplement Product Count: 20
 - Verified Supplement Product Count: 0
-- Unverified Supplement Product Count: 0
+- Unverified Supplement Product Count: 19
 - Supplement Ingredient Count: 0
-- Latest Supplement Product Update: none
+- Latest Supplement Product Update: 2026-07-22 14:24:21
 - Supplement Enrichment Runtime Status: provider_blocked
 - Supplement Dynamic Units Ready: true
 - Supplement Catalog Count: 10
 - Simple Nutrition Input Ready: true
-- Food Catalog Count: 9
-- Meal Record Count: 9
-- Meal Item Count: 28
-- Meal Template Count: 0
-- Latest Meal Date: none
+- Food Catalog Count: 18
+- Meal Record Count: 38
+- Meal Item Count: 98
+- Meal Template Count: 4
+- Latest Meal Date: 2026-07-26
 - Manual Logging Engine Version: 1.1.0
 - Data Resolution Version: 1.1.0
 - Scheduler Version: 1.1.0
 - Scheduled Sync Enabled: true
-- Scheduled Sync Time: 06:00
+- Scheduled Sync Time: 23:00
 - LaunchAgent Installed: true
-- Latest Scheduled Sync At: 2026-07-18T06:01:01+08:00
+- Latest Scheduled Sync At: 2026-07-26T14:02:02+08:00
 - Latest Scheduled Sync Success: false
 - Manual Activity Count: 15
 - Manual Sleep Count: 1
-- Manual Recovery Count: 2
-- Resolved Field Count: 2243
+- Manual Recovery Count: 10
+- Resolved Field Count: 2623
 - Manual Logging Ready: true
 - Data Resolution Ready: true
 - AI Context Export Version: 1.4.0
 - i18n Engine Version: 1.0.0
 - Kubios Screenshot Import Version: 1.2.0
 - Kubios Data Model Version: 1.1.0
-- Database Schema Version: 0.15.0
-- Schema Migration Count: 15
-- Latest Schema Migration: 0.15.0
-- Dashboard Version: 1.9.0
-- Supported Languages: zh-CN, en
+- Database Schema Version: 0.28.0
+- Schema Migration Count: 28
+- Latest Schema Migration: 0.28.0
+- Dashboard Version: 2.0.1
+- Supported Languages: zh-CN, zh-TW, en
 - Default Language: zh-CN
 - Current Language: zh-CN
-- Translation Key Count: 1089
+- Translation Key Count: 1355
 - Translation Coverage: 100%
 - Language Setting Ready: true
 - Kubios Screenshot Count: 1
@@ -104,46 +106,46 @@ new unvalidated 0–100 score. No database schema change was made.
 - Latest Kubios Measurement Date: none
 - Kubios Core Metrics Ready: false
 - Kubios Advanced Metrics Ready: false
-- Test Total: 720
-- Test Passed: 720
+- Test Total: 801
+- Test Passed: 801
 - Test Failed: 0
 - Test Success: true
-- Baseline Record Count: 600
-- Scored Day Count: 30
-- Recovery v1 Day Count: 23
-- Confidence Record Count: 30
-- Local Coach Record Count: 30
-- Latest Local Coach Date: 2026-07-18
+- Baseline Record Count: 760
+- Scored Day Count: 38
+- Recovery v1 Day Count: 31
+- Confidence Record Count: 38
+- Local Coach Record Count: 38
+- Latest Local Coach Date: 2026-07-26
 - Local Coach Ready: true
 - Cloud AI Runtime Ready: false
-- Body Measurement Count: 6
+- Body Measurement Count: 18
 - Nutrition Log Count: 0
 - Workout Session Count: 0
 - Exercise Set Count: 0
 - AI Context Export Count: 0
-- Latest Body Measurement Date: 2026-07-18
+- Latest Body Measurement Date: 2026-07-26
 - Latest Nutrition Log Date: none
 - Latest Manual Workout Date: none
 - Manual ChatGPT Sync Ready: true
 - Automatic Cloud Sync Ready: false
-- Prospective Eligible Days: 3
+- Prospective Eligible Days: 9
 - Prospective Target Days: 14
-- Prospective Remaining Days: 11
+- Prospective Remaining Days: 5
 - Prospective Evaluation Status: collecting
 - Prospective Evaluation Ready: false
 - Daily Collection Status: attention_required
 - Daily Collection On Track: false
-- Today Collection Completed: false
+- Today Collection Completed: true
 - Current Collection Streak Days: 1
-- Overdue Collection Days: 4
-- Latest Source Data Date: 2026-07-18
-- Source Data Lag Days: 1
+- Overdue Collection Days: 6
+- Latest Source Data Date: 2026-07-26
+- Source Data Lag Days: 0
 - Database Aligned With Source: true
-- Today Source Data Available: false
-- Prospective Collection Blocker: source_data_not_available_for_today
-- Latest Data Date: 2026-07-18
+- Today Source Data Available: true
+- Prospective Collection Blocker: none
+- Latest Data Date: 2026-07-26
 - Next Goal: Observe real training-entry use and refine catalog metadata without changing training or recovery algorithms.
-- Updated At: 2026-07-19T00:10:38+08:00
+- Updated At: 2026-07-26T15:44:00+08:00
 
 ### Prioritized Issues
 
@@ -168,7 +170,8 @@ activity type is the only semantic override. Dashboard, Report, and AI Context
 now consume the shared resolution policy. Subjective fields do not enter the
 existing deterministic health algorithms.
 
-Internationalization v1.0 adds a local display layer for `zh-CN` and `en`.
+Internationalization v1.0 adds a local display layer for `zh-CN`, `zh-TW` and
+`en`.
 Dashboard, Daily Log, deterministic interpretation, reports, and AI Context
 Markdown use one translation interface and saved local preference. Internal
 codes, health database schema, Recovery, Baseline, Confidence, Local Coach,
@@ -295,3 +298,6 @@ The current machine next goal is generated above. Long-term sequence belongs to
 Codex updates the human narrative when context changes. The script alone updates
 the automatic region. A phase cannot close until state generation, full tests,
 documentation consistency, handoff verification, and architecture checks pass.
+# Alertness Probe (v1)
+
+The former daily 3-minute PVT is replaced by a fixed 60-second Alertness Probe. A voluntary 180-second calibration protocol remains available; short, calibration, and legacy three-minute data are isolated by protocol and test mode.

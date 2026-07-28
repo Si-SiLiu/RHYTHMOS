@@ -123,11 +123,20 @@ def _continuous_sleep_heart_rates(connection, start_value, end_value):
     end = _parse_datetime(end_value)
     if not start or not end or end <= start:
         return []
-    dates = []
+    # Continuous-HR payloads can contain thousands of samples per day.  Sleep
+    # views only need the samples inside the sleep window, so compare the raw
+    # millisecond offsets first instead of constructing a datetime for every
+    # sample.  Besides preserving the exact result, this keeps history-page
+    # loading responsive when a month of sleep records is rendered.
+    date_bounds = {}
     cursor = start.date()
     while cursor <= end.date():
-        dates.append(cursor.isoformat())
+        midnight = datetime.combine(cursor, time.min, tzinfo=start.tzinfo)
+        lower = max(0.0, (start - midnight).total_seconds() * 1000)
+        upper = min(86_400_000.0, (end - midnight).total_seconds() * 1000)
+        date_bounds[cursor.isoformat()] = (lower, upper)
         cursor += timedelta(days=1)
+    dates = tuple(date_bounds)
     placeholders = ",".join("?" for _ in dates)
     rows = connection.execute(
         f"SELECT date,raw_json FROM polar_continuous_hr_raw WHERE date IN ({placeholders})",
@@ -141,21 +150,39 @@ def _continuous_sleep_heart_rates(connection, start_value, end_value):
             samples = raw.get("heart_rate_samples") or raw.get("heartRateSamples")
         if not isinstance(samples, list):
             continue
-        sample_date = date_type.fromisoformat(row["date"])
-        midnight = datetime.combine(sample_date, time.min, tzinfo=start.tzinfo)
+        lower, upper = date_bounds[row["date"]]
+        sample_date = None
+        midnight = None
         for sample in samples:
             if not isinstance(sample, dict):
                 continue
-            heart_rate = _number(_first(sample, "heartRate", "heart_rate", "value"))
-            offset = _number(_first(sample, "offsetMillis", "offset_millis"))
-            timestamp = midnight + timedelta(milliseconds=offset) if offset is not None else None
-            if timestamp is None:
-                clock = _first(sample, "sample_time", "sampleTime", "time")
-                try:
-                    parsed_time = time.fromisoformat(str(clock))
-                    timestamp = datetime.combine(sample_date, parsed_time, tzinfo=start.tzinfo)
-                except (TypeError, ValueError):
-                    continue
+            # Polar's normal shape uses numeric ``heartRate`` and
+            # ``offsetMillis``.  Keep the slower compatibility path only for
+            # legacy/alternate payloads.
+            heart_rate = sample.get("heartRate")
+            offset = sample.get("offsetMillis")
+            if not isinstance(heart_rate, (int, float)) or not isinstance(offset, (int, float)):
+                if heart_rate is None:
+                    heart_rate = sample.get("heart_rate")
+                if heart_rate is None:
+                    heart_rate = sample.get("value")
+                if offset is None:
+                    offset = sample.get("offset_millis")
+                heart_rate = _number(heart_rate)
+                offset = _number(offset)
+            if offset is not None:
+                if heart_rate is not None and lower <= offset <= upper:
+                    values.append(heart_rate)
+                continue
+            if sample_date is None:
+                sample_date = date_type.fromisoformat(row["date"])
+                midnight = datetime.combine(sample_date, time.min, tzinfo=start.tzinfo)
+            clock = sample.get("sample_time", sample.get("sampleTime", sample.get("time")))
+            try:
+                parsed_time = time.fromisoformat(str(clock))
+                timestamp = datetime.combine(sample_date, parsed_time, tzinfo=start.tzinfo)
+            except (TypeError, ValueError):
+                continue
             if heart_rate is not None and start <= timestamp <= end:
                 values.append(heart_rate)
     return values

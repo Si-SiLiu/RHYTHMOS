@@ -7,6 +7,7 @@ from typing import Any
 
 
 GENDERS = ("male", "female", "non_binary", "prefer_not_to_say")
+TRAINING_GOALS = ("muscle_gain", "fat_loss", "maintenance")
 
 
 class PersonalProfileValidationError(ValueError):
@@ -72,6 +73,9 @@ def get_personal_goals(connection) -> dict[str, Any] | None:
 
 
 def save_personal_goals(connection, data: dict[str, Any]) -> None:
+    training_goal = data.get("training_goal") or "maintenance"
+    if training_goal not in TRAINING_GOALS:
+        raise PersonalProfileValidationError("INVALID_TRAINING_GOAL")
     target_weight = _optional_positive("target_weight_kg", data.get("target_weight_kg"), 500)
     target_body_fat = _optional_positive(
         "target_body_fat_percent", data.get("target_body_fat_percent"), 100,
@@ -80,15 +84,16 @@ def save_personal_goals(connection, data: dict[str, Any]) -> None:
     connection.execute(
         """
         INSERT INTO personal_goals(
-            id,target_weight_kg,target_body_fat_percent,target_waist_cm
-        ) VALUES(1,?,?,?)
+            id,training_goal,target_weight_kg,target_body_fat_percent,target_waist_cm
+        ) VALUES(1,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
+            training_goal=excluded.training_goal,
             target_weight_kg=excluded.target_weight_kg,
             target_body_fat_percent=excluded.target_body_fat_percent,
             target_waist_cm=excluded.target_waist_cm,
             updated_at=CURRENT_TIMESTAMP
         """,
-        (target_weight, target_body_fat, target_waist),
+        (training_goal, target_weight, target_body_fat, target_waist),
     )
     connection.commit()
 
@@ -102,4 +107,3 @@ def latest_body_measurement(connection) -> dict[str, Any] | None:
         """
     ).fetchone()
     return dict(row) if row else None
-

@@ -8,6 +8,7 @@ from .storage import load_language_preference, save_language_preference
 from .translator import get_translator
 from ..branding import BRAND_NAME, POSITIONING_LINES
 from ..demo_sandbox import is_demo_mode, reset_demo_sandbox
+from ..ui_controls import render_app_shell_styles
 
 
 SESSION_LANGUAGE_KEY = "ui_language"
@@ -23,6 +24,7 @@ def current_language(session_state: MutableMapping[str, object]) -> str:
 
 
 def render_sidebar(st, active_page: str) -> tuple[str, object]:
+    render_app_shell_styles(st)
     # Track page transitions so forms can distinguish a normal Streamlit
     # rerun from returning to a page after visiting another section.
     st.session_state["drc_previous_page"] = st.session_state.get("drc_active_page")
@@ -107,6 +109,24 @@ def render_sidebar(st, active_page: str) -> tuple[str, object]:
         label=translator("navigation.recovery"),
         icon="❤️",
         disabled=active_page == "recovery",
+    )
+    st.sidebar.page_link(
+        "pages/3_Neural_Readiness.py",
+        label=translator("navigation.neural"),
+        icon="⚡",
+        disabled=active_page == "neural",
+    )
+    st.sidebar.page_link(
+        "pages/6_Training_Studio.py",
+        label=translator("navigation.training_studio"),
+        icon="🧠",
+        disabled=active_page == "training_studio",
+    )
+    st.sidebar.page_link(
+        "pages/7_Progress_Lab.py",
+        label=translator("navigation.progress_lab"),
+        icon="📈",
+        disabled=active_page == "progress_lab",
     )
     st.sidebar.page_link(
         "pages/3_Nutrition.py",

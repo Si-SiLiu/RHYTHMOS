@@ -25,6 +25,7 @@ from src.personal_logging.body import weight_trend
 from src.personal_logging.storage import create_body_measurement
 from src.personal_profile import (
     GENDERS,
+    TRAINING_GOALS,
     calculate_age,
     get_personal_goals,
     get_personal_profile,
@@ -48,6 +49,7 @@ render_manual_input_styles(st)
 PERSONAL_PAGE_CSS = """
 <style>
 div[data-testid="stMetric"] {
+    align-items: flex-start !important;
     text-align: left;
 }
 div[data-testid="stMetric"] label,
@@ -55,11 +57,32 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     justify-content: flex-start !important;
     text-align: left !important;
 }
+div[data-testid="stMetric"] div[data-testid="stMetricValue"],
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] > div {
+    align-self: stretch !important;
+    display: flex !important;
+    justify-content: flex-start !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    width: 100% !important;
+    text-align: left !important;
+}
 div[data-testid="stForm"] label {
     display: flex !important;
     justify-content: center !important;
     width: 100% !important;
     text-align: center !important;
+    transform: none !important;
+}
+div[data-testid="stForm"] [data-testid="stWidgetLabel"] {
+    display: flex !important;
+    justify-content: center !important;
+    width: 100% !important;
+    text-align: center !important;
+    transform: translateX(1rem) !important;
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
 }
 div[data-testid="stForm"] input,
 div[data-testid="stForm"] div[data-baseweb="select"] {
@@ -69,17 +92,76 @@ div[data-testid="stForm"] div[data-testid="stNumberInput"] input {
     box-sizing: border-box !important;
     padding-left: 0 !important;
     padding-right: 0 !important;
-    text-indent: 4rem !important;
+    text-indent: 0 !important;
     text-align: center !important;
+}
+div[data-testid="stForm"] div[data-testid="stNumberInput"] [data-baseweb="input"] {
+    display: flex !important;
+    justify-content: center !important;
+}
+div[data-testid="stForm"] div[data-testid="stNumberInput"] [data-baseweb="input"] > div:has(input) {
+    flex: 1 1 100% !important;
+    width: 100% !important;
 }
 div[data-testid="stForm"] div[data-baseweb="select"] div[value] {
     flex: 1 1 auto !important;
     width: 100% !important;
     text-align: center !important;
-    transform: translateX(1rem) !important;
+    /* Offset the reserved dropdown-arrow area so the selected text is
+       centered relative to the full control, not the remaining space. */
+    transform: translateX(0.6875rem) !important;
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
+}
+div[data-testid="stForm"] div[data-baseweb="select"] > div,
+div[data-testid="stForm"] div[data-baseweb="select"] [role="combobox"] {
+    justify-content: center !important;
+}
+/* The profile form is the only personal form with a text input (name). Scope
+   this correction to its gender select so other controls keep their layout. */
+div[data-testid="stForm"]:has(div[data-testid="stTextInput"])
+    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {
+    transform: translateX(-0.6875rem) !important;
+}
+div[data-testid="stForm"]:has(div[data-testid="stTextInput"])
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
+    transform: translateX(1.125rem) !important;
+}
+/* Scope training-goal alignment and typography to the goal form only. */
+div[data-testid="stForm"]:has(div[data-testid="stNumberInput"]):has(div[data-testid="stSelectbox"])
+    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {
+    transform: translateX(-0.5rem) !important;
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
+}
+div[data-testid="stForm"]:has(div[data-testid="stNumberInput"]):has(div[data-testid="stSelectbox"])
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
+    transform: translateX(1.0625rem) !important;
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
 }
 div[data-testid="stForm"] div[data-testid="stDateInput"] input {
     text-align: center !important;
+}
+div[data-testid="stForm"] div[data-testid="stDateInput"] label {
+    transform: translateX(-1.8125rem) !important;
+}
+.personal-form-age {
+    margin: .8rem 0 1rem;
+    text-align: center;
+}
+.personal-form-age__label {
+    color: #31333f;
+    font-weight: 600;
+}
+.personal-form-age__value {
+    margin-top: .35rem;
+    color: #31333f;
+    font-size: 2rem;
+    font-weight: 600;
 }
 </style>
 """
@@ -96,6 +178,10 @@ def _value(value, suffix=""):
 
 def _gender_name(code):
     return TR(f"personal_info.genders.{code}")
+
+
+def _training_goal_name(code):
+    return TR(f"personal_info.training_goals.{code}")
 
 
 def _basic_information(profile):
@@ -167,7 +253,13 @@ def _profile_form(profile):
             value=float(profile["height_cm"]) if profile else 170.0,
             step=0.1,
         )
-        st.metric(TR("personal_info.age"), _value(calculate_age(birthday), TR("personal_info.years")))
+        st.markdown(
+            '<div class="personal-form-age">'
+            f'<div class="personal-form-age__label">{TR("personal_info.age")}</div>'
+            f'<div class="personal-form-age__value">{_value(calculate_age(birthday), TR("personal_info.years"))}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         submitted = st.form_submit_button(TR("personal_info.save_profile"), type="primary")
     return submitted, {
         "name": name,
@@ -211,6 +303,13 @@ def _body_form(profile, latest):
 def _goal_form(goals):
     with st.form("personal_goal_form"):
         st.markdown(TR("personal_info.goal_form"))
+        current_training_goal = (goals or {}).get("training_goal") or "maintenance"
+        training_goal = st.selectbox(
+            TR("personal_info.training_goal"),
+            TRAINING_GOALS,
+            index=TRAINING_GOALS.index(current_training_goal),
+            format_func=_training_goal_name,
+        )
         left, middle, right = st.columns(3)
         target_weight = left.number_input(
             TR("personal_info.target_weight"), min_value=1.0, max_value=500.0,
@@ -229,6 +328,7 @@ def _goal_form(goals):
         )
         submitted = st.form_submit_button(TR("personal_info.save_goals"), type="primary")
     return submitted, {
+        "training_goal": training_goal,
         "target_weight_kg": target_weight,
         "target_body_fat_percent": target_body_fat,
         "target_waist_cm": target_waist,

@@ -671,3 +671,38 @@ eligible baseline samples.
   brand/product, positive quantity, controlled unit, intake time and source.
 - `supplement_product_candidates`: source-bearing, non-authoritative search/OCR
   result with explicit pending/confirmed/rejected/deferred status.
+
+## Neural Readiness MVP fields
+
+- `neural_assessments.id`: client-generated assessment/session identifier. The
+  same identifier is an idempotency key for a refreshed completed test.
+- Four subjective scores (`mental_fatigue`, `mental_clarity`,
+  `task_motivation`, `physical_heaviness`) are integers from 0 to 10; they are
+  personal observations, not diagnostic values.
+- `pvt_trials.reaction_time_ms`: browser `performance.now()` response minus
+  stimulus time in milliseconds. RT below 100 ms and pre-stimulus input are
+  stored as false starts and are not valid trials.
+- `mean_response_speed`: mean of `1 / reaction_time_ms` across valid trials,
+  expressed in `1/ms`; it is not a recovery score.
+- `lapse_355_count` and `lapse_500_count`: valid trials with RT strictly above
+  355 ms and 500 ms respectively.
+- `valid_for_baseline`: false for interrupted sessions and sessions with fewer
+  than 10 valid trials. Baselines use a 28-day window that excludes today.
+- `baseline_deviations_json`: per-metric personal median, absolute/percent
+  deviation and z-score. It does not modify `baseline_metrics`.
+
+## Cognitive Training Studio fields
+
+- `cognitive_training_sessions.training_plan`: `focus_alertness` or
+  `working_memory`; `session_mode` is `quick` or `standard`.
+- `cognitive_training_task_results`: one row per ordered task, with protocol,
+  difficulty start/end, accuracy, score and nullable RT summaries.
+- `cognitive_training_trials`: raw browser trial payload and response; missing
+  values remain `NULL`, never a synthetic zero.
+- `cognitive_training_progress`: daily participation projection; trend
+  consumers must filter by plan, mode, protocol and comparable difficulty.
+- `sensitivity_d_prime`: finite N-back sensitivity using log-linear correction;
+  extreme hit or false-alarm rates never produce infinity.
+# Alertness Probe fields
+
+`test_mode`: `daily_short`, `weekly_calibration`, or `legacy_3min`. `mean_response_speed` is the mean of `1 / RT_ms`, in **1/ms** (higher is faster). `fastest_20pct_rt_ms` and `slowest_20pct_rt_ms` are short-protocol summaries; lapse counts remain auxiliary.

@@ -343,10 +343,10 @@ class DatabaseTests(unittest.TestCase):
             ORDER BY sequence
             """
         ).fetchall()
-        self.assertEqual([row["version"] for row in rows], ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0", "0.14.0", "0.15.0"])
-        self.assertEqual([row["sequence"] for row in rows], list(range(1, 16)))
+        self.assertEqual([row["version"] for row in rows], [migration.version for migration in db.SCHEMA_MIGRATIONS])
+        self.assertEqual([row["sequence"] for row in rows], [migration.sequence for migration in db.SCHEMA_MIGRATIONS])
         self.assertTrue(all(len(row["checksum"]) == 64 for row in rows))
-        self.assertEqual(db.current_schema_version(connection), "0.15.0")
+        self.assertEqual(db.current_schema_version(connection), db.SCHEMA_MIGRATIONS[-1].version)
         connection.close()
 
     def test_legacy_database_is_baselined_without_data_loss(self):
@@ -363,7 +363,7 @@ class DatabaseTests(unittest.TestCase):
                 connection.execute("SELECT value FROM user_marker").fetchone()[0],
                 "preserved",
             )
-            self.assertEqual(db.current_schema_version(connection), "0.15.0")
+            self.assertEqual(db.current_schema_version(connection), db.SCHEMA_MIGRATIONS[-1].version)
             connection.close()
 
     def test_migration_checksum_drift_is_rejected(self):

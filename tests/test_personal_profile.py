@@ -48,12 +48,15 @@ class PersonalProfileTests(unittest.TestCase):
 
     def test_goals_are_optional_validated_and_upserted(self):
         save_personal_goals(self.connection, {
-            "target_weight_kg": 65, "target_body_fat_percent": 18,
+            "training_goal": "fat_loss", "target_weight_kg": 65, "target_body_fat_percent": 18,
             "target_waist_cm": 75,
         })
         self.assertEqual(get_personal_goals(self.connection)["target_weight_kg"], 65)
+        self.assertEqual(get_personal_goals(self.connection)["training_goal"], "fat_loss")
         with self.assertRaises(PersonalProfileValidationError):
-            save_personal_goals(self.connection, {"target_body_fat_percent": 101})
+            save_personal_goals(self.connection, {"training_goal": "maintenance", "target_body_fat_percent": 101})
+        with self.assertRaises(PersonalProfileValidationError):
+            save_personal_goals(self.connection, {"training_goal": "invalid"})
 
     def test_latest_body_measurement_prefers_latest_date(self):
         self.connection.execute(

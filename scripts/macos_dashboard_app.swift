@@ -167,7 +167,23 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
             try? fileManager.removeItem(atPath: urlPath)
             try? fileManager.removeItem(atPath: errorPath)
             try? fileManager.removeItem(atPath: commandPath)
-            let projectRoot = "/Users/liuxi/Documents/Daily·Recovery·Coach"
+            // Prefer the project directory next to this App bundle so the
+            // application keeps working when the project folder is renamed
+            // or moved. The build-time path remains a fallback for a copied
+            // App bundle that is launched outside the project tree.
+            let bundledProjectRoot = Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let embeddedProjectRoot = URL(fileURLWithPath: "__PROJECT_ROOT__")
+            let projectRootURL = [bundledProjectRoot, embeddedProjectRoot].first {
+                fileManager.fileExists(atPath: $0.appendingPathComponent(".venv/bin/python").path)
+                    && fileManager.fileExists(atPath: $0.appendingPathComponent("src/dashboard_launcher.py").path)
+            }
+            guard let projectRootURL else {
+                self.showLaunchError(message: "DASHBOARD_PROJECT_ROOT_NOT_FOUND")
+                return
+            }
+            let projectRoot = projectRootURL.path
             let command = """
             #!/bin/zsh
             '\(projectRoot)/.venv/bin/python' '\(projectRoot)/src/dashboard_launcher.py' --no-browser > '\(urlPath)' 2> '\(errorPath)'

@@ -410,6 +410,13 @@ Product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现�
 - 路线图每个正式里程碑结束后复核。
 - 路线图与 CHANGELOG 的时间线应一致。
 
+## Planned — Cognitive Training Studio MVP
+
+The first cognitive practice release contains Focus & Alertness and Working
+Memory plans, with browser-side tasks and a read-only Progress Lab. It remains
+separate from Daily Neural Check and Recovery; future adaptive planning and
+advanced task families remain planned.
+
 ## Completed 2026-07-16 — Scheduled Sync & Manual Health Logging
 
 - App 0.19.0 schedules the shared local pipeline through a macOS LaunchAgent at
@@ -435,3 +442,6 @@ local label OCR; neither may bypass confirmation.
   complete without a schema or deterministic-algorithm change.
 - Next: observe real entry use and refine catalog metadata; mobile/real-time
   completion preferences remain planned.
+# Alertness protocol milestone
+
+Shipped fixed 60-second daily Alertness Probe and retained 3-minute calibration. Future work may validate an adaptive 45–75 second end rule; no such algorithm is active now.

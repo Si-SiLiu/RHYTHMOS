@@ -1,6 +1,6 @@
 {
   "common": {
-    "app_name": "Daily Recovery Coach",
+    "app_name": "RHYTHMOS｜律衡",
     "no_data": "暂无数据",
     "unavailable": "不可用",
     "yes": "是",
@@ -18,7 +18,11 @@
     "data_limit": "数据局限：{message}"
   },
   "settings": {"language": "语言 / Language"},
-  "navigation": {"exercise": "训练", "sleep": "睡眠", "recovery": "恢复", "nutrition": "营养", "personal": "我的", "system": "设置"},
+  "training_plan_actions": {"copy_plan_sets": "复制计划组到实际组"},
+  "training_plan_editor": {"add": "添加动作处方", "exercise": "动作", "set_count": "计划组数", "save": "保存动作处方", "block": "训练模块"},
+  "training_plan_action_labels": {"skip": "跳过动作", "skipped": "已跳过"},
+  "training_plan": {"title": "本周训练计划", "empty": "暂无本周训练计划。", "create_week": "创建本周训练计划", "program": "计划名称", "today_plan": "今日训练计划", "start_logging": "从今日训练计划开始记录", "create_temporary": "创建临时训练", "edit_below": "选择训练日后在下方管理动作处方。", "no_prescriptions": "暂无动作处方", "more_actions": "个动作", "module": "训练模块", "planned_sets": "计划组", "plan_actual": "计划与实际", "original_plan": "原始计划", "regulated_plan": "律衡调节后计划", "actual_result": "实际完成结果", "exercise_completion": "动作完成率", "set_completion": "组完成率", "planned_volume": "计划容量", "actual_volume": "实际容量", "module_completion": "模块完成率", "edit_day": "编辑训练日", "date": "日期", "sport_type": "运动类型", "no_actions": "暂无动作", "create_action": "创建", "action_summary": "动作：名称、组数、次数、负重、备注", "delete_action": "删除", "action_name": "动作名称", "set_count": "组数", "reps": "次数", "load_kg": "负重（kg）", "notes": "备注", "add_action": "添加动作", "enter_action_name": "请输入动作名称。", "no_actions_add": "暂无动作，请添加动作。", "current_matrix_input": "当前动作矩阵及计划输入", "sport_type_prefix": "运动类型"},
+  "navigation": {"exercise": "训练", "sleep": "睡眠", "recovery": "恢复", "neural": "神经准备度", "training_studio": "认知训练室", "progress_lab": "训练进展", "nutrition": "营养", "personal": "我的", "system": "设置"},
   "dashboard": {
     "latest": "最新状态",
     "database": "数据库：{path}",
@@ -108,7 +112,7 @@
   },
   "sync": {"last": "上次同步", "duration": "同步时长", "success": "同步成功", "records": "导入记录数", "coach_updated": "上次同步更新的本地教练记录：{value}"},
   "reports": {
-    "title": "每日恢复报告 - {date}", "overview": "总览", "date": "日期", "recovery": "恢复", "confidence": "可信度", "activity": "活动", "training": "训练", "sleep": "睡眠", "personal": "个人记录", "local_coach": "今日教练建议", "limitations": "数据限制", "safety": "安全声明", "total_calories": "总热量", "active_calories": "活跃热量", "activity_duration": "活动时长", "training_count": "训练次数", "training_duration": "训练时长", "training_calories": "训练热量", "weight": "体重", "waist": "腰围", "nutrition_calories": "饮食热量", "nutrition_completeness": "饮食完整性", "manual_sessions": "手动训练次数", "manual_volume": "手动训练容量", "eligible_days": "真实合格天数", "remaining_days": "剩余天数", "late_backfill": "延迟回填记录", "prospective_note": "历史记录、未来日期和超过协议时限的回填不计入。", "parallel_notice": "Polar 与手动训练并列展示，默认不重复相加；仅人工确认关联。", "generated": "已生成本地文件", "not_generated": "尚未生成", "missing_nutrition": "未记录的营养值保持缺失，不自动估算为 0。", "method": "恢复分数优先使用个人滚动基线；基线数据不足时回退到已支持的负荷、HRV、睡眠或 Kubios 规则。", "saved": "报告已保存：{path}", "missing_data": "没有可生成报告的数据，请先运行每日指标和恢复评分。", "date_missing": "没有找到 {date} 的恢复指标和评分。", "kubios_core": "Kubios 核心摘要", "kubios_date": "测量日期", "kubios_source": "数据来源", "kubios_baseline": "与基线比较", "kubios_historical": "这是比报告日期早 {days} 天的历史 Kubios 数据，可能不代表当日状态。", "kubios_advanced_link": "完整指标请查看 Dashboard 中的 Kubios 高级指标页。"
+    "title": "RHYTHMOS｜律衡 每日状态报告 - {date}", "overview": "总览", "date": "日期", "recovery": "恢复", "confidence": "可信度", "activity": "活动", "training": "训练", "sleep": "睡眠", "personal": "个人记录", "local_coach": "今日教练建议", "limitations": "数据限制", "safety": "安全声明", "total_calories": "总热量", "active_calories": "活跃热量", "activity_duration": "活动时长", "training_count": "训练次数", "training_duration": "训练时长", "training_calories": "训练热量", "weight": "体重", "waist": "腰围", "nutrition_calories": "饮食热量", "nutrition_completeness": "饮食完整性", "manual_sessions": "手动训练次数", "manual_volume": "手动训练容量", "eligible_days": "真实合格天数", "remaining_days": "剩余天数", "late_backfill": "延迟回填记录", "prospective_note": "历史记录、未来日期和超过协议时限的回填不计入。", "parallel_notice": "Polar 与手动训练并列展示，默认不重复相加；仅人工确认关联。", "generated": "已生成本地文件", "not_generated": "尚未生成", "missing_nutrition": "未记录的营养值保持缺失，不自动估算为 0。", "method": "恢复分数优先使用个人滚动基线；基线数据不足时回退到已支持的负荷、HRV、睡眠或 Kubios 规则。", "saved": "报告已保存：{path}", "missing_data": "没有可生成报告的数据，请先运行每日指标和恢复评分。", "date_missing": "没有找到 {date} 的恢复指标和评分。", "kubios_core": "Kubios 核心摘要", "kubios_date": "测量日期", "kubios_source": "数据来源", "kubios_baseline": "与基线比较", "kubios_historical": "这是比报告日期早 {days} 天的历史 Kubios 数据，可能不代表当日状态。", "kubios_advanced_link": "完整指标请查看 Dashboard 中的 Kubios 高级指标页。"
   },
   "format": {"duration_hours_minutes": "{hours} 小时 {minutes} 分钟", "duration_hours": "{hours} 小时", "duration_minutes": "{minutes} 分钟"},
   "errors": {"generic": "操作失败：{message}", "WEIGHT_REQUIRED": "请填写体重。", "HEIGHT_REQUIRED_FOR_FIRST_MEASUREMENT": "第一条身体记录必须填写身高。", "FOOD_NAME_REQUIRED": "请填写食物名称。", "EXERCISE_NAME_REQUIRED": "请填写动作名称。", "INVALID_SET_COUNT": "组数必须大于 0。", "AI_CONTEXT_SENSITIVE_QUESTION": "自定义问题包含敏感信息或过长，已停止导出。", "invalid_value": "请检查输入值的范围。"},
@@ -205,10 +209,10 @@
     "title": "训练数据", "view_edit": "查看 / 编辑", "add_details": "补充训练内容", "select_session": "选择训练记录", "new_manual_session": "新建纯手动训练", "create_manual": "创建手动训练", "session_created": "手动训练已创建。",
     "readonly_notice": "时长、心率、热量、距离和训练时间来自 Polar，只读且不会被手动数据覆盖。", "manual_notice": "纯手动训练没有 Polar 客观数据，可填写训练时间与基础会话信息。", "polar_synced": "已关联 Polar", "manual_source": "纯手动", "merged_source": "Polar + 手动详情", "user_override": "用户修正", "data_source": "数据来源", "sync_status": "Polar 同步状态", "status": "记录状态", "draft": "草稿", "completed": "已完成",
     "date": "日期", "sport_type": "训练类型", "resolved_sport_type": "展示运动类型", "polar_sport_type": "Polar 原始运动类型", "start_time": "开始时间", "end_time": "结束时间", "duration": "时长", "average_hr": "平均心率（次/分钟）", "max_hr": "最大心率（次/分钟）", "calories": "热量（卡路里）", "distance": "距离（米）", "notes": "备注", "today_data": "今日训练数据", "today_details": "今日训练详情", "today_no_data": "暂无 Polar 今日训练同步数据。", "today_date": "日期", "today_count": "训练次数", "today_duration": "训练时长", "today_calories": "训练热量（卡路里）", "today_average_hr": "平均心率（次/分钟）", "today_max_hr": "最大心率（次/分钟）", "today_distance": "距离（米）",
-    "exercise_details": "动作详情", "combined_details": "训练详情", "exercise": "动作名称", "exercise_category": "动作类别", "measurement_mode": "记录方式", "primary_muscle_group": "主要肌群", "equipment": "器械", "laterality": "单侧 / 双侧", "skill_proficiency": "动作熟练度（1–10）", "custom_exercise": "自定义动作", "custom_exercise_name": "自定义动作名称", "exercise_notes": "动作备注",
-    "add_exercise": "添加动作", "delete_exercise": "删除动作", "copy_exercise": "复制动作", "move_up": "上移", "move_down": "下移", "copy_history_exercise": "从历史训练复制动作", "history_exercise": "历史动作", "no_history_exercise": "暂无可复制的历史动作",
+    "exercise_details": "动作详情", "combined_details": "训练详情", "exercise": "动作名称", "exercise_category": "动作类别", "development_strength_type": "发展力量类型", "custom_development_strength_type": "自定义发展力量类型", "measurement_mode": "记录方式", "primary_muscle_group": "主要肌群", "equipment": "器械", "laterality": "单侧 / 双侧", "skill_proficiency": "动作熟练度（1–10）", "custom_exercise": "自定义动作", "custom_exercise_name": "自定义动作名称", "exercise_notes": "动作备注",
+    "add_exercise": "添加动作", "delete_exercise": "删除动作", "copy_exercise": "复制动作", "move_up": "上移", "move_down": "下移", "copy_history_exercise": "从历史训练复制动作", "history_exercise": "历史动作", "no_history_exercise": "暂无可复制的历史动作", "copy_previous_training": "复制上次训练", "save_template": "保存模板", "copied_previous_training": "已复制上次训练。", "no_previous_training": "暂无可复制的上次训练记录。", "template_saved": "训练模板已保存。",
     "set": "组号", "set_type": "组类型", "load": "负重", "load_unit": "负重单位", "reps": "次数", "duration_seconds": "持续时间（秒）", "distance_meters": "距离（米）", "resistance": "阻力", "incline": "坡度（%）", "rpe": "RPE", "rir": "RIR", "rest": "休息时间（秒）", "side": "侧别", "completed_set": "完成", "set_notes": "组次备注", "add_set": "添加一组", "delete_set": "删除该组", "copy_previous_set": "复制上一组", "batch_add_sets": "批量添加相同组", "batch_count": "添加组数",
-    "save_draft": "保存草稿", "complete_log": "完成记录", "saved": "训练详情已保存。", "save_failed": "保存失败：{message}", "soft_delete": "软删除训练", "delete_confirm": "我确认软删除该训练", "deleted": "训练已软删除。", "empty_sets": "该动作目前没有组次；有氧动作允许不填写组。", "empty_exercises": "尚未添加动作。",
+    "save_draft": "保存草稿", "complete_log": "完成记录", "save_action_details": "保存", "saved": "训练详情已保存。", "save_failed": "保存失败：{message}", "soft_delete": "软删除训练", "delete_confirm": "我确认软删除该训练", "deleted": "训练已软删除。", "empty_sets": "该动作目前没有组次；有氧动作允许不填写组。", "empty_exercises": "尚未添加动作。",
     "summary": "训练详情汇总", "exercise_count": "动作数量", "total_sets": "总组数", "working_sets": "正式组", "warmup_sets": "热身组", "total_reps": "总次数", "volume_load": "力量训练容量（kg）", "average_rpe": "平均 RPE", "max_rpe": "最高 RPE", "total_rest": "总休息时间（秒）", "muscle_group_sets": "肌群组数", "not_calculated": "不具备可靠计算条件",
     "entry_mode": "录入模式", "simple_mode": "简单模式", "advanced_mode": "高级模式", "exertion_preference": "强度记录", "use_rpe": "使用 RPE", "use_rir": "使用 RIR", "use_none": "不记录主观强度", "hidden_fields_preserved": "切换模式只会改变显示字段；已有高级数据会完整保留，RPE 与 RIR 不会互相换算。", "incompatible_fields_preserved": "记录方式已更改；原有不兼容字段仍保留，请检查当前可见字段后再保存。",
     "view_exercise_information": "查看动作信息", "edit_exercise_properties": "编辑动作属性", "more_actions": "更多操作", "confirm_delete_set": "我确认删除所选组次", "confirm_delete_exercise": "我确认删除该动作",
@@ -227,6 +231,7 @@
     "weight": "早上空腹体重（千克）", "body_fat": "体脂（%）", "waist": "腰围（厘米）",
     "latest_date": "最新身体数据：{date}", "weight_trend_title": "最近 28 天体重变化", "weight_trend_insufficient": "最近 28 天内至少需要两次体重记录才能显示趋势。", "weight_change": "28 天区间体重变化", "trend_date": "日期",
     "profile_form": "基础信息表单", "body_form": "身体数据表单", "goal_form": "目标表单", "measurement_date": "测量日期",
+    "training_goal": "训练目标", "training_goals": {"muscle_gain": "增肌期", "fat_loss": "减脂期", "maintenance": "保持期"},
     "target_weight": "目标体重（千克）", "target_body_fat": "目标体脂（%）", "target_waist": "目标腰围（厘米）",
     "save_profile": "保存个人信息", "save_body": "保存身体数据", "save_goals": "保存目标",
     "profile_saved": "个人信息已保存在本机。", "body_saved": "身体数据已保存在本机。", "goals_saved": "目标已保存在本机。",

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light; }
+    html, body { margin: 0; min-height: 100%; background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    #app { box-sizing: border-box; min-height: 330px; border: 1px solid #d9dee7; border-radius: 16px; background: linear-gradient(145deg,#fff,#f7f9fc); padding: 24px; text-align: center; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+    #meta { color: #64748b; font-size: 14px; min-height: 20px; }
+    #timer { color: #273142; font-size: 28px; font-variant-numeric: tabular-nums; margin: 20px 0 12px; }
+    #stimulus { width: min(240px, 70vw); height: 140px; margin: auto; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: #eef2f7; color: #8a94a6; font-size: 26px; font-weight: 700; outline: none; cursor: pointer; }
+    #stimulus.active { background: #223c5a; color: #fff; box-shadow: 0 8px 24px rgba(34,60,90,.25); }
+    #feedback { height: 25px; margin-top: 18px; color: #536174; font-size: 15px; }
+    #practiceStart, #skipPractice { margin-top: 14px; border: 0; border-radius: 10px; padding: 11px 22px; font-size: 16px; font-weight: 650; cursor: pointer; }
+    #practiceStart { background: #536fe0; color: #fff; }
+    #skipPractice { margin-left: 10px; background: transparent; color: #536174; border: 1px solid #aab5c4; }
+    #practiceStart:focus-visible { outline: 3px solid #253f8f; outline-offset: 2px; }
+    #app.done #stimulus { cursor: default; }
+  </style>
+</head>
+<body>
+  <main id="app" aria-live="polite">
+    <div id="meta">正在准备测试…</div>
+    <div id="timer">—</div>
+    <button id="stimulus" type="button" aria-label="PVT 反应区">准备中</button>
+    <button id="practiceStart" type="button" hidden>开始练习</button>
+    <button id="skipPractice" type="button" hidden>跳过练习，开始正式测试</button>
+    <div id="feedback"></div>
+  </main>
+  <script>
+    const app = document.getElementById('app');
+    const meta = document.getElementById('meta');
+    const timer = document.getElementById('timer');
+    const stimulus = document.getElementById('stimulus');
+    const practiceStart = document.getElementById('practiceStart');
+    const skipPractice = document.getElementById('skipPractice');
+    const feedback = document.getElementById('feedback');
+    let config, running = false, complete = false, visibleStimulus = false, practice = false;
+    let practiceCorrectCount = 0;
+    let startedAt, stimulusAt, scheduledTimer, renderTimer, trialIndex = 0;
+    let trials = [], inputModes = new Set(), interruptionReason = null;
+
+    function post(type, payload) {
+      window.parent.postMessage({isStreamlitMessage: true, type, ...payload}, '*');
+    }
+    function setHeight() { post('streamlit:setFrameHeight', {height: document.body.scrollHeight}); }
+    function setReady() { post('streamlit:componentReady', {apiVersion: 1}); setHeight(); }
+    function durationMs() { return Number(config.duration_seconds) * 1000; }
+    function elapsed() { return performance.now() - startedAt; }
+    function report() {
+      const context = {
+        user_agent: navigator.userAgent,
+        viewport: {width: window.innerWidth, height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio},
+        input_mode: [...inputModes].sort().join(',') || 'unknown',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+        locale: navigator.language || null,
+        platform: navigator.platform || null,
+        operating_system: navigator.userAgentData?.platform || navigator.platform || null,
+        browser: /Edg\//.test(navigator.userAgent) ? 'Edge' : /Chrome\//.test(navigator.userAgent) ? 'Chrome' : /Safari\//.test(navigator.userAgent) ? 'Safari' : 'unknown',
+      };
+      post('streamlit:setComponentValue', {value: {
+        run_id: config.run_id, protocol_version: config.protocol_version,
+        started_at: new Date(Date.now() - Math.max(0, elapsed())).toISOString(),
+        completed_at: new Date().toISOString(), duration_seconds: Number(config.duration_seconds),
+        interrupted: Boolean(interruptionReason), interruption_reason: interruptionReason,
+        trials, practice, practice_skipped: practice && interruptionReason === 'practice_skipped', practice_ready: practice && practiceCorrectCount >= 5,
+        practice_correct_count: practiceCorrectCount,
+        device_context: context
+      }});
+    }
+    function stop(reason) {
+      if (complete) return;
+      complete = true; running = false; visibleStimulus = false;
+      clearTimeout(scheduledTimer); clearInterval(renderTimer);
+      if (reason) interruptionReason = reason;
+      stimulus.classList.remove('active'); stimulus.textContent = reason ? '测试已中止' : (practice ? '练习完成' : '测试完成');
+      meta.textContent = reason ? `已标记干扰：${reason}` : '测试完成，正在保存结果';
+      timer.textContent = '—'; app.classList.add('done'); practiceStart.hidden = true; skipPractice.hidden = true; report(); setHeight();
+    }
+    function nextStimulus() {
+      if (!running || elapsed() >= durationMs()) return stop();
+      const wait = 1000 + Math.random() * 3000;
+      scheduledTimer = setTimeout(() => {
+        if (!running || elapsed() >= durationMs()) return stop();
+        visibleStimulus = true; stimulusAt = performance.now(); trialIndex += 1;
+        stimulus.classList.add('active'); stimulus.textContent = '点击 / 按空格';
+      }, wait);
+    }
+    function respond(mode) {
+      if (!running || complete) return;
+      if (elapsed() >= durationMs()) return stop();
+      inputModes.add(mode);
+      const responseAt = performance.now();
+      if (!visibleStimulus) {
+        trials.push({trial_index: trialIndex + 1, stimulus_time_ms: null, response_time_ms: responseAt, reaction_time_ms: null, is_false_start: true});
+        feedback.textContent = practice ? '请等待目标出现后再操作' : '过早反应（false start）';
+        return;
+      }
+      visibleStimulus = false; clearTimeout(scheduledTimer);
+      const rt = responseAt - stimulusAt;
+      trials.push({trial_index: trialIndex, stimulus_time_ms: stimulusAt, response_time_ms: responseAt, reaction_time_ms: rt, is_false_start: rt < 100});
+      stimulus.classList.remove('active'); stimulus.textContent = '等待下一次刺激';
+      if (practice && rt >= 100) practiceCorrectCount += 1;
+      feedback.textContent = practice ? `正确反馈 ${practiceCorrectCount} / 5` : (rt < 100 ? '过早反应（<100 ms）' : `${Math.round(rt)} ms`);
+      if (practice && practiceCorrectCount >= 5) return stop();
+      if (elapsed() >= durationMs()) stop(); else nextStimulus();
+    }
+    function renderPracticeIntro() {
+      running = false; complete = false; visibleStimulus = false; clearTimeout(scheduledTimer); clearInterval(renderTimer);
+      app.classList.remove('done'); stimulus.classList.remove('active'); stimulus.textContent = '等待练习开始';
+      practiceStart.hidden = false; skipPractice.hidden = false; meta.textContent = '练习说明：约 5 次反应，不会保存为正式记录'; timer.textContent = '准备练习';
+      feedback.textContent = '等待刺激出现后点击。完成 5 次正确反应后自动进入正式测试。支持鼠标、触摸和空格键。'; setHeight();
+    }
+    function startPractice() {
+      practiceStart.hidden = true; skipPractice.hidden = true; running = true; complete = false; visibleStimulus = false; practiceCorrectCount = 0;
+      startedAt = performance.now(); meta.textContent = '练习模式：约 5 次反应；不会保存为正式记录'; timer.textContent = '最多剩余 20 秒';
+      feedback.textContent = '请等待目标出现后点击；完成 5 次正确反应将自动开始正式测试。';
+      renderTimer = setInterval(() => { const remaining = Math.max(0, durationMs() - elapsed()); timer.textContent = `剩余 ${Math.ceil(remaining / 1000)} 秒`; if (!remaining) stop(); }, 100);
+      nextStimulus(); setHeight();
+    }
+    function begin(args) {
+      config = args; practice = Boolean(args.practice); running = !practice; complete = false; visibleStimulus = false; trials = []; trialIndex = 0; inputModes = new Set(); interruptionReason = null; practiceCorrectCount = 0;
+      startedAt = performance.now(); app.classList.remove('done');
+      if (practice) { renderPracticeIntro(); return; }
+      meta.textContent = '正式测试进行中；请保持在当前页面';
+      stimulus.textContent = '等待下一次刺激'; feedback.textContent = '';
+      renderTimer = setInterval(() => { const remaining = Math.max(0, durationMs() - elapsed()); timer.textContent = `剩余 ${Math.ceil(remaining / 1000)} 秒`; if (!remaining) stop(); }, 100);
+      nextStimulus(); setHeight();
+    }
+    practiceStart.addEventListener('click', startPractice);
+    skipPractice.addEventListener('click', () => stop('practice_skipped'));
+    stimulus.addEventListener('pointerdown', event => { event.preventDefault(); respond(event.pointerType === 'touch' ? 'touch' : 'mouse'); });
+    window.addEventListener('keydown', event => { if (event.code === 'Space') { event.preventDefault(); respond('keyboard'); } });
+    window.addEventListener('blur', () => { if (running) stop('window_blur'); });
+    document.addEventListener('visibilitychange', () => { if (running && document.hidden) stop('document_hidden'); });
+    window.addEventListener('message', event => {
+      const data = event.data;
+      if (!data || data.type !== 'streamlit:render') return;
+      const args = data.args || {};
+      if (!config || args.run_id !== config.run_id) begin(args);
+    });
+    setReady();
+  </script>
+</body>
+</html>

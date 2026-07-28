@@ -127,6 +127,32 @@ RECOVERY_CORE_CARD_CSS = """
 """
 
 
+RECOVERY_EDIT_FORM_CSS = """
+<style>
+/* The Recovery page has one compact edit form.  Center its labels and values
+   as a single visual unit, without changing controls on other pages. */
+div[data-testid="stForm"] label {
+    display: flex !important;
+    justify-content: center !important;
+    width: 100% !important;
+    text-align: center !important;
+}
+div[data-testid="stForm"] div[data-testid="stNumberInput"] input {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    text-align: center !important;
+    text-indent: 0 !important;
+}
+div[data-testid="stForm"] div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    padding-left: 2rem !important;
+    text-align: center !important;
+}
+</style>
+"""
+
+
 def _core_normal_range(item):
     """Return a robust personal normal range from existing baseline fields."""
     center = item.get("median_value") if item else None
@@ -236,6 +262,7 @@ def _core_metric_card(title, current, unit, baseline, higher_is_better):
 
 def _recovery_panel(data):
     st.subheader(TR("domain.recovery.today_data"))
+    st.markdown(RECOVERY_EDIT_FORM_CSS, unsafe_allow_html=True)
     original = {
         "date": (data or {}).get("date", date.today().isoformat()),
         "morning_rmssd_ms": (data or {}).get("morning_rmssd"),

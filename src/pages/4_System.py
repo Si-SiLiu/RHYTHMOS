@@ -17,7 +17,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import connect_readonly, get_data_freshness, get_latest_confidence
 from src.demo_sandbox import configure_demo_runtime, is_demo_mode
 from src.i18n import format_date, get_translator
@@ -37,7 +37,7 @@ from src.ui_controls import render_manual_input_styles
 
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
-st.set_page_config(page_title=get_translator(PAGE_LANGUAGE)("domain.system.title"), page_icon=load_page_icon(), layout="wide")
+st.set_page_config(page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("domain.system.title")), page_icon=load_page_icon(), layout="wide")
 LANGUAGE, TR = render_sidebar(st, "system")
 render_manual_input_styles(st)
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -60,6 +60,11 @@ def _scheduler_section():
     if loaded.used_fallback:
         st.warning(TR("scheduler_ui.config_fallback"))
     st.subheader(TR("scheduler_ui.title"))
+    st.info(
+        "自动同步频率：每隔 2 小时同步一次训练和睡眠数据。"
+        if LANGUAGE != "en"
+        else "Automatic sync frequency: training and sleep data are synchronized every 2 hours."
+    )
     agent_label = TR(
         "scheduler_ui.installed" if agent.state == "installed"
         else "scheduler_ui.not_installed" if agent.state == "not_installed"
@@ -188,6 +193,20 @@ def main():
     )
     for column, (label, value) in zip(st.columns(4), sync):
         with column: st.metric(TR(label), value)
+    if is_demo_mode():
+        st.info(
+            "公开体验版不执行 Polar 数据同步。"
+            if LANGUAGE != "en"
+            else "The public demo does not run Polar data synchronization."
+        )
+    elif st.button(TR("scheduler_ui.sync_now"), key="manual_sync_now", type="primary"):
+        try:
+            with st.spinner(TR("scheduler_ui.running")):
+                run_triggered_pipeline("manual")
+            st.success(TR("scheduler_ui.sync_finished"))
+            st.rerun()
+        except SchedulerRunError as exc:
+            st.error(TR("scheduler_ui.sync_failed", message=exc.error_code))
     _scheduler_section()
     if save_notice:
         st.success(save_notice)

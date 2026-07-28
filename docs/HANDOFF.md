@@ -8,27 +8,27 @@
 
 Simplified Structured Training Entry UI
 
-- App Version: 0.29.0
+- App Version: 0.31.0
 - Current Phase: Simplified Structured Training Entry UI
 - Phase Status: completed
 - Recovery Engine Version: 1.0.0
 - Baseline Engine Version: 1.0.0
 - Confidence Engine Version: 1.0.0
-- Database Schema Version: 0.15.0
-- Schema Migration Count: 15
-- Latest Schema Migration: 0.15.0
-- Dashboard Version: 1.9.0
+- Database Schema Version: 0.26.0
+- Schema Migration Count: 26
+- Latest Schema Migration: 0.26.0
+- Dashboard Version: 2.0.1
 - Training Logging Version: 2.0.0
 - Training Entry UI Version: 1.0.0
-- Test Total: 720
-- Test Passed: 720
+- Test Total: 801
+- Test Passed: 801
 - Test Failed: 0
 - Test Success: true
-- Baseline Record Count: 600
-- Scored Day Count: 30
-- Recovery v1 Day Count: 23
-- Confidence Record Count: 30
-- Latest Data Date: 2026-07-18
+- Baseline Record Count: 760
+- Scored Day Count: 38
+- Recovery v1 Day Count: 31
+- Confidence Record Count: 38
+- Latest Data Date: 2026-07-26
 
 ## Goal
 
@@ -50,9 +50,9 @@ changelog, roadmap, and release record.
 
 ## Version Changes
 
-App 0.29.0; Sleep Regularity Engine 2.0.0; Dashboard 1.9.0; Training Logging
+App 0.31.0; Sleep Regularity Engine 2.0.0; Dashboard 2.0.1; Training Logging
 2.0.0; Training Entry UI 1.0.0.
-Schema remains 0.15.0. Recovery, Baseline, and Confidence remain 1.0.0.
+Schema is 0.26.0. Recovery, Baseline, and Confidence remain 1.0.0.
 
 ## Database Migrations
 
@@ -80,7 +80,7 @@ conditional fields. Advanced and hidden values remain intact.
 
 ## Release Record
 
-`releases/0.29.0.md` is the current local pre-1.0 release record.
+`releases/0.31.0.md` is the current local pre-1.0 release record.
 
 ## Real Data Verification
 
@@ -96,16 +96,14 @@ release note, and regression tests are updated.
 ## State Synchronization
 
 `config/versions.json`, `project_state.json`, generated `CURRENT_STATE.md`, this
-handoff, and the packaged App are synchronized. The schema ledger is unchanged.
+handoff, and the packaged App are synchronized.
 
 ## Known Issues
 
-The current workspace has a pre-existing schema ledger/config mismatch
-(database ledger reports 0.16.0 while version authority/tests still reference
-0.15.0), plus stale generated data counts. SRI calibration needs representative
-multi-day timeline fixtures; thresholds remain product parameters and are not
-clinical standards. Existing upstream respiration/Cardio Load and scheduled-run observations
-remain separate monitoring items.
+SRI calibration needs representative multi-day timeline fixtures; thresholds
+remain product parameters and are not clinical standards. Existing upstream
+respiration/Cardio Load and scheduled-run observations remain separate
+monitoring items.
 
 ## Prioritized Issues
 

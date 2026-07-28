@@ -78,6 +78,9 @@
     "exercise": "訓練",
     "sleep": "睡眠",
     "recovery": "恢復",
+    "neural": "神經準備度",
+    "training_studio": "認知訓練室",
+    "progress_lab": "訓練進展",
     "nutrition": "營養",
     "personal": "我的",
     "system": "設定"
@@ -1417,6 +1420,12 @@
     "body_form": "身體資料表單",
     "goal_form": "目標表單",
     "measurement_date": "測量日期",
+    "training_goal": "訓練目標",
+    "training_goals": {
+      "muscle_gain": "增肌期",
+      "fat_loss": "減脂期",
+      "maintenance": "保持期"
+    },
     "target_weight": "目標體重（千克）",
     "target_body_fat": "目標體脂（%）",
     "target_waist": "目標腰圍（釐米）",

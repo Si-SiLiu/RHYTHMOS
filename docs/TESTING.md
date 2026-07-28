@@ -48,6 +48,10 @@ remain read-only.
 - 当前测试数量不得手工写入本文。
 - 使用 `scripts/update_project_state.py` 运行并记录完整结果。
 
+## Cognitive Training practice coverage
+
+`tests/test_cognitive_training.py` verifies the isolated 5-second practice shell for Visual Search, Memory Grid, Sequence Memory and N-back Lite: countdown exclusion, fixed entry-level stimuli, feedback rules, retry cleanup, formal-start cleanup, focus-loss reset, and the absence of practice calls to formal trial recording. It also verifies valid 1-back and 2-back practice sequences and preserves Target Focus and Go / No-Go protocol checks.
+
 ## 目录与命名
 
 - 测试位于 tests。
@@ -379,3 +383,27 @@ RMSSD and resting-HR direction rules, bilateral respiration deviation,
 conflicting signals, legacy/canonical quality normalization, confidence impact,
 and separation of interpreted details from the raw table. The page reuses the
 existing resolved recovery history and does not add a database table.
+
+## Cognitive Training Studio
+
+`tests/test_cognitive_training.py` covers finite d-prime correction, idempotent
+session writes, quick/standard storage, interruption semantics, and strict
+three-task plan ordering. Browser component checks should additionally cover
+focus loss, visibility changes, touch, keyboard, and reduced-motion behavior.
+# Alertness Probe checks
+
+Verify 60-second daily and 180-second calibration durations, separated baseline groups, false starts below 100 ms, one response per trial, interruption exclusion, and browser timing. Test mobile touch and desktop Space input manually before release.
+# Cognitive component browser tests
+
+The Cognitive Training Studio browser suite executes real pointer, touch,
+keyboard, focus, visibility, timer, duration, sequence-generation, and narrow
+viewport behavior:
+
+```bash
+npm install
+npx playwright install chromium
+npm run test:cognitive-browser
+```
+
+Local Codex runtimes may provide Playwright and a system Chrome executable; CI
+should install Chromium explicitly with the command above.

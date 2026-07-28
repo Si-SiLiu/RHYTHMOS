@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — Cognitive Training Studio MVP
+
+- Added browser-based Focus & Alertness and Working Memory training plans with
+  quick/standard modes, raw trial retention, conservative adaptive difficulty,
+  interruption handling, and separate Progress Lab views.
+- Added schema `0.28.0` for isolated cognitive-training sessions, task results,
+  trials, progress, and preferences. Training never writes Neural Readiness or
+  Recovery tables.
+- Added isolated 5-second interactive practice flows for Visual Search, Memory
+  Grid, Sequence Memory and N-back Lite. Practice uses dedicated protocol
+  identifiers, never enters formal trial or progress records, and teaches
+  1-back or 2-back according to the selected mode.
+
+## Unreleased — Neural Readiness MVP
+
+- Added the Neural Readiness page with four 0–10 subjective-state scales, a
+  browser-timed 25-second practice and 180-second PVT-B protocol.
+- Added schema `0.27.0` for idempotent assessment sessions, every raw PVT
+  trial, and an independent daily neural projection. Recovery Engine and Polar
+  synchronization remain unchanged.
+- Added a 28-day, same-person baseline that excludes today and interrupted
+  runs, along with a transparent confidence level and integrated read-only
+  sleep/HRV context.
+
+## Unreleased — Branding
+
+### Branding
+
+- Renamed Daily Recovery Coach to RHYTHMOS｜律衡.
+- Added the positioning statement “Personal Performance OS · 个人表现与恢复系统”.
+- Added the bilingual tagline “Know your state. Shape your day. / 读懂状态，掌控节奏。”
+- Updated application UI, documentation, reports, and demo descriptions.
+- Preserved historical references to the former product name and compatibility identifiers.
+- Added Traditional Chinese (`zh-TW`) locale support across the UI, reports, and AI Context display language.
+
+## Unreleased — Training plan and prescription layer
+
+- Added nullable training program, day template, module block, and exercise prescription tables.
+- Added a collapsed weekly plan overview without changing the existing training page order.
+- Added plan-to-actual metrics and read-only historical plan snapshots.
+
 ## Unreleased — Training Load & Habits baseline
 
 - Replaced the training baseline's zero/negative-delta ambiguity with an
@@ -67,6 +108,8 @@
 - 不得在变更记录中写 token、secret 或 raw 数据。
 
 ## Unreleased
+
+- Weekly training plans now support per-day sport types and action lifecycle management with name, sets, reps, load, notes, and deletion.
 
 ### Added
 
@@ -1053,3 +1096,7 @@
   enrichment and medication separation.
 - Preserved legacy supplement rows/active fields and unchanged deterministic
   Recovery, Baseline, Confidence and Polar behavior.
+# Alertness Probe v1
+
+- Replaced the daily 3-minute PVT with the fixed 60-second Alertness Probe.
+- Retained a voluntary 3-minute Calibration PVT with an independent baseline and legacy-data compatibility.

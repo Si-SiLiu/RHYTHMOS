@@ -76,7 +76,7 @@ class StructuredTrainingLoggingTests(unittest.TestCase):
         latest = self.connection.execute(
             "SELECT sequence,version FROM schema_migrations ORDER BY sequence DESC LIMIT 1"
         ).fetchone()
-        self.assertEqual(tuple(latest), (15, "0.15.0"))
+        self.assertEqual(tuple(latest), (db.SCHEMA_MIGRATIONS[-1].sequence, db.SCHEMA_MIGRATIONS[-1].version))
 
     def test_polar_sessions_are_indexed_individually_on_same_day(self):
         self._polar("polar-1", start="2026-07-17T08:00:00")

@@ -467,6 +467,13 @@ flowchart TD
 - `resolved_daily_fields` is derived and recomputable. Polar/Kubios raw tables
   and deterministic Recovery/Baseline/Confidence/Local Coach inputs remain
   unchanged.
+
+## Cognitive Training Studio boundary
+
+`src/cognitive_training.py` owns training persistence, task metrics, finite
+d-prime calculation, and conservative adaptation. Browser tasks submit one
+completed batch. Cognitive tables never write Neural Readiness or Recovery
+tables.
 # Brand-based supplement boundary
 
 `src/supplements/` owns product/ingredient validation, repository operations and
@@ -474,3 +481,6 @@ deterministic serving multiplication. `src/supplements/enrichment/` owns only
 candidate contracts and an approval-gated provider interface. Nutrition storage
 owns meal/intake transactions and writes a legacy compatibility row. AI Context
 reads the safe projection; health engines and Polar remain downstream-isolated.
+# Alertness protocols
+
+`pvt_component_frontend` owns browser timing via `performance.now()` and reports a final payload only. `neural_readiness` persists raw trials and metrics; baselines are selected by `test_mode`, `protocol_version`, `baseline_group`, and compatible input mode.

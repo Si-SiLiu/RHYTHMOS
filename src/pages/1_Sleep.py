@@ -21,7 +21,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import streamlit.components.v1 as components
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import get_latest_local_coach
 from src.db import get_current_db_path
 from src.demo_sandbox import configure_demo_runtime
@@ -33,15 +33,17 @@ from src.sleep_regularity import SleepRegularityService
 from src.sleep_baseline_view import build_sleep_baseline_summary, build_sleep_regularity_points
 from src.ui_tables import centered_dataframe
 from src.ui_scroll import render_interaction_focus
+from src.ui_controls import render_manual_input_styles
 
 
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
 st.set_page_config(
-    page_title=get_translator(PAGE_LANGUAGE)("domain.sleep.title"),
+    page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("domain.sleep.title")),
     page_icon=load_page_icon(), layout="wide",
 )
 LANGUAGE, TR = render_sidebar(st, "sleep")
+render_manual_input_styles(st)
 
 
 def _sleep_database_revision():
@@ -79,12 +81,15 @@ SLEEP_CSS = """
 .drc-sleep-card.good{border-top:4px solid #3aa675}.drc-sleep-card.warn{border-top:4px solid #e0a02b}.drc-sleep-card.bad{border-top:4px solid #d95c5c}.drc-sleep-card.neutral{border-top:4px solid #8290a5}
 .drc-sleep-card-label{font-size:.92rem;color:#697386;font-weight:650}.drc-sleep-card-value{font-size:1.75rem;font-weight:750;color:#273248;margin-top:7px}.drc-sleep-card-delta{font-size:.95rem;font-weight:650;margin-top:5px}.drc-sleep-card-status{font-size:.9rem;color:#697386;margin-top:8px}
 .drc-sleep-card.metric{height:250px;box-sizing:border-box}.drc-sleep-card.good .drc-sleep-card-delta{color:#24865c}.drc-sleep-card.warn .drc-sleep-card-delta{color:#aa7415}.drc-sleep-card.bad .drc-sleep-card-delta{color:#b13f3f}.drc-sleep-card.neutral .drc-sleep-card-delta{color:#697386}
+.drc-sleep-sparkline{display:block;width:100%;height:48px;margin:4px 0 0}.drc-sleep-baseline-chart{display:block;width:100%;height:180px;margin-top:8px}.drc-sleep-baseline-legend{display:flex;gap:12px;flex-wrap:wrap;color:#697386;font-size:.72rem;margin-top:2px}.drc-sleep-baseline-legend span:before{content:"";display:inline-block;width:9px;height:3px;margin:0 4px 2px 0;vertical-align:middle;background:#3979bd}.drc-sleep-baseline-legend .range:before{height:8px;background:rgba(79,127,191,.25)}.drc-sleep-baseline-legend .median:before{background:#60718a}.drc-sleep-baseline-legend .current:before{background:#2f9d63}
 .drc-sleep-problem{border-radius:10px;padding:10px 14px;margin:5px 0;font-weight:600}.drc-sleep-problem.good{background:#eaf7f0;color:#24704f}.drc-sleep-problem.bad{background:#fff0f0;color:#a43c3c}.drc-sleep-problem.neutral{background:#f3f5f8;color:#697386}
 .drc-baseline-range-label{font-size:.82rem;color:#697386;margin-top:8px}.drc-baseline-range{font-size:1.28rem;line-height:1.2;font-weight:650;color:#273248;margin:4px 0 10px;overflow-wrap:anywhere;word-break:break-word}.drc-baseline-range.compact{font-size:1.08rem;letter-spacing:-.02em}
 .drc-baseline-summary{min-height:220px}.drc-baseline-kicker{font-size:.84rem;color:#697386;font-weight:650}.drc-baseline-main{font-size:1.8rem;font-weight:760;color:#273248;margin:4px 0 12px}.drc-baseline-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px}.drc-baseline-item{border-top:1px solid #e2e7ef;padding-top:8px}.drc-baseline-item-label{font-size:.78rem;color:#7a8699}.drc-baseline-item-value{font-size:.94rem;color:#273248;font-weight:650;margin-top:3px}
 </style>
 """
 st.markdown(SLEEP_CSS, unsafe_allow_html=True)
+BASELINE_LEGEND_OPEN = '<div class="drc-sleep-baseline-legend">'
+BASELINE_LEGEND_CLOSE = "</div>"
 
 
 def _number(value, suffix=""):
@@ -400,13 +405,36 @@ def _metric_state(current, baseline, higher_is_better=True, tolerance=5):
     return ("bad" if adverse else "warn"), _ui("明显偏离" if abs(delta) >= 12 else "轻度偏离", "Material deviation" if abs(delta) >= 12 else "Mild deviation")
 
 
+def _sparkline_svg(values, color, css_class="drc-sleep-sparkline"):
+    numeric_values = [float(value) for value in values if value is not None]
+    if len(numeric_values) < 2:
+        return ""
+    width, height, padding = 360, 48, 5
+    low, high = min(numeric_values), max(numeric_values)
+    spread = max(high - low, 1.0)
+    low -= spread * 0.08
+    high += spread * 0.08
+    points = []
+    for index, value in enumerate(numeric_values):
+        x = padding + index * (width - padding * 2) / max(1, len(numeric_values) - 1)
+        y = height - padding - (value - low) / (high - low) * (height - padding * 2)
+        points.append((x, y))
+    point_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    circles = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="{color}" />' for x, y in points)
+    return (
+        f'<svg class="{css_class}" viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
+        f'role="img" aria-label="{escape(_ui("睡眠趋势", "Sleep trend"))}">'
+        f'<polyline points="{point_text}" fill="none" stroke="{color}" stroke-width="2.2" '
+        f'stroke-linecap="round" stroke-linejoin="round" />{circles}</svg>'
+    )
+
+
 def _trend(values, tone, key):
-    values = [v for v in values if v is not None]
-    if len(values) < 2:
-        return
-    figure = go.Figure(go.Scatter(y=values, mode="lines+markers", line=dict(color={"good":"#3aa675","warn":"#e0a02b","bad":"#d95c5c","neutral":"#8290a5"}[tone], width=2), marker=dict(size=4)))
-    figure.update_layout(height=48, margin=dict(l=0,r=0,t=2,b=0), xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False}, key=key)
+    del key
+    color = {"good": "#3aa675", "warn": "#e0a02b", "bad": "#d95c5c", "neutral": "#8290a5"}[tone]
+    chart = _sparkline_svg(values, color)
+    if chart:
+        st.markdown(chart, unsafe_allow_html=True)
 
 
 def _card_html(title, value, meta, status, tone, problem=None, primary=False, metric=False):
@@ -747,7 +775,13 @@ def _historical_sleep_record_table(history):
 @st.fragment
 def _render_historical_sleep_interaction(history, persisted_baselines):
     """Rerun only the selected-history area after a table interaction."""
-    _render_historical_sleep_interaction(history, persisted_baselines)
+    selected_history_date = _historical_sleep_record_table(history)
+    history_focus_nonce = st.session_state.get("sleep_history_details_focus_nonce", 0)
+    last_history_focus_nonce = st.session_state.get("sleep_history_details_last_scrolled_nonce", 0)
+    should_focus_history = history_focus_nonce > last_history_focus_nonce
+    _historical_sleep_situation(history, selected_history_date, persisted_baselines, auto_expand=should_focus_history, focus_nonce=history_focus_nonce)
+    if should_focus_history:
+        st.session_state["sleep_history_details_last_scrolled_nonce"] = history_focus_nonce
 
 
 def _historical_sleep_situation(history, selected_date, persisted_baselines, *, auto_expand=False, focus_nonce=0):
@@ -844,66 +878,65 @@ def _comparison_text(key, summary):
 def _baseline_chart(summary, key, current_date=None, current_value=None):
     dates, values = summary["dates"], summary["series"]
     lower, upper, center = summary["lower"], summary["upper"], summary["center"]
-    figure = go.Figure()
+    numeric_values = [float(value) for value in values if value is not None]
+    scale_values = numeric_values + [value for value in (lower, upper, center, current_value) if value is not None]
+    if not dates or not scale_values:
+        st.caption(TR("common.no_data"))
+        return
+    width, height, left, right, top, bottom = 520, 180, 8, 8, 12, 12
+    low, high = min(scale_values), max(scale_values)
+    spread = max(high - low, 1.0)
+    low -= spread * .1
+    high += spread * .1
+
+    def x_at(index):
+        return left + index * (width - left - right) / max(1, len(dates) - 1)
+
+    def y_at(value):
+        return top + (high - float(value)) / (high - low) * (height - top - bottom)
+
+    def path_for(indices):
+        commands, started = [], False
+        for index in indices:
+            value = values[index]
+            if value is None:
+                started = False
+                continue
+            command = "L" if started else "M"
+            commands.append(f"{command}{x_at(index):.1f},{y_at(value):.1f}")
+            started = True
+        return " ".join(commands)
+
+    svg = []
     if lower is not None and upper is not None:
-        figure.add_trace(go.Scatter(
-            x=dates, y=[upper] * len(dates), mode="lines", line=dict(width=0),
-            hoverinfo="skip", showlegend=False,
-        ))
-        figure.add_trace(go.Scatter(
-            x=dates, y=[lower] * len(dates), mode="lines", line=dict(width=0),
-            fill="tonexty", fillcolor="rgba(79,127,191,.14)",
-            name=_ui("个人常见范围", "Personal range"), hoverinfo="skip",
-        ))
+        svg.append(
+            f'<path d="M{x_at(0):.1f},{y_at(upper):.1f} L{x_at(len(dates)-1):.1f},{y_at(upper):.1f} '
+            f'L{x_at(len(dates)-1):.1f},{y_at(lower):.1f} L{x_at(0):.1f},{y_at(lower):.1f} Z" '
+            'fill="rgba(79,127,191,.14)" />'
+        )
     if center is not None:
-        figure.add_trace(go.Scatter(
-            x=dates, y=[center] * len(dates), mode="lines",
-            line=dict(color="#60718a", width=1.5, dash="dash"),
-            name=_ui("基线中位线", "Baseline median"), hoverinfo="skip",
-        ))
+        svg.append(f'<line x1="{x_at(0):.1f}" y1="{y_at(center):.1f}" x2="{x_at(len(dates)-1):.1f}" y2="{y_at(center):.1f}" stroke="#60718a" stroke-width="1.5" stroke-dasharray="4 3" />')
     valid_indices = [index for index, value in enumerate(values) if value is not None]
-    recent_indices = set(valid_indices[-7:])
-    previous_indices = set(valid_indices[-14:-7])
-    previous = [value if index in previous_indices else None for index, value in enumerate(values)]
-    recent = [value if index in recent_indices else None for index, value in enumerate(values)]
-    figure.add_trace(go.Scatter(
-        x=dates, y=previous, mode="lines+markers", connectgaps=False,
-        line=dict(color="#a7b0bf", width=2), marker=dict(size=4),
-        name=_ui("前7天", "Previous 7 days"),
-    ))
-    figure.add_trace(go.Scatter(
-        x=dates, y=recent, mode="lines+markers", connectgaps=False,
-        line=dict(color="#3979bd", width=2.5), marker=dict(size=5),
-        name=_ui("近7天", "Last 7 days"),
-    ))
-    anomaly_x, anomaly_y = zip(*[
-        (day, value) for day, value in zip(dates, values)
-        if day in summary["anomaly_dates"]
-    ]) if summary["anomaly_dates"] else ([], [])
-    figure.add_trace(go.Scatter(
-        x=anomaly_x, y=anomaly_y, mode="markers",
-        marker=dict(size=8, color="#d95c5c", symbol="circle-open", line=dict(width=2)),
-        name=_ui("异常点", "Outlier"),
-    ))
-    if current_date and current_value is not None:
-        figure.add_trace(go.Scatter(
-            x=[current_date], y=[current_value], mode="markers",
-            marker=dict(size=10, color="#2f9d63", symbol="diamond", line=dict(width=1, color="#ffffff")),
-            name=_ui("当前周期", "Current cycle"),
-        ))
-    figure.update_layout(
-        height=210, margin=dict(l=8, r=8, t=18, b=30),
-        xaxis=dict(showgrid=False, tickformat="%m-%d", nticks=6),
-        yaxis=dict(showgrid=True, gridcolor="rgba(128,128,128,.12)", zeroline=False),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
-        hovermode="x unified", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    previous_indices, recent_indices = valid_indices[-14:-7], valid_indices[-7:]
+    for indices, color, width_value in ((previous_indices, "#a7b0bf", 1.8), (recent_indices, "#3979bd", 2.4)):
+        path = path_for(indices)
+        if path:
+            svg.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="{width_value}" stroke-linecap="round" stroke-linejoin="round" />')
+            svg.extend(f'<circle cx="{x_at(index):.1f}" cy="{y_at(values[index]):.1f}" r="2.2" fill="{color}" />' for index in indices)
+    anomalies = set(summary["anomaly_dates"])
+    for index, (day, value) in enumerate(zip(dates, values)):
+        if value is not None and day in anomalies:
+            svg.append(f'<circle cx="{x_at(index):.1f}" cy="{y_at(value):.1f}" r="4" fill="none" stroke="#d95c5c" stroke-width="1.8" />')
+    if current_value is not None:
+        current_x = x_at(len(dates) - 1)
+        current_y = y_at(current_value)
+        svg.append(f'<path d="M{current_x:.1f},{current_y-5:.1f} L{current_x+5:.1f},{current_y:.1f} L{current_x:.1f},{current_y+5:.1f} L{current_x-5:.1f},{current_y:.1f} Z" fill="#2f9d63" stroke="#fff" stroke-width="1" />')
+    chart = f'<svg class="drc-sleep-baseline-chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="{escape(_ui("近28天个人睡眠基线趋势", "28-day personal sleep baseline trend"))}">{"".join(svg)}</svg>'
+    legend = _ui(
+        '<span class="range">个人范围</span><span class="median">基线中位线</span><span>近7天</span><span class="current">当前周期</span>',
+        '<span class="range">Personal range</span><span class="median">Baseline median</span><span>Last 7 days</span><span class="current">Current cycle</span>',
     )
-    st.plotly_chart(
-        figure,
-        width="stretch",
-        config={"displayModeBar": False},
-        key=f"sleep_baseline_chart_{key}",
-    )
+    st.markdown(f"{chart}{BASELINE_LEGEND_OPEN}{legend}{BASELINE_LEGEND_CLOSE}", unsafe_allow_html=True)
 
 
 def _summary_with_current_period(summary, current_value):
@@ -1056,19 +1089,7 @@ def main():
     else:
         st.info(TR("domain.sleep.empty"))
 
-    selected_history_date = _historical_sleep_record_table(history)
-    history_focus_nonce = st.session_state.get("sleep_history_details_focus_nonce", 0)
-    last_history_focus_nonce = st.session_state.get("sleep_history_details_last_scrolled_nonce", 0)
-    should_focus_history = history_focus_nonce > last_history_focus_nonce
-    _historical_sleep_situation(
-        history,
-        selected_history_date,
-        persisted_baselines,
-        auto_expand=should_focus_history,
-        focus_nonce=history_focus_nonce,
-    )
-    if should_focus_history:
-        st.session_state["sleep_history_details_last_scrolled_nonce"] = history_focus_nonce
+    _render_historical_sleep_interaction(history, persisted_baselines)
 
     st.subheader("个人睡眠基线" if LANGUAGE != "en" else "Personal Sleep Baseline")
     _personal_baseline(detail_data, history)

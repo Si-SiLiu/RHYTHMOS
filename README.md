@@ -388,6 +388,7 @@ The `docs/` directory is the engineering source of truth for the project:
 - [Release records](releases/README.md): formal version snapshots and their relationship to the changelog and handoff.
 - [Sync Pipeline](docs/SYNC_PIPELINE.md): one-click ordering, Dry Run, Selective Sync, Resume, logging, and history.
 - [Current phase handoff](docs/HANDOFF.md): standardized, machine-verified delivery summary.
+- [Cognitive Training Studio](docs/COGNITIVE_TRAINING_STUDIO.md): isolated browser-based cognitive practice, protocols, data boundaries, and limitations.
 
 Update `docs/CHANGELOG.md` after every completed development phase. Generate the
 automatic region of `docs/CURRENT_STATE.md` with the state script, and update the
@@ -421,3 +422,6 @@ Run the complete phase gate after Codex updates the handoff:
 source .venv/bin/activate
 python -m unittest discover -s tests
 ```
+# Alertness Probe update
+
+Daily Neural Check now uses a 60-second **Alertness Probe｜警觉性反应** (`alertness_probe_v1`). The retained 3-minute **Calibration PVT｜警觉性校准测试** (`pvt_calibration_3min_v1`) has a separate baseline. Results support personal longitudinal trends only; the short form is not equivalent to laboratory PVT and does not provide medical or driving-safety judgments.

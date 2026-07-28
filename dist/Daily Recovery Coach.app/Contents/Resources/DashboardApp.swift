@@ -28,7 +28,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
             backing: .buffered,
             defer: false
         )
-        window.title = "RHYTHMOS｜律衡"
+        window.title = "Daily Recovery Coach"
         window.center()
         window.setFrameAutosaveName("DailyRecoveryCoachWindow")
 
@@ -69,10 +69,10 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
 
     private func installApplicationMenu() {
         let mainMenu = NSMenu()
-        let appMenuItem = NSMenuItem(title: "RHYTHMOS｜律衡", action: nil, keyEquivalent: "")
+        let appMenuItem = NSMenuItem(title: "Daily Recovery Coach", action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
         let quitItem = NSMenuItem(
-            title: "退出 RHYTHMOS｜律衡",
+            title: "退出 Daily Recovery Coach",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -120,8 +120,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
           .dot { display: inline-block; animation: pulse 1.2s infinite; }
           @keyframes pulse { 50% { opacity: .25; } }
         </style>
-        <main><h2>RHYTHMOS｜律衡</h2>
-        <p>Personal Performance OS · 个人表现与恢复系统</p>
+        <main><h2>Daily Recovery Coach</h2>
         <p class="dot">正在启动本地数据看板…</p></main>
         </html>
         """

@@ -11,13 +11,13 @@ from src.pages._bootstrap import ensure_project_root
 
 ensure_project_root()
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from html import escape
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from src.branding import load_page_icon
+from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import get_day_metrics
 from src.db import connect
 from src.demo_sandbox import configure_demo_runtime
@@ -37,7 +37,9 @@ from src.nutrition_logging import (
 )
 from src.nutrition_logging.nutrition_baseline import calculate_personal_nutrition_baseline
 from src.nutrition_logging.feedback import (
-    METRICS, NutritionFeedbackService, summarize_draft_food_items,
+    METRICS, NutritionFeedbackService, load_nutrition_target_snapshot,
+    load_nutrition_targets, recommended_nutrition_targets, save_nutrition_target_snapshot,
+    save_nutrition_targets, summarize_draft_food_items,
 )
 from src.supplements import calculate_intake_ingredients, favorite_products, list_products, recent_products
 from src.ui_tables import centered_dataframe
@@ -48,7 +50,7 @@ from src.ui_scroll import render_interaction_focus
 configure_demo_runtime(st)
 PAGE_LANGUAGE = current_language(st.session_state)
 st.set_page_config(
-    page_title=get_translator(PAGE_LANGUAGE)("domain.nutrition.title"),
+    page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("domain.nutrition.title")),
     page_icon=load_page_icon(), layout="wide",
 )
 LANGUAGE, TR = render_sidebar(st, "nutrition")
@@ -83,6 +85,13 @@ def _feedback_metric_label(metric):
     return _ui(zh, en)
 
 
+def _nutrition_target_metric_label(metric):
+    """Give goal inputs an unambiguous unit without changing card titles."""
+    unit = FEEDBACK_METRIC_LABELS[metric][2]
+    display_unit = "mL" if unit == "ml" else unit
+    return f"{_feedback_metric_label(metric)}（{display_unit}）" if LANGUAGE != "en" else f"{_feedback_metric_label(metric)} ({display_unit})"
+
+
 def _feedback_value(metric, value):
     if value is None:
         return _ui("数据不足", "Insufficient data")
@@ -92,6 +101,68 @@ def _feedback_value(metric, value):
         amount = float(value)
         return f"{amount / 1000:.1f} L" if amount >= 1000 else f"{amount:.0f} mL"
     return f"{float(value):.1f} g"
+
+
+def _render_nutrition_targets(connection):
+    """Render the first, compact target editor used by the category cards."""
+    st.subheader(_ui("1. 营养目标", "1. Nutrition Targets"))
+    st.caption(_ui(
+        "设置每日目标范围；只填写最低目标也可以。留空表示尚未设置。",
+        "Set daily target ranges. A minimum alone is supported; leave a metric blank to keep it unset.",
+    ))
+    saved_targets = load_nutrition_targets(connection)
+    action_left, action_right, _ = st.columns((1.25, 1.6, 4.15))
+    if action_left.button(_ui("复制昨天营养目标", "Copy Yesterday's Targets")):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday_targets = load_nutrition_target_snapshot(connection, yesterday)
+        if not yesterday_targets:
+            st.info(_ui("昨天没有已保存的营养目标。", "No saved nutrition targets were found for yesterday."))
+        else:
+            for metric, (lower, upper) in yesterday_targets.items():
+                st.session_state[f"nutrition_target_min_{metric}"] = lower
+                st.session_state[f"nutrition_target_max_{metric}"] = upper
+            st.rerun()
+    if action_right.button(_ui("应用个人推荐目标", "Apply Personal Recommendations")):
+        recommendations = recommended_nutrition_targets(connection)
+        if not recommendations:
+            st.info(_ui("请先在个人信息中填写体重；完整填写身高、生日和体重目标后可获得热量推荐。", "Add a body weight in Personal Information first; height, birthday, and a weight goal enable a calorie recommendation."))
+        else:
+            for metric, values in recommendations.items():
+                lower, upper = values
+                if lower is not None:
+                    st.session_state[f"nutrition_target_min_{metric}"] = lower
+                    st.session_state[f"nutrition_target_max_{metric}"] = upper
+            st.rerun()
+    target_values = {}
+    for row_metrics in (METRICS[:3], METRICS[3:]):
+        columns = st.columns(3)
+        for column, metric in zip(columns, row_metrics):
+            lower, upper = saved_targets.get(metric, (None, None))
+            with column:
+                _render_html(
+                    f'<div class="drc-nutrition-target-heading">{escape(_nutrition_target_metric_label(metric))}</div>'
+                )
+                target_values[metric] = (
+                    st.number_input(
+                        _ui("最低目标", "Minimum"), min_value=0.0, value=lower,
+                        step=1.0, key=f"nutrition_target_min_{metric}",
+                    ),
+                    st.number_input(
+                        _ui("最高目标（可选）", "Maximum (optional)"), min_value=0.0, value=upper,
+                        step=1.0, key=f"nutrition_target_max_{metric}",
+                    ),
+                )
+    if st.button(_ui("保存营养目标", "Save Nutrition Targets"), type="primary"):
+        try:
+            save_nutrition_targets(connection, target_values)
+            save_nutrition_target_snapshot(connection, date.today().isoformat(), target_values)
+            st.session_state["simple_nutrition_target_flash"] = True
+            st.rerun()
+        except ValueError:
+            st.error(_ui("最高目标不能低于最低目标。", "The maximum target cannot be below the minimum."))
+    if st.session_state.pop("simple_nutrition_target_flash", False):
+        st.success(_ui("营养目标已保存，并已同步到营养分类。", "Nutrition targets saved and synced to Nutrition Categories."))
+    return load_nutrition_targets(connection)
 
 
 def _meal_feedback_status_tags(meal_type, summary):
@@ -111,10 +182,10 @@ def _meal_feedback_status_tags(meal_type, summary):
     )
 
 
-def _render_meal_feedback(summary, feedback, meal_type):
+def _render_meal_feedback(summary, feedback, meal_type, *, section_number=2):
     header_html = (
         '<div class="drc-feedback-heading">'
-        f'<h3>{escape(_ui("2. 本餐反馈", "2. Meal Feedback"))}</h3>'
+        f'<h3>{escape(_ui(f"{section_number}. 本餐反馈", f"{section_number}. Meal Feedback"))}</h3>'
         f'<div class="drc-feedback-statuses">{_meal_feedback_status_tags(meal_type, summary)}</div>'
         '</div>'
     )
@@ -172,12 +243,80 @@ def _today_nutrition_status(metric, detail, summary):
     return "muted", _ui("目标未设置", "Target not set"), _ui("当前营养目标尚未设置。", "A nutrition target has not been set.")
 
 
-def _render_today_nutrition(records, day):
-    service = NutritionFeedbackService(records, day, LANGUAGE)
+def _records_with_live_draft(records, day, live_summary, replacing_record_id):
+    """Replace the open meal with its draft for every same-page calculation."""
+    aligned_records = [record for record in records if record.get("id") != replacing_record_id]
+    food_count = int(live_summary.get("food_count") or 0)
+    identified = int(live_summary.get("identified_food_count") or 0)
+    unidentified = int(live_summary.get("unidentified_food_count") or 0)
+    draft_items = []
+    if food_count:
+        draft_items.append({
+            "food_catalog_id": 1 if identified else None,
+            "custom_food_name": None if identified else "draft",
+            **{metric: live_summary.get(metric) for metric in METRICS},
+        })
+        draft_items.extend({"food_catalog_id": 1, "custom_food_name": None} for _ in range(max(identified - 1, 0)))
+        draft_items.extend({"food_catalog_id": None, "custom_food_name": "draft"} for _ in range(max(unidentified - (0 if identified else 1), 0)))
+    aligned_records.append({"id": replacing_record_id, "date": day, "status": "completed", "items": draft_items})
+    return aligned_records
+
+
+def _category_feedback(service, summary):
+    """Short feedback grounded in the same current/goal values as category cards."""
+    if not summary.get("identified_food_count"):
+        return service.meal_feedback(summary)
+    situations, suggestion = [], None
+    for metric, detail in service.daily_metrics().items():
+        current, target = detail.get("current"), detail.get("target")
+        if current is None or not target:
+            continue
+        lower, upper = target
+        label = _feedback_metric_label(metric)
+        if current < lower:
+            situations.append(_ui(f"{label}低于今日目标。", f"{label} is below today's target."))
+            suggestion = suggestion or _ui(f"后续餐次优先补充{label}来源。", f"Prioritise a {label.lower()} source later today.")
+        elif upper is not None and current > upper:
+            situations.append(_ui(f"{label}高于今日目标。", f"{label} is above today's target."))
+        elif len(situations) < 2:
+            situations.append(_ui(f"{label}处于今日目标范围。", f"{label} is within today's target range."))
+        if len(situations) >= 3:
+            break
+    return {
+        "status": "ready",
+        "situations": situations[:3],
+        "suggestion": suggestion or _ui("继续完成当天饮食记录后再查看整体反馈。", "Continue logging today's meals for a fuller review."),
+    }
+
+
+def _render_today_nutrition(
+    records,
+    day,
+    *,
+    historical=False,
+    section_number=3,
+    targets=None,
+    live_meal_summary=None,
+    replacing_record_id=None,
+):
+    """Render day totals, optionally replacing the open meal with its live draft.
+
+    This keeps the category cards aligned with the values currently visible in
+    the food/drink editor instead of waiting for a save-and-rerun cycle.
+    """
+    aligned_records = records if live_meal_summary is None else _records_with_live_draft(
+        records, day, live_meal_summary, replacing_record_id,
+    )
+    service = NutritionFeedbackService(aligned_records, day, LANGUAGE, targets=targets)
     metrics = service.daily_metrics()
     summary = service.today_summary()
-    st.subheader(_ui("3. 营养分类", "3. Nutrition Categories"))
-    st.caption(_ui("以下为当前已记录摄入；未识别食物不会按 0 计算。", "These are currently recorded intakes; unrecognised foods are not counted as zero."))
+    st.subheader(_ui(f"{section_number}. 营养分类", f"{section_number}. Nutrition Categories"))
+    st.caption(_ui(
+        "以下为所选日期已记录摄入；未识别食物不会按 0 计算。"
+        if historical else "以下数据已与上方饮食记录对齐；未识别食物不会按 0 计算。",
+        "These are recorded intakes for the selected date; unrecognised foods are not counted as zero."
+        if historical else "These values are aligned with the food record above; unrecognised foods are not counted as zero.",
+    ))
     cards = []
     for metric in METRICS:
         detail = metrics[metric]
@@ -199,7 +338,7 @@ def _render_today_nutrition(records, day):
             f'<span>{escape(status_text)}</span>'
             '</div>'
             '</div>'
-            f'<div class="drc-today-nutrition-value">{escape(_feedback_value(metric, detail["current"]))}</div>'
+            f'<div class="drc-today-nutrition-value">{escape(_feedback_value(metric, detail["current"]).replace(" ", "\u00a0"))}</div>'
             '<div class="drc-today-nutrition-meta">'
             f'<span>{escape(_ui("典型值", "Typical"))}：{escape(str(baseline_text))}</span>'
             f'<span>{escape(_ui("目标", "Target"))}：{escape(str(target_text))}</span>'
@@ -229,11 +368,10 @@ div[data-testid="stNumberInput"] input{
     box-sizing:border-box!important;
     padding-left:0!important;
     padding-right:0!important;
-    /* The two stepper buttons occupy 64px; text-indent shifts centered text
-       by half that space so it aligns with the full column. */
-    text-indent:4rem!important;
+    text-indent:0!important;
     text-align:center!important;
 }
+div[data-testid="stNumberInput"] button{display:none!important}
 div[data-testid="stNumberInput"] button[aria-label*="Clear"],
 div[data-testid="stNumberInput"] button[title*="Clear"],
 div[data-testid="stNumberInput"] button[aria-label*="clear" i],
@@ -285,8 +423,8 @@ div[data-testid="stTimeInput"] div[data-baseweb="select"] div[value]{
 .drc-feedback-card li{display:flex;gap:.4rem;line-height:1.55;margin:.18rem 0}
 .drc-feedback-dot{color:#ff4b4b;font-weight:700}
 .drc-meal-action-title{margin:.25rem 0 .55rem;font-size:.9rem;font-weight:650;opacity:.8}
-.drc-today-nutrition-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.65rem;min-width:0;overflow:hidden;margin-top:.45rem;margin-bottom:.8rem}
-.drc-today-nutrition-card{box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;min-width:0;height:6.45rem;padding:.8rem .9rem;border:1px solid rgba(127,127,127,.22);border-radius:.9rem;background:var(--secondary-background-color);background:color-mix(in srgb,var(--secondary-background-color) 78%,var(--background-color));box-shadow:0 2px 9px rgba(0,0,0,.08);overflow:hidden}
+.drc-today-nutrition-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:minmax(7.75rem,auto);gap:.65rem;min-width:0;margin-top:.45rem;margin-bottom:.8rem}
+.drc-today-nutrition-card{box-sizing:border-box;display:flex;flex-direction:column;justify-content:flex-start;min-width:0;min-height:7.75rem;height:auto;padding:.8rem .9rem;border:1px solid rgba(127,127,127,.22);border-radius:.9rem;background:var(--secondary-background-color);background:color-mix(in srgb,var(--secondary-background-color) 78%,var(--background-color));box-shadow:0 2px 9px rgba(0,0,0,.08);overflow:visible}
 .drc-today-nutrition-card-head{display:flex;align-items:center;justify-content:space-between;gap:.45rem;min-width:0}
 .drc-today-nutrition-name{font-size:.84rem;font-weight:650;letter-spacing:.01em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drc-today-nutrition-status{display:inline-flex;align-items:center;gap:.28rem;flex:0 0 auto;padding:.18rem .42rem;border-radius:999px;font-size:.69rem;line-height:1.2;white-space:nowrap;background:rgba(127,127,127,.11)}
@@ -295,12 +433,14 @@ div[data-testid="stTimeInput"] div[data-baseweb="select"] div[value]{
 .drc-today-nutrition-status.attention{color:#b86f13;background:rgba(255,159,10,.13)}.drc-today-nutrition-status.attention .drc-today-nutrition-dot{background:#d28a28;box-shadow:0 0 0 2px rgba(210,138,40,.14)}
 .drc-today-nutrition-status.error{color:#c23d3d;background:rgba(255,59,48,.12)}.drc-today-nutrition-status.error .drc-today-nutrition-dot{background:#d94b4b;box-shadow:0 0 0 2px rgba(217,75,75,.14)}
 .drc-today-nutrition-status.muted{color:#707780}
-.drc-today-nutrition-value{margin:.3rem 0 .32rem;font-size:1.42rem;font-weight:720;letter-spacing:-.015em;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.drc-today-nutrition-meta{display:flex;flex-direction:column;gap:.1rem;color:var(--text-color);opacity:.62;font-size:.73rem;line-height:1.25;white-space:nowrap;overflow:hidden}
-.drc-today-nutrition-meta span{overflow:hidden;text-overflow:ellipsis}
+.drc-today-nutrition-value{margin:.3rem 0 .32rem;min-width:0;font-size:clamp(1.12rem,1.35vw,1.42rem);font-weight:720;letter-spacing:-.015em;line-height:1.15;white-space:nowrap;overflow:visible;font-variant-numeric:tabular-nums}
+.drc-today-nutrition-meta{display:flex;flex-direction:column;gap:.12rem;color:var(--text-color);opacity:.62;font-size:.73rem;line-height:1.3;white-space:normal;overflow:visible}
+.drc-today-nutrition-meta span{overflow:visible;white-space:nowrap}
 .drc-today-evaluation-inline{margin:.15rem 0 .75rem;padding:.55rem .75rem;border-top:1px solid rgba(127,127,127,.18);color:var(--text-color);font-size:.86rem;line-height:1.5}
 .drc-today-evaluation-inline strong{font-weight:650}
 .drc-today-evaluation-status{color:var(--text-color);opacity:.55;font-size:.76rem}
+.drc-nutrition-target-heading{text-align:center;font-size:1rem;font-weight:700;margin:.1rem 0 .4rem}
+div[data-testid="stNumberInput"] label{justify-content:center!important;text-align:center!important;width:100%!important}
 @media (max-width: 900px){.drc-nutrient-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width: 640px){
   .drc-feedback-heading{align-items:flex-start;flex-direction:column;margin-top:.7rem}
@@ -420,6 +560,22 @@ def _food_editor(connection, existing, item_type, editor_key=None):
         row_ids_key = f"simple_food_row_ids_{item_type}_{record_key}"
         if row_ids_key not in st.session_state:
             st.session_state[row_ids_key] = list(range(1, max(len(saved_items), 1) + 1))
+    pending_add_key = f"food_{item_type}_pending_add_{record_key}"
+    pending_add = bool(st.session_state.pop(pending_add_key, False))
+    if not pending_add:
+        active_ids = []
+        for row_id in st.session_state[row_ids_key]:
+            if row_id <= len(saved_items):
+                active_ids.append(row_id)
+                continue
+            name_key = f"food_{item_type}_name_{record_key}_{row_id}"
+            if str(st.session_state.get(name_key) or "").strip():
+                active_ids.append(row_id)
+        # Every food and beverage editor keeps one blank row, but stale extra
+        # rows are discarded instead of appearing after a selection rerun.
+        if not active_ids:
+            active_ids = [min(st.session_state[row_ids_key], default=1)]
+        st.session_state[row_ids_key] = active_ids
     recent = recent_foods(connection)
     recent_names = []
     for recent_item in recent:
@@ -477,7 +633,9 @@ def _food_editor(connection, existing, item_type, editor_key=None):
             )
             if usage and usage.get("quantity") not in (None, ""):
                 st.session_state[quantity_state] = float(usage["quantity"])
-            elif selected and st.session_state.get(quantity_state) in (None, ""):
+            elif selected:
+                # A newly selected food must not inherit the previous row's
+                # amount (for example, 100 g becoming 100 individual buns).
                 st.session_state[quantity_state] = float(selected.get("serving_quantity") or 1.0)
 
         catalog_names = [_display_food(item) for item in editor_catalog_items]
@@ -501,7 +659,11 @@ def _food_editor(connection, existing, item_type, editor_key=None):
         units = list(allowed_food_units(selected))
         usage_key = selected["id"] if selected else ("custom", food_name.strip())
         usage = recent_usage.get(usage_key) or {}
-        initial_unit = saved.get("unit") or usage.get("unit") or (selected or {}).get("default_unit") or "g"
+        initial_unit = (
+            saved.get("unit") or usage.get("unit") or
+            (selected or {}).get("default_unit") or
+            ("ml" if item_type == "beverage" else "g")
+        )
         if unit_key not in st.session_state or st.session_state[unit_key] not in units:
             st.session_state[unit_key] = initial_unit if initial_unit in units else units[0]
         unit = columns[2].selectbox(
@@ -543,6 +705,10 @@ def _food_editor(connection, existing, item_type, editor_key=None):
     if controls[0].button(add_item_label, key=f"{widget_prefix}_add_{record_key}"):
         next_id = max(st.session_state[row_ids_key], default=0) + 1
         st.session_state[row_ids_key].append(next_id)
+        st.session_state[pending_add_key] = True
+        # The row list has already been rendered in this Streamlit run.
+        # Rerun immediately so a single click displays the new input row.
+        st.rerun()
     return rows
 
 
@@ -584,7 +750,7 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
     row_ids_key = f"supplement_row_ids_{product_kind}_{record_key}"
     pending_add_key = f"supplement_pending_add_{product_kind}_{record_key}"
     if row_ids_key not in st.session_state:
-        st.session_state[row_ids_key] = list(range(1, max(len(saved_rows), 1) + 1)) if saved_rows else []
+        st.session_state[row_ids_key] = list(range(1, max(len(saved_rows), 1) + 1))
     pending_add = bool(st.session_state.pop(pending_add_key, False))
     if not pending_add and st.session_state[row_ids_key]:
         # Clear stale blank rows left in the current Streamlit session. A blank
@@ -603,7 +769,9 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
             )
             if (str(brand_value).strip() or str(product_value).strip()) and values_kind == product_kind:
                 active_ids.append(row_id)
-        st.session_state[row_ids_key] = active_ids
+        # Keep one empty input row in every supplement/medication editor while
+        # removing only stale additional blanks.
+        st.session_state[row_ids_key] = active_ids or [min(st.session_state[row_ids_key], default=1)]
 
     recent = recent_products(connection)
     recent_product_ids = [item["id"] for item in recent if item.get("id")]
@@ -616,8 +784,6 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
         st.caption(TR("supplement_products.favorite_product") + "：" + " · ".join(_product_label(item) for item in favorites))
 
     add_label = _ui("添加补剂", "Add Supplement") if product_kind == "supplement" else _ui("添加用药", "Add Medication")
-    if not st.session_state[row_ids_key]:
-        st.caption(TR("nutrition_entry.no_supplements") if product_kind == "supplement" else _ui("暂无用药，点击“添加用药”开始记录。", "No medication yet. Click ‘Add Medication’ to start logging."))
     rows = []
     if st.session_state[row_ids_key]:
         headers = ("brand", "product_name", "quantity", "unit", "actions")
@@ -647,9 +813,21 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
             if unit_key not in st.session_state or st.session_state[unit_key] not in units:
                 st.session_state[unit_key] = initial_unit if initial_unit in units else units[0]
             unit = columns[3].selectbox(TR("supplement_products.unit"), units, key=unit_key, format_func=lambda value: TR(unit_label_key(value)), label_visibility="collapsed")
-            quantity = columns[2].number_input(TR("supplement_products.quantity"), min_value=0.01, value=saved.get("quantity") if saved.get("quantity") not in (None, "") else 1.0, step=1.0 if unit in {"capsule","tablet","sachet","scoop","drop"} else .1, key=f"supplement_quantity_{product_kind}_{record_key}_{row_id}", label_visibility="collapsed")
+            quantity_key = f"supplement_quantity_{product_kind}_{record_key}_{row_id}"
+            if not product_name.strip() and saved.get("quantity") in (None, ""):
+                st.session_state[quantity_key] = None
+            elif product_name.strip() and st.session_state.get(quantity_key) in (None, ""):
+                st.session_state[quantity_key] = saved.get("quantity") if saved.get("quantity") not in (None, "") else 1.0
+            quantity = columns[2].number_input(
+                TR("supplement_products.quantity"), min_value=0.01,
+                value=saved.get("quantity") if saved.get("quantity") not in (None, "") else (1.0 if product_name.strip() else None),
+                step=1.0 if unit in {"capsule", "tablet", "sachet", "scoop", "drop"} else .1,
+                key=quantity_key, label_visibility="collapsed",
+            )
             if columns[4].button(TR("simple_nutrition.delete_row"), key=f"supplement_delete_{product_kind}_{record_key}_{row_id}", use_container_width=True):
                 st.session_state[row_ids_key].remove(row_id)
+                if not st.session_state[row_ids_key]:
+                    st.session_state[row_ids_key] = [max(row_id, 1) + 1]
                 st.rerun()
             if selected:
                 status_key = "ingredients_calculated" if calculate_intake_ingredients(connection, selected["id"], quantity, unit) is not None else "ingredients_unconfirmed"
@@ -663,6 +841,9 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
         if len(ids) < 5:
             ids.append(max(ids, default=0) + 1)
             st.session_state[pending_add_key] = True
+            # Render the newly appended blank row on this one click instead
+            # of waiting for a second interaction with the page.
+            st.rerun()
     return rows
 
 
@@ -693,9 +874,9 @@ def _next_unrecorded_meal_type(records, meal_date, extra_meal_type=None):
 
 
 
-def _meal_form(connection, existing, records, flash_key=None):
+def _meal_form(connection, existing, records, targets=None, flash_key=None):
     record_key = (existing or {}).get("id", 0)
-    st.subheader(_ui("1. 饮食记录", "1. Food Record"))
+    st.subheader(_ui("2. 饮食记录", "2. Food Record"))
     pending_section = st.session_state.pop("simple_pending_nutrition_section", None)
     if pending_section in {"diet", "supplement", "medication"}:
         st.session_state["simple_active_nutrition_section"] = pending_section
@@ -784,22 +965,6 @@ def _meal_form(connection, existing, records, flash_key=None):
     elif active_section != "medication":
         supplements.extend(persisted_medications)
 
-    live_summary = summarize_draft_food_items(connection, food_items)
-    feedback_service = NutritionFeedbackService(records, meal_date.isoformat(), LANGUAGE)
-    if flash_key:
-        st.success(TR(flash_key))
-    _render_meal_feedback(
-        live_summary, feedback_service.meal_feedback(live_summary), meal_type,
-    )
-
-    notes_key = f"simple_meal_notes_{record_key}"
-    existing_notes = (existing or {}).get("notes") or ""
-    current_notes = st.session_state.get(notes_key, existing_notes)
-    with st.expander(TR("simple_nutrition.notes"), expanded=bool(str(current_notes).strip())):
-        notes = st.text_area(
-            TR("simple_nutrition.notes"), value=existing_notes,
-            key=notes_key, label_visibility="collapsed",
-        )
     action_title_html = (
         f'<div class="drc-meal-action-title">{escape(_ui("操作", "Actions"))}</div>'
     )
@@ -810,6 +975,40 @@ def _meal_form(connection, existing, records, flash_key=None):
     with save_action:
         complete = st.button(
             TR("simple_nutrition.save_meal"), type="primary", use_container_width=True,
+        )
+    if flash_key:
+        st.success(TR(flash_key))
+
+    live_summary = summarize_draft_food_items(connection, food_items)
+    _render_today_nutrition(
+        records,
+        meal_date.isoformat(),
+        section_number=3,
+        targets=targets,
+        live_meal_summary=live_summary,
+        replacing_record_id=(existing or {}).get("id"),
+    )
+    aligned_records = _records_with_live_draft(
+        records, meal_date.isoformat(), live_summary, (existing or {}).get("id"),
+    )
+    feedback_service = NutritionFeedbackService(
+        aligned_records, meal_date.isoformat(), LANGUAGE, targets=targets,
+    )
+    # Use the same live day rollup as section 3 so the numbers and feedback
+    # stay aligned with the target editor and all recorded meal inputs.
+    feedback_summary = feedback_service.today_summary()
+    _render_meal_feedback(
+        feedback_summary, _category_feedback(feedback_service, feedback_summary), meal_type,
+        section_number=4,
+    )
+
+    notes_key = f"simple_meal_notes_{record_key}"
+    existing_notes = (existing or {}).get("notes") or ""
+    current_notes = st.session_state.get(notes_key, existing_notes)
+    with st.expander(TR("simple_nutrition.notes"), expanded=bool(str(current_notes).strip())):
+        notes = st.text_area(
+            TR("simple_nutrition.notes"), value=existing_notes,
+            key=notes_key, label_visibility="collapsed",
         )
     if complete:
         try:
@@ -922,29 +1121,133 @@ def _history(records):
     return selected_date, daily
 
 
-def _historical_nutrition_detail_rows(records, selected_date):
+def _history_food_rows(record, item_type, catalog):
     rows = []
-    for record in sorted(
-        (item for item in records if item.get("date") == selected_date),
-        key=lambda item: str(item.get("actual_meal_time") or item.get("eaten_at") or ""),
-    ):
-        summary = record.get("summary") or {}
+    for item in record.get("items", []):
+        if item.get("item_type", "food") != item_type:
+            continue
+        catalog_item = catalog.get(item.get("food_catalog_id"))
+        name = _display_food(catalog_item) if catalog_item else item.get("custom_food_name")
         rows.append({
-            _ui("餐次", "Meal"): _meal_name(record.get("meal_type")),
-            _ui("实际就餐时间", "Meal time"): time_to_hms(record.get("actual_meal_time") or record.get("eaten_at")),
-            TR("simple_nutrition.recorded_count"): summary.get("food_count") or 0,
-            TR("simple_nutrition.identified_count"): summary.get("identified_food_count") or 0,
-            TR("simple_nutrition.calories"): _feedback_value("calories_kcal", summary.get("calories_kcal")),
-            TR("simple_nutrition.protein"): _feedback_value("protein_g", summary.get("protein_g")),
-            TR("simple_nutrition.carbohydrate"): _feedback_value("carbohydrate_g", summary.get("carbohydrate_g")),
-            TR("simple_nutrition.fat"): _feedback_value("fat_g", summary.get("fat_g")),
-            TR("simple_nutrition.fiber"): _feedback_value("fiber_g", summary.get("fiber_g")),
-            TR("simple_nutrition.water"): _feedback_value("water_ml", summary.get("water_ml")),
+            _ui("食物", "Food") if item_type == "food" else _ui("饮品", "Beverage"):
+                name or TR("common.no_data"),
+            TR("simple_nutrition.quantity"): _nutrition_number(item.get("quantity")),
+            TR("simple_nutrition.unit"): TR(food_unit_label_key(item.get("unit") or "g")),
         })
     return rows
 
 
-def _historical_nutrition_situation(records, selected_date, daily, *, auto_expand=False, focus_nonce=0):
+def _history_supplement_rows(record, product_kind, products_by_id):
+    rows = []
+    for item in record.get("supplements", []):
+        if _stored_supplement_kind(item, products_by_id) != product_kind:
+            continue
+        rows.append({
+            TR("supplement_products.brand"): item.get("brand_name") or item.get("custom_brand_name") or TR("common.no_data"),
+            _ui("补剂类型", "Supplement Type") if product_kind == "supplement" else _ui("用药类型", "Medication Type"):
+                item.get("product_name") or item.get("custom_product_name") or item.get("item_name") or TR("common.no_data"),
+            TR("supplement_products.quantity"): _nutrition_number(item.get("quantity")),
+            TR("supplement_products.unit"): TR(unit_label_key(item.get("unit") or "g")),
+        })
+    return rows
+
+
+def _render_history_rows(rows, empty_text):
+    if rows:
+        centered_dataframe(rows, max_height="18rem")
+    else:
+        st.info(empty_text)
+
+
+def _historical_nutrition_details(connection, records, selected_date):
+    """Read-only historical counterpart of the current nutrition details."""
+    data_open_key = f"nutrition_history_data_open_{selected_date}"
+    details_open_key = f"nutrition_history_details_open_{selected_date}"
+
+    def keep_history_sections_open():
+        st.session_state[data_open_key] = True
+        st.session_state[details_open_key] = True
+
+    day_records = sorted(
+        (item for item in records if item.get("date") == selected_date),
+        key=lambda item: str(item.get("actual_meal_time") or item.get("eaten_at") or ""),
+    )
+    if not day_records:
+        st.info(TR("common.no_data"))
+        return
+
+    record_by_id = {item["id"]: item for item in day_records}
+    selected_meal_id = st.session_state.get(f"nutrition_history_detail_meal_{selected_date}")
+    if selected_meal_id not in record_by_id:
+        selected_meal_id = day_records[0]["id"]
+        st.session_state[f"nutrition_history_detail_meal_{selected_date}"] = selected_meal_id
+    selected_record = record_by_id[selected_meal_id]
+
+    st.subheader(_ui("1. 饮食记录", "1. Food Record"))
+    st.selectbox(
+        TR("simple_nutrition.meal"),
+        list(record_by_id),
+        format_func=lambda record_id: _meal_name(record_by_id[record_id].get("meal_type")),
+        key=f"nutrition_history_detail_meal_{selected_date}", on_change=keep_history_sections_open,
+    )
+    left, right = st.columns(2)
+    left.text_input(
+        TR("nutrition_entry.date"), value=format_date(selected_date, LANGUAGE),
+        key=f"nutrition_history_detail_date_{selected_date}", disabled=True,
+    )
+    right.text_input(
+        TR("simple_nutrition.actual_meal_time"),
+        value=time_to_hms(selected_record.get("actual_meal_time") or selected_record.get("eaten_at")),
+        key=f"nutrition_history_detail_time_{selected_date}_{selected_meal_id}", disabled=True,
+    )
+
+    section_options = ("diet", "supplement", "medication")
+    section_labels = {
+        "diet": _ui("🍽 饮食", "🍽 Diet"),
+        "supplement": _ui("💊 补剂", "💊 Supplements"),
+        "medication": _ui("用药", "Medication"),
+    }
+    section_key = f"nutrition_history_detail_section_{selected_date}_{selected_meal_id}"
+    st.session_state.setdefault(section_key, "diet")
+    active_section = st.segmented_control(
+        _ui("分类", "Category"), section_options,
+        format_func=lambda value: section_labels[value], selection_mode="single",
+        key=section_key, label_visibility="collapsed", width="stretch",
+        on_change=keep_history_sections_open,
+    ) or "diet"
+
+    if active_section == "diet":
+        catalog = food_catalog_by_id(connection)
+        _render_history_rows(
+            _history_food_rows(selected_record, "food", catalog),
+            _ui("本餐没有食物记录。", "No food recorded for this meal."),
+        )
+        _render_history_rows(
+            _history_food_rows(selected_record, "beverage", catalog),
+            _ui("本餐没有饮品记录。", "No beverages recorded for this meal."),
+        )
+    else:
+        products_by_id = {str(item["id"]): item for item in list_products(connection)}
+        _render_history_rows(
+            _history_supplement_rows(selected_record, active_section, products_by_id),
+            _ui("本餐没有补剂记录。", "No supplements recorded for this meal.")
+            if active_section == "supplement" else
+            _ui("本餐没有用药记录。", "No medication recorded for this meal."),
+        )
+
+    summary = selected_record.get("summary") or {}
+    feedback_service = NutritionFeedbackService(records, selected_date, LANGUAGE)
+    _render_meal_feedback(
+        summary, feedback_service.meal_feedback(summary), selected_record.get("meal_type"),
+        section_number=3,
+    )
+    notes = str(selected_record.get("notes") or "").strip()
+    with st.expander(TR("simple_nutrition.notes"), expanded=bool(notes)):
+        st.write(notes or TR("common.no_data"))
+    _render_today_nutrition(records, selected_date, historical=True, section_number=2)
+
+
+def _historical_nutrition_situation(connection, records, selected_date, daily, *, auto_expand=False, focus_nonce=0):
     """Selected-day nutrition data and meal details, matching other domains."""
     situation_title = _ui("历史营养情况", "Historical Nutrition Situation")
     data_title = _ui("历史营养数据", "Historical Nutrition Data")
@@ -953,15 +1256,16 @@ def _historical_nutrition_situation(records, selected_date, daily, *, auto_expan
     _render_html(f'<div id="{focus_target_id}"></div>')
     st.subheader(situation_title)
 
-    with st.expander(data_title, expanded=auto_expand):
+    data_open_key = f"nutrition_history_data_open_{selected_date}"
+    details_open_key = f"nutrition_history_details_open_{selected_date}"
+    if auto_expand:
+        st.session_state[data_open_key] = True
+        st.session_state[details_open_key] = True
+    with st.expander(data_title, expanded=bool(st.session_state.get(data_open_key, False))):
         centered_dataframe([_nutrition_energy_row(records, selected_date)])
 
-    with st.expander(details_title, expanded=auto_expand):
-        detail_rows = _historical_nutrition_detail_rows(records, selected_date)
-        if detail_rows:
-            centered_dataframe(detail_rows, max_height="28rem")
-        else:
-            st.info(TR("common.no_data"))
+    with st.expander(details_title, expanded=bool(st.session_state.get(details_open_key, False))):
+        _historical_nutrition_details(connection, records, selected_date)
 
     if auto_expand:
         render_interaction_focus(components, target_id=focus_target_id, nonce=focus_nonce)
@@ -975,14 +1279,23 @@ def _nutrition_energy_row(records, day):
         for record in records if record.get("date") == day
     )
     total_consumption = metrics.get("calories")
-    calorie_gap = intake - total_consumption if total_consumption is not None else None
+    # Keep this sign convention explicit for the table: total expenditure
+    # minus total intake. Positive is shown as a surplus; negative as a gap.
+    calorie_balance = total_consumption - intake if total_consumption is not None else None
+    surplus_text = (
+        f"{calorie_balance:.2f}" if calorie_balance is not None and calorie_balance > 0 else "—"
+    )
+    gap_text = (
+        f"{abs(calorie_balance):.2f}" if calorie_balance is not None and calorie_balance < 0 else "—"
+    )
     return {
         _ui("摄入热量总值（kcal）", "Total Intake (kcal)"): f"{intake:g}" if intake else TR("common.no_data"),
         _ui("运动消耗（kcal）", "Training Expenditure (kcal)"): _nutrition_number(metrics.get("training_calories")),
         _ui("静息消耗估计（kcal）", "Estimated Resting Expenditure (kcal)"): _nutrition_number(_polar_resting_calories(metrics)),
         _ui("活动消耗（kcal）", "Active Expenditure (kcal)"): _nutrition_number(metrics.get("active_calories")),
         _ui("总消耗（kcal）", "Total Expenditure (kcal)"): _nutrition_number(metrics.get("calories")),
-        _ui("热量缺口（kcal）", "Calorie Gap (kcal)"): _nutrition_number(calorie_gap),
+        _ui("热量盈余（kcal）", "Calorie Surplus (kcal)"): surplus_text,
+        _ui("热量缺口（kcal）", "Calorie Gap (kcal)"): gap_text,
     }
 
 
@@ -1123,14 +1436,15 @@ def main():
         active_date_value = active_date.isoformat() if hasattr(active_date, "isoformat") else str(active_date)
         active_record_id = find_meal_id(connection, active_type, active_date_value)
         existing = get_meal_record(connection, active_record_id) if active_record_id else None
-        _meal_form(connection, existing, records, flash_key)
-        _render_today_nutrition(records, today_value)
+        targets = _render_nutrition_targets(connection)
+        _meal_form(connection, existing, records, targets, flash_key)
         selected_history_date, historical_daily = _history(records)
         history_focus_nonce = st.session_state.get("nutrition_history_focus_nonce", 0)
         last_history_focus_nonce = st.session_state.get("nutrition_history_last_scrolled_nonce", 0)
         should_focus_history = history_focus_nonce > last_history_focus_nonce
         if selected_history_date:
             _historical_nutrition_situation(
+                connection,
                 records,
                 selected_history_date,
                 historical_daily,

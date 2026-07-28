@@ -305,6 +305,15 @@ deterministic health table is altered and `ai_coach_audit` is not created.
 - 备注：窗口严格排除当天。
 - 原始载荷：该表不直接保存 raw_json。
 
+## 表：neural_assessments、pvt_trials、daily_neural_features
+
+- `neural_assessments` 保存一次主观量表、测试条件、协议版本、设备上下文与基线资格；业务键为客户端生成的 `id`。
+- `pvt_trials` 保留每一个浏览器端 PVT 原始试次，通过 `assessment_id` 关联，并以 `assessment_id + trial_index` 去重。
+- `daily_neural_features` 是每日期间的最新神经准备度投影，业务键为 `date`，且 `assessment_id` 唯一；页面刷新同一 assessment 只会更新，不会重复写入。
+- 该模块仅读取 `daily_recovery_metrics` 的睡眠分数、夜间 HRV 与晨间 RMSSD；不写入该表，也不读取或修改 Recovery Score。
+- `mean_response_speed` 单位为 `1/ms`，计算为每个有效反应时间倒数的均值；`lapse_355_count`、`lapse_500_count` 分别统计有效 RT 大于 355 ms、500 ms 的试次。
+- 个人基线使用过去 28 天、排除当日、且未受干扰并至少有 10 个有效试次的记录；少于 7 个有效日只显示“基线建立中”。
+
 ## 表：recovery_scores
 
 - 用途：版本化恢复评分。
@@ -487,3 +496,19 @@ no table, column, index, or migration. The raw table remains the source display
 for today's measurements; the details page computes a 28-day comparison using
 resolved history, quality eligibility, median/MAD range, and explicit NULL
 semantics. Existing uppercase Kubios quality values remain compatible.
+
+## Cognitive Training Studio (schema 0.28.0)
+
+The five `cognitive_training_*` tables store browser-side training sessions,
+task summaries, raw trials, daily progress, and preferences. Session ids are
+idempotency keys; `quick` and `standard` modes remain separate. Interrupted
+sessions are retained but do not count as completed or personal bests. These
+tables are isolated from Neural Readiness and Recovery tables.
+# Alertness protocol compatibility
+
+`neural_assessments` now records `test_mode`, `duration_seconds`, `baseline_group`, calibration metadata, and a metrics JSON snapshot. Existing `pvt_b_v1` rows are retained and labelled `legacy_3min`; they never enter either new baseline. The migration only adds nullable fields and is ledger-backed/idempotent.
+# Database schema version
+
+The current schema ledger version is `0.31.1`. Migration `0.31.1` expands the
+Cognitive Training Studio plan constraint while preserving existing sessions,
+task results, and trials.

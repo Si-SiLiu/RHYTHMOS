@@ -7,7 +7,9 @@ from src.nutrition_logging import (
 )
 from src.nutrition_logging.feedback import (
     NutritionFeedbackService, is_day_nutrition_confirmed,
-    set_day_nutrition_confirmed, summarize_draft_food_items, summarize_food_items,
+    load_nutrition_targets, save_nutrition_targets, set_day_nutrition_confirmed,
+    load_nutrition_target_snapshot, recommended_nutrition_targets,
+    save_nutrition_target_snapshot, summarize_draft_food_items, summarize_food_items,
 )
 
 
@@ -108,6 +110,41 @@ class NutritionFeedbackTests(unittest.TestCase):
         self.assertEqual(protein["baseline_status"], "insufficient_data")
         self.assertIsNone(protein["baseline"])
         self.assertIsNone(protein["target"])
+
+    def test_saved_targets_feed_the_daily_metric_comparison(self):
+        save_nutrition_targets(self.connection, {
+            "protein_g": (60, 100),
+            "water_ml": (2000, None),
+        })
+        self.assertEqual(load_nutrition_targets(self.connection), {
+            "protein_g": (60.0, 100.0),
+            "water_ml": (2000.0, None),
+        })
+        self._create_food_meal(items=[
+            {"food_catalog_id": self.catalog["egg"]["id"], "quantity": 1, "unit": "piece"},
+        ])
+        targets = load_nutrition_targets(self.connection)
+        protein = NutritionFeedbackService(
+            list_meal_records(self.connection), self.day, targets=targets,
+        ).daily_metrics()["protein_g"]
+        self.assertEqual(protein["target"], (60.0, 100.0))
+        self.assertEqual(protein["status"], "目前低于目标范围")
+
+    def test_target_snapshot_and_personal_recommendation(self):
+        targets = {"protein_g": (90, 110), "water_ml": (2100, None)}
+        save_nutrition_target_snapshot(self.connection, self.day, targets)
+        self.assertEqual(load_nutrition_target_snapshot(self.connection, self.day), {
+            "protein_g": (90.0, 110.0), "water_ml": (2100.0, None),
+        })
+        self.connection.execute(
+            "INSERT INTO body_measurements(date,height_cm,weight_kg,is_primary) VALUES(?,?,?,1)",
+            (self.day, 175, 70),
+        )
+        self.connection.execute("INSERT INTO personal_goals(id,target_weight_kg) VALUES(1,65)")
+        self.connection.commit()
+        recommendation = recommended_nutrition_targets(self.connection)
+        self.assertEqual(recommendation["protein_g"], (104, 130))
+        self.assertEqual(recommendation["water_ml"], (1950, 2275))
 
     def test_evaluation_has_at_most_three_suggestions(self):
         for day in ("2026-07-19", "2026-07-20", "2026-07-21"):

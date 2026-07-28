@@ -1797,6 +1797,406 @@ SCHEMA_MIGRATIONS = (
         );
         """,
     ),
+    SchemaMigration(
+        25,
+        "0.25.0",
+        "training_program_and_prescription_layer",
+        "training-program-prescription-v1-nullable-links",
+        """
+        CREATE TABLE IF NOT EXISTS training_programs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','archived')),
+            start_date TEXT,
+            end_date TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_training_programs_status
+            ON training_programs(status,start_date,id);
+
+        CREATE TABLE IF NOT EXISTS training_day_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            training_program_id INTEGER NOT NULL,
+            day_key TEXT NOT NULL,
+            day_label TEXT NOT NULL,
+            sequence_order INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT,
+            FOREIGN KEY (training_program_id) REFERENCES training_programs(id) ON DELETE CASCADE,
+            UNIQUE(training_program_id,day_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_training_day_templates_program
+            ON training_day_templates(training_program_id,sequence_order,id);
+
+        CREATE TABLE IF NOT EXISTS training_blocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            training_day_template_id INTEGER NOT NULL,
+            module_key TEXT NOT NULL,
+            module_label TEXT NOT NULL,
+            sequence_order INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT,
+            FOREIGN KEY (training_day_template_id) REFERENCES training_day_templates(id) ON DELETE CASCADE,
+            UNIQUE(training_day_template_id,module_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_training_blocks_day
+            ON training_blocks(training_day_template_id,sequence_order,id);
+
+        CREATE TABLE IF NOT EXISTS training_prescriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            training_block_id INTEGER NOT NULL,
+            exercise_catalog_id INTEGER,
+            custom_exercise_name TEXT,
+            sequence_order INTEGER NOT NULL DEFAULT 1,
+            prescription_name TEXT,
+            planned_sets_json TEXT NOT NULL DEFAULT '[]',
+            target_notes TEXT,
+            hprs_snapshot_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT,
+            FOREIGN KEY (training_block_id) REFERENCES training_blocks(id) ON DELETE CASCADE,
+            FOREIGN KEY (exercise_catalog_id) REFERENCES exercise_catalog(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_training_prescriptions_block
+            ON training_prescriptions(training_block_id,sequence_order,id);
+
+        ALTER TABLE training_sessions ADD COLUMN training_program_id INTEGER;
+        ALTER TABLE training_sessions ADD COLUMN training_day_template_id INTEGER;
+        ALTER TABLE training_sessions ADD COLUMN prescription_snapshot_json TEXT;
+        ALTER TABLE training_sessions ADD COLUMN hprs_adjustment_json TEXT;
+        ALTER TABLE training_exercises ADD COLUMN training_prescription_id INTEGER;
+        ALTER TABLE training_exercises ADD COLUMN module_key TEXT;
+        ALTER TABLE training_exercises ADD COLUMN planned_sets_json TEXT;
+        ALTER TABLE training_exercises ADD COLUMN completion_status TEXT;
+        CREATE INDEX IF NOT EXISTS idx_training_sessions_plan
+            ON training_sessions(training_program_id,training_day_template_id,date);
+        CREATE INDEX IF NOT EXISTS idx_training_exercises_prescription
+            ON training_exercises(training_prescription_id);
+        """,
+    ),
+    SchemaMigration(
+        26,
+        "0.26.0",
+        "weekly_plan_sport_type",
+        "weekly-plan-sport-type-v1",
+        """
+        ALTER TABLE training_day_templates
+            ADD COLUMN sport_type TEXT NOT NULL DEFAULT 'indoor_strength';
+        CREATE INDEX IF NOT EXISTS idx_training_day_templates_sport
+            ON training_day_templates(training_program_id,sport_type,day_key);
+        """,
+    ),
+    SchemaMigration(
+        27,
+        "0.27.0",
+        "neural_readiness_mvp",
+        "neural-readiness-v1-assessments-pvt-trials-daily-features",
+        """
+        CREATE TABLE IF NOT EXISTS neural_assessments (
+            id TEXT PRIMARY KEY,
+            assessment_date TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            protocol_version TEXT NOT NULL,
+            mental_fatigue INTEGER NOT NULL CHECK (mental_fatigue BETWEEN 0 AND 10),
+            mental_clarity INTEGER NOT NULL CHECK (mental_clarity BETWEEN 0 AND 10),
+            task_motivation INTEGER NOT NULL CHECK (task_motivation BETWEEN 0 AND 10),
+            physical_heaviness INTEGER NOT NULL CHECK (physical_heaviness BETWEEN 0 AND 10),
+            caffeine_last_2h INTEGER NOT NULL DEFAULT 0 CHECK (caffeine_last_2h IN (0, 1)),
+            exercise_last_2h INTEGER NOT NULL DEFAULT 0 CHECK (exercise_last_2h IN (0, 1)),
+            illness_or_discomfort INTEGER NOT NULL DEFAULT 0 CHECK (illness_or_discomfort IN (0, 1)),
+            interrupted INTEGER NOT NULL DEFAULT 0 CHECK (interrupted IN (0, 1)),
+            valid_for_baseline INTEGER NOT NULL DEFAULT 0 CHECK (valid_for_baseline IN (0, 1)),
+            device_context TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_neural_assessments_date
+            ON neural_assessments(assessment_date, valid_for_baseline);
+
+        CREATE TABLE IF NOT EXISTS pvt_trials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assessment_id TEXT NOT NULL,
+            trial_index INTEGER NOT NULL,
+            stimulus_time_ms REAL,
+            response_time_ms REAL,
+            reaction_time_ms REAL,
+            is_valid INTEGER NOT NULL CHECK (is_valid IN (0, 1)),
+            is_false_start INTEGER NOT NULL CHECK (is_false_start IN (0, 1)),
+            is_lapse_355 INTEGER NOT NULL CHECK (is_lapse_355 IN (0, 1)),
+            is_lapse_500 INTEGER NOT NULL CHECK (is_lapse_500 IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assessment_id) REFERENCES neural_assessments(id) ON DELETE CASCADE,
+            UNIQUE(assessment_id, trial_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pvt_trials_assessment
+            ON pvt_trials(assessment_id, trial_index);
+
+        CREATE TABLE IF NOT EXISTS daily_neural_features (
+            date TEXT PRIMARY KEY,
+            assessment_id TEXT NOT NULL UNIQUE,
+            trial_count INTEGER NOT NULL,
+            valid_trial_count INTEGER NOT NULL,
+            median_rt_ms REAL,
+            mean_rt_ms REAL,
+            mean_response_speed REAL,
+            fastest_10pct_rt_ms REAL,
+            slowest_10pct_rt_ms REAL,
+            rt_standard_deviation REAL,
+            rt_coefficient_of_variation REAL,
+            lapse_355_count INTEGER NOT NULL,
+            lapse_500_count INTEGER NOT NULL,
+            false_start_count INTEGER NOT NULL,
+            first_half_median_rt_ms REAL,
+            second_half_median_rt_ms REAL,
+            time_on_task_change_ms REAL,
+            mental_fatigue INTEGER NOT NULL,
+            mental_clarity INTEGER NOT NULL,
+            task_motivation INTEGER NOT NULL,
+            physical_heaviness INTEGER NOT NULL,
+            sleep_score REAL,
+            nightly_hrv_rmssd REAL,
+            morning_rmssd REAL,
+            baseline_status TEXT NOT NULL,
+            baseline_sample_count INTEGER NOT NULL DEFAULT 0,
+            baseline_deviations_json TEXT NOT NULL DEFAULT '{}',
+            confidence_level TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assessment_id) REFERENCES neural_assessments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_neural_features_baseline
+            ON daily_neural_features(date, baseline_status);
+        """,
+    ),
+    SchemaMigration(
+        28,
+        "0.28.0",
+        "cognitive_training_studio_mvp",
+        "cognitive-training-studio-v1-sessions-tasks-trials-progress-preferences",
+        """
+        CREATE TABLE IF NOT EXISTS cognitive_training_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT 'local_user',
+            training_plan TEXT NOT NULL CHECK(training_plan IN ('focus_alertness','working_memory')),
+            session_mode TEXT NOT NULL CHECK(session_mode IN ('quick','standard')),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            timezone TEXT NOT NULL,
+            total_duration_seconds REAL,
+            completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
+            interrupted INTEGER NOT NULL DEFAULT 0 CHECK(interrupted IN (0,1)),
+            device_context TEXT NOT NULL DEFAULT '{}',
+            app_version TEXT,
+            protocol_version TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_cognitive_sessions_date
+            ON cognitive_training_sessions(started_at,training_plan,session_mode);
+
+        CREATE TABLE IF NOT EXISTS cognitive_training_task_results (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            task_order INTEGER NOT NULL,
+            protocol_version TEXT NOT NULL,
+            difficulty_start INTEGER,
+            difficulty_end INTEGER,
+            total_trials INTEGER NOT NULL DEFAULT 0,
+            correct_count INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            omission_count INTEGER NOT NULL DEFAULT 0,
+            median_rt_ms REAL,
+            mean_rt_ms REAL,
+            rt_cv REAL,
+            accuracy REAL,
+            score REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id,task_order)
+        );
+
+        CREATE TABLE IF NOT EXISTS cognitive_training_trials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            task_result_id TEXT NOT NULL,
+            trial_index INTEGER NOT NULL,
+            stimulus_type TEXT NOT NULL,
+            stimulus_payload TEXT NOT NULL DEFAULT '{}',
+            expected_response TEXT,
+            actual_response TEXT,
+            response_time_ms REAL,
+            correct INTEGER,
+            difficulty_level INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_result_id) REFERENCES cognitive_training_task_results(id) ON DELETE CASCADE,
+            UNIQUE(task_result_id,trial_index)
+        );
+
+        CREATE TABLE IF NOT EXISTS cognitive_training_progress (
+            date TEXT NOT NULL,
+            training_plan TEXT NOT NULL,
+            session_count INTEGER NOT NULL DEFAULT 0,
+            completed_session_count INTEGER NOT NULL DEFAULT 0,
+            total_training_minutes REAL NOT NULL DEFAULT 0,
+            average_accuracy REAL,
+            median_rt_ms REAL,
+            highest_difficulty INTEGER,
+            adherence_rate REAL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(date,training_plan)
+        );
+
+        CREATE TABLE IF NOT EXISTS cognitive_training_preferences (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            preferred_session_mode TEXT NOT NULL DEFAULT 'standard',
+            preferred_training_plan TEXT NOT NULL DEFAULT 'focus_alertness',
+            weekly_goal_sessions INTEGER NOT NULL DEFAULT 3,
+            sound_enabled INTEGER NOT NULL DEFAULT 0,
+            haptics_enabled INTEGER NOT NULL DEFAULT 1,
+            reduced_motion INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO cognitive_training_preferences(id) VALUES(1);
+        """,
+    ),
+    SchemaMigration(
+        29,
+        "0.29.0",
+        "alertness_probe_protocols",
+        "alertness-probe-v1-short-and-calibration-baselines",
+        """
+        ALTER TABLE neural_assessments ADD COLUMN test_mode TEXT;
+        ALTER TABLE neural_assessments ADD COLUMN duration_seconds REAL;
+        ALTER TABLE neural_assessments ADD COLUMN baseline_group TEXT;
+        ALTER TABLE neural_assessments ADD COLUMN calibration_trigger TEXT;
+        ALTER TABLE neural_assessments ADD COLUMN calibration_reason TEXT;
+        ALTER TABLE neural_assessments ADD COLUMN metrics_json TEXT;
+        ALTER TABLE daily_neural_features ADD COLUMN test_mode TEXT;
+        ALTER TABLE daily_neural_features ADD COLUMN duration_seconds REAL;
+        ALTER TABLE daily_neural_features ADD COLUMN protocol_version TEXT;
+        ALTER TABLE daily_neural_features ADD COLUMN baseline_group TEXT;
+        ALTER TABLE daily_neural_features ADD COLUMN fastest_20pct_rt_ms REAL;
+        ALTER TABLE daily_neural_features ADD COLUMN slowest_20pct_rt_ms REAL;
+        UPDATE neural_assessments
+           SET test_mode='legacy_3min', baseline_group='legacy_3min'
+         WHERE protocol_version='pvt_b_v1' AND test_mode IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_neural_assessments_baseline_group
+            ON neural_assessments(test_mode, protocol_version, baseline_group, assessment_date);
+        """,
+    ),
+    SchemaMigration(
+        30,
+        "0.30.0",
+        "neural_assessment_preferences",
+        "neural-assessment-v1-remember-condition-preferences",
+        """
+        CREATE TABLE IF NOT EXISTS neural_assessment_preferences (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            condition_preferences_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO neural_assessment_preferences(id) VALUES(1);
+        """,
+    ),
+    SchemaMigration(
+        31,
+        "0.31.1",
+        "cognitive_control_speed_training",
+        "cognitive-control-speed-v1-plan-constraint",
+        """
+        PRAGMA foreign_keys=OFF;
+        ALTER TABLE cognitive_training_trials RENAME TO cognitive_training_trials_legacy;
+        ALTER TABLE cognitive_training_task_results RENAME TO cognitive_training_task_results_legacy;
+        ALTER TABLE cognitive_training_sessions RENAME TO cognitive_training_sessions_legacy;
+        CREATE TABLE cognitive_training_sessions (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'local_user',
+            training_plan TEXT NOT NULL CHECK(training_plan IN ('focus_alertness','working_memory','cognitive_control_speed')),
+            session_mode TEXT NOT NULL CHECK(session_mode IN ('quick','standard')), started_at TEXT NOT NULL, completed_at TEXT,
+            timezone TEXT NOT NULL, total_duration_seconds REAL, completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
+            interrupted INTEGER NOT NULL DEFAULT 0 CHECK(interrupted IN (0,1)), device_context TEXT NOT NULL DEFAULT '{}',
+            app_version TEXT, protocol_version TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO cognitive_training_sessions SELECT * FROM cognitive_training_sessions_legacy;
+        CREATE TABLE cognitive_training_task_results (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_type TEXT NOT NULL, task_order INTEGER NOT NULL,
+            protocol_version TEXT NOT NULL, difficulty_start INTEGER, difficulty_end INTEGER, total_trials INTEGER NOT NULL DEFAULT 0,
+            correct_count INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, omission_count INTEGER NOT NULL DEFAULT 0,
+            median_rt_ms REAL, mean_rt_ms REAL, rt_cv REAL, accuracy REAL, score REAL, metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id,task_order)
+        );
+        INSERT INTO cognitive_training_task_results SELECT * FROM cognitive_training_task_results_legacy;
+        CREATE TABLE cognitive_training_trials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, task_result_id TEXT NOT NULL, trial_index INTEGER NOT NULL,
+            stimulus_type TEXT NOT NULL, stimulus_payload TEXT NOT NULL DEFAULT '{}', expected_response TEXT, actual_response TEXT,
+            response_time_ms REAL, correct INTEGER, difficulty_level INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_result_id) REFERENCES cognitive_training_task_results(id) ON DELETE CASCADE, UNIQUE(task_result_id,trial_index)
+        );
+        INSERT INTO cognitive_training_trials SELECT * FROM cognitive_training_trials_legacy;
+        DROP TABLE cognitive_training_trials_legacy;
+        DROP TABLE cognitive_training_task_results_legacy;
+        DROP TABLE cognitive_training_sessions_legacy;
+        CREATE INDEX IF NOT EXISTS idx_cognitive_sessions_date ON cognitive_training_sessions(started_at,training_plan,session_mode);
+        PRAGMA foreign_keys=ON;
+        """,
+    ),
+    SchemaMigration(
+        32,
+        "0.32.0",
+        "nutrition_targets",
+        "nutrition-targets-v1-metric-range",
+        """
+        CREATE TABLE IF NOT EXISTS nutrition_targets (
+            metric TEXT PRIMARY KEY,
+            minimum_value REAL NOT NULL CHECK(minimum_value >= 0),
+            maximum_value REAL CHECK(maximum_value IS NULL OR maximum_value >= minimum_value),
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    ),
+    SchemaMigration(
+        33,
+        "0.33.0",
+        "nutrition_target_snapshots",
+        "nutrition-targets-v1-daily-snapshots",
+        """
+        CREATE TABLE IF NOT EXISTS nutrition_target_snapshots (
+            date TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            minimum_value REAL NOT NULL CHECK(minimum_value >= 0),
+            maximum_value REAL CHECK(maximum_value IS NULL OR maximum_value >= minimum_value),
+            PRIMARY KEY(date,metric)
+        );
+        """,
+    ),
+    SchemaMigration(
+        34,
+        "0.34.0",
+        "personal_training_goal",
+        "personal-training-goal-v1-muscle-gain-fat-loss-maintenance",
+        """
+        ALTER TABLE personal_goals ADD COLUMN training_goal TEXT
+            NOT NULL DEFAULT 'maintenance'
+            CHECK (training_goal IN ('muscle_gain','fat_loss','maintenance'));
+        """,
+    ),
 )
 
 

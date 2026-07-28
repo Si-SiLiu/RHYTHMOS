@@ -198,10 +198,15 @@ def create_manual_training_session(connection: sqlite3.Connection, data):
 
 
 def _blank_set(raw):
-    return not any(raw.get(name) not in (None, "", False) for name in (
+    return not any(
+        raw.get(name) is not None
+        and raw.get(name) != ""
+        and raw.get(name) is not False
+        for name in (
         "load_value", "reps", "duration_seconds", "distance_meters",
         "resistance_level", "incline_percent", "rpe", "rir", "rest_seconds", "notes",
-    ))
+        )
+    )
 
 
 def _clean_set(raw, measurement_mode, number):
@@ -279,6 +284,10 @@ def _clean_exercises(connection, exercises):
             "is_unilateral": int(bool(raw.get("is_unilateral", selected.get("is_unilateral") if selected else False))),
             "skill_proficiency": finite_number("skill_proficiency", raw.get("skill_proficiency"), 1, 10),
             "notes": text_value(raw.get("notes")), "sets": sets,
+            "training_prescription_id": raw.get("training_prescription_id"),
+            "module_key": text_value(raw.get("module_key")),
+            "planned_sets_json": raw.get("planned_sets_json"),
+            "completion_status": text_value(raw.get("completion_status")),
         })
     return result
 
@@ -304,9 +313,19 @@ def save_training_details(connection: sqlite3.Connection, session_id, details, e
     with connection:
         connection.execute(
             """UPDATE training_sessions SET resolved_sport_type=?,
-                   resolved_sport_type_source=?,status=?,notes=?,updated_at=CURRENT_TIMESTAMP
+                   resolved_sport_type_source=?,status=?,notes=?,
+                   training_program_id=COALESCE(?,training_program_id),
+                   training_day_template_id=COALESCE(?,training_day_template_id),
+                   prescription_snapshot_json=COALESCE(?,prescription_snapshot_json),
+                   hprs_adjustment_json=COALESCE(?,hprs_adjustment_json),
+                   updated_at=CURRENT_TIMESTAMP
                WHERE id=?""",
-            (sport or current.get("resolved_sport_type"), source, status, text_value(details.get("notes")), session_id),
+            (
+                sport or current.get("resolved_sport_type"), source, status,
+                text_value(details.get("notes")), details.get("training_program_id"),
+                details.get("training_day_template_id"), details.get("prescription_snapshot_json"),
+                details.get("hprs_adjustment_json"), session_id,
+            ),
         )
         connection.execute(
             """UPDATE training_sets SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
@@ -325,14 +344,17 @@ def save_training_details(connection: sqlite3.Connection, session_id, details, e
                        uuid,training_session_id,exercise_catalog_id,custom_exercise_name,
                        sequence_order,exercise_category,measurement_mode,
                        primary_muscle_group,equipment,is_unilateral,
-                       skill_proficiency,notes
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       skill_proficiency,notes,training_prescription_id,module_key,
+                       planned_sets_json,completion_status
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     exercise["uuid"], session_id, exercise["exercise_catalog_id"],
                     exercise["custom_exercise_name"], exercise["sequence_order"],
                     exercise["exercise_category"], exercise["measurement_mode"],
                     exercise["primary_muscle_group"], exercise["equipment"],
                     exercise["is_unilateral"], exercise["skill_proficiency"], exercise["notes"],
+                    exercise.get("training_prescription_id"), exercise.get("module_key"),
+                    exercise.get("planned_sets_json"), exercise.get("completion_status"),
                 ),
             ).lastrowid
             connection.executemany(
@@ -379,7 +401,8 @@ def copy_exercise(exercise, reset_completed=False):
         key: value for key, value in exercise.items() if key in {
             "exercise_catalog_id", "custom_exercise_name", "exercise_category",
             "measurement_mode", "primary_muscle_group", "equipment",
-            "is_unilateral", "skill_proficiency", "notes",
+            "is_unilateral", "skill_proficiency", "notes", "training_prescription_id",
+            "module_key", "planned_sets_json", "completion_status",
         }
     } | {
         "uuid": _uuid(),
