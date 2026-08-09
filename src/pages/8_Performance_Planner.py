@@ -38,11 +38,14 @@ from src.performance_planner import (
     acknowledge_recommendation,
     add_block,
     apply_recommendation,
+    build_daily_cognitive_check_suggestions,
     create_checkpoint,
     create_plan,
     delete_block,
     delete_checkpoint,
     delete_plan,
+    dismiss_suggested_cognitive_checkpoint,
+    ensure_suggested_cognitive_checkpoint,
     generate_recommendations,
     get_plan_for_date,
     get_timeline_summary,
@@ -84,6 +87,12 @@ PLANNER_STYLE = """
 .pp-block{border-left:.35rem solid #4f8bf9;padding:.35rem .8rem;margin:.2rem 0}
 .pp-block small{opacity:.72}
 div[data-testid="stMetric"]{min-width:0}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) label{text-align:center;justify-content:center;width:100%}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) input,
+div[data-testid="stExpander"]:has(.pp-add-block-marker) textarea{text-align:center!important}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) input{text-align:center!important}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child{flex:1;justify-content:center}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child>div{text-align:center;width:100%}
 @media(max-width:600px){
   .pp-subtitle{font-size:1.05rem}
   .pp-block{padding-left:.55rem}
@@ -175,6 +184,7 @@ ADD_BLOCK_WIDGET_KEYS = (
     "pp_add_notes",
 )
 ADD_BLOCK_ADVANCED_FIELDS = ("priority", "cognitive_demand", "physical_demand")
+ADD_BLOCK_MARKER = '<span class="pp-add-block-marker"></span>'
 
 
 def _initialise_add_block_state() -> None:
@@ -321,6 +331,58 @@ def _block_by_id(blocks: list[dict], block_id: str | None) -> dict | None:
     return next((block for block in blocks if block["block_id"] == block_id), None)
 
 
+def _start_suggested_cognitive_check(plan_id: str, related_block_id: str) -> None:
+    checkpoint = ensure_suggested_cognitive_checkpoint(plan_id, related_block_id)
+    st.session_state["planner_cognitive_checkpoint_context"] = {
+        "checkpoint_id": checkpoint["checkpoint_id"],
+        "plan_id": checkpoint["plan_id"],
+        "related_block_id": checkpoint["related_block_id"],
+        "trigger_type": checkpoint["trigger_type"],
+    }
+    st.switch_page("pages/6_Training_Studio.py")
+
+
+def _render_cognitive_check_suggestions(plan_id: str) -> None:
+    st.subheader(TR("performance_planner.cognitive_check_suggestions"))
+    suggestions = build_daily_cognitive_check_suggestions(plan_id)
+    if not suggestions:
+        st.caption(TR("performance_planner.no_cognitive_check_suggestions"))
+        return
+    for suggestion in suggestions:
+        with st.container(border=True):
+            st.markdown(f"**{TR('performance_planner.cognitive_check_suggestion')}**")
+            st.write(suggestion["block_title"])
+            suggested_at = datetime.fromisoformat(suggestion["scheduled_at"])
+            st.caption(TR("performance_planner.before_task", time=suggested_at.strftime("%H:%M")))
+            st.caption(TR("performance_planner.cognitive_check_suggestion_hint"))
+            actions = st.columns(2)
+            if actions[0].button(
+                TR("performance_planner.start_cognitive_check"),
+                key=f"pp_start_cognitive_{suggestion['suggestion_id']}",
+                type="primary",
+            ):
+                try:
+                    _start_suggested_cognitive_check(
+                        plan_id,
+                        suggestion["related_block_id"],
+                    )
+                except PLANNER_OPERATION_ERRORS as exc:
+                    _error(exc)
+            if actions[1].button(
+                TR("performance_planner.skip_cognitive_check"),
+                key=f"pp_skip_cognitive_{suggestion['suggestion_id']}",
+            ):
+                try:
+                    dismiss_suggested_cognitive_checkpoint(
+                        plan_id,
+                        suggestion["related_block_id"],
+                    )
+                except PLANNER_OPERATION_ERRORS as exc:
+                    _error(exc)
+                else:
+                    _flash("performance_planner.cognitive_check_skipped")
+
+
 st.title(TR("performance_planner.title"))
 st.subheader(TR("performance_planner.subtitle"))
 st.caption(TR("performance_planner.intro"))
@@ -420,6 +482,7 @@ schedule_tab, checkpoint_tab, recommendation_tab, settings_tab = st.tabs(
 with schedule_tab:
     with st.expander(TR("performance_planner.add_block"), expanded=not blocks):
         _initialise_add_block_state()
+        st.markdown(ADD_BLOCK_MARKER, unsafe_allow_html=True)
         block_title = st.text_input(
             TR("performance_planner.block_title"),
             key="pp_add_block_title",
@@ -655,122 +718,103 @@ with schedule_tab:
                     _flash("performance_planner.block_deleted")
 
 with checkpoint_tab:
-    st.page_link(
-        "pages/6_Training_Studio.py",
-        label=TR("performance_planner.open_training_studio"),
-        icon="🧠",
-    )
-    st.caption(TR("performance_planner.training_studio_hint"))
-    with st.expander(
-        TR("performance_planner.add_checkpoint"),
-        expanded=not checkpoints,
-    ):
-        with st.form("performance_planner_add_checkpoint"):
-            checkpoint_row = st.columns(3)
-            checkpoint_type = checkpoint_row[0].selectbox(
-                TR("performance_planner.checkpoint_type"),
-                CHECKPOINT_TYPES,
-                format_func=lambda value: _label("checkpoint_types", value),
-            )
-            trigger_type = checkpoint_row[1].selectbox(
-                TR("performance_planner.trigger_type"),
-                CHECKPOINT_TRIGGERS,
-                format_func=lambda value: _label("triggers", value),
-            )
-            checkpoint_time = checkpoint_row[2].time_input(
-                TR("performance_planner.scheduled_at"),
-                value=time(12, 0),
-            )
-            block_options = [None, *[block["block_id"] for block in blocks]]
-            related_block_id = st.selectbox(
-                TR("performance_planner.related_block"),
-                block_options,
-                format_func=lambda value: (
-                    TR("performance_planner.no_related_block")
-                    if value is None
-                    else _block_title(_block_by_id(blocks, value))
-                ),
-            )
-            if st.form_submit_button(
-                TR("performance_planner.add"),
-                type="primary",
-            ):
-                try:
-                    create_checkpoint(
-                        plan["plan_id"],
-                        checkpoint_type,
-                        _combine(selected_date, checkpoint_time),
-                        trigger_type,
-                        related_block_id=related_block_id,
-                    )
-                except PLANNER_OPERATION_ERRORS as exc:
-                    _error(exc)
-                else:
-                    _flash("performance_planner.checkpoint_added")
-
-    if not checkpoints:
-        st.info(TR("performance_planner.checkpoint_empty"))
-    for checkpoint in checkpoints:
-        with st.container(border=True):
-            checkpoint_columns = st.columns([2.5, 2, 1.2])
-            checkpoint_columns[0].write(
-                _label("checkpoint_types", checkpoint["checkpoint_type"])
-            )
-            checkpoint_columns[1].write(
-                datetime.fromisoformat(checkpoint["scheduled_at"]).strftime("%H:%M")
-            )
-            checkpoint_columns[2].write(
-                _label("status_values", checkpoint["status"])
-            )
-            with st.form(f"pp_link_{checkpoint['checkpoint_id']}"):
-                run_id = st.text_input(
-                    TR("performance_planner.run_id"),
-                    value=checkpoint["cognitive_run_id"] or "",
-                    disabled=checkpoint["cognitive_run_id"] is not None,
+    _render_cognitive_check_suggestions(plan["plan_id"])
+    with st.expander(TR("performance_planner.advanced_research_settings"), expanded=False):
+        with st.expander(TR("performance_planner.add_checkpoint_manually"), expanded=False):
+            with st.form("performance_planner_add_checkpoint"):
+                checkpoint_row = st.columns(3)
+                checkpoint_type = checkpoint_row[0].selectbox(
+                    TR("performance_planner.checkpoint_type"),
+                    CHECKPOINT_TYPES,
+                    format_func=lambda value: _label("checkpoint_types", value),
                 )
-                if st.form_submit_button(
-                    TR("performance_planner.link_run"),
-                    disabled=checkpoint["cognitive_run_id"] is not None,
-                ):
+                trigger_type = checkpoint_row[1].selectbox(
+                    TR("performance_planner.trigger_type"),
+                    CHECKPOINT_TRIGGERS,
+                    format_func=lambda value: _label("triggers", value),
+                )
+                checkpoint_time = checkpoint_row[2].time_input(
+                    TR("performance_planner.scheduled_at"),
+                    value=time(12, 0),
+                )
+                block_options = [None, *[block["block_id"] for block in blocks]]
+                related_block_id = st.selectbox(
+                    TR("performance_planner.related_block"),
+                    block_options,
+                    format_func=lambda value: (
+                        TR("performance_planner.no_related_block")
+                        if value is None
+                        else _block_title(_block_by_id(blocks, value))
+                    ),
+                )
+                if st.form_submit_button(TR("performance_planner.add"), type="primary"):
                     try:
-                        link_checkpoint_run(checkpoint["checkpoint_id"], run_id)
+                        create_checkpoint(
+                            plan["plan_id"], checkpoint_type,
+                            _combine(selected_date, checkpoint_time), trigger_type,
+                            related_block_id=related_block_id,
+                        )
                     except PLANNER_OPERATION_ERRORS as exc:
                         _error(exc)
                     else:
-                        _flash("performance_planner.run_linked")
-            checkpoint_actions = st.columns(2)
-            if checkpoint_actions[0].button(
-                TR("performance_planner.mark_skipped"),
-                key=f"pp_checkpoint_skip_{checkpoint['checkpoint_id']}",
-                disabled=checkpoint["status"] != "pending",
-            ):
-                update_checkpoint_status(checkpoint["checkpoint_id"], "skipped")
-                st.rerun()
-            confirmation_key = (
-                f"pp_checkpoint_delete_pending_{checkpoint['checkpoint_id']}"
-            )
-            if st.session_state.get(confirmation_key):
-                st.warning(TR("performance_planner.checkpoint_delete_notice"))
-                confirmation_actions = st.columns(2)
-                if confirmation_actions[0].button(
-                    TR("performance_planner.checkpoint_delete_confirm"),
-                    key=f"pp_checkpoint_delete_confirm_{checkpoint['checkpoint_id']}",
-                ):
-                    delete_checkpoint(checkpoint["checkpoint_id"])
-                    st.session_state.pop(confirmation_key, None)
-                    _flash("performance_planner.checkpoint_deleted")
-                if confirmation_actions[1].button(
-                    TR("performance_planner.checkpoint_delete_cancel"),
-                    key=f"pp_checkpoint_delete_cancel_{checkpoint['checkpoint_id']}",
-                ):
-                    st.session_state.pop(confirmation_key, None)
-                    st.rerun()
-            elif checkpoint_actions[1].button(
-                TR("performance_planner.delete"),
-                key=f"pp_checkpoint_delete_{checkpoint['checkpoint_id']}",
-            ):
-                st.session_state[confirmation_key] = True
-                st.rerun()
+                        _flash("performance_planner.checkpoint_added")
+
+        with st.expander(TR("performance_planner.technical_details"), expanded=False):
+            if not checkpoints:
+                st.info(TR("performance_planner.checkpoint_empty"))
+            for checkpoint in checkpoints:
+                with st.container(border=True):
+                    checkpoint_columns = st.columns([2.5, 2, 1.2])
+                    checkpoint_columns[0].write(_label("checkpoint_types", checkpoint["checkpoint_type"]))
+                    checkpoint_columns[1].write(datetime.fromisoformat(checkpoint["scheduled_at"]).strftime("%H:%M"))
+                    checkpoint_columns[2].write(_label("status_values", checkpoint["status"]))
+                    with st.form(f"pp_link_{checkpoint['checkpoint_id']}"):
+                        run_id = st.text_input(
+                            TR("performance_planner.run_id"),
+                            value=checkpoint["cognitive_run_id"] or "",
+                            disabled=checkpoint["cognitive_run_id"] is not None,
+                        )
+                        if st.form_submit_button(
+                            TR("performance_planner.link_run"),
+                            disabled=checkpoint["cognitive_run_id"] is not None,
+                        ):
+                            try:
+                                link_checkpoint_run(checkpoint["checkpoint_id"], run_id)
+                            except PLANNER_OPERATION_ERRORS as exc:
+                                _error(exc)
+                            else:
+                                _flash("performance_planner.run_linked")
+                    checkpoint_actions = st.columns(2)
+                    if checkpoint_actions[0].button(
+                        TR("performance_planner.mark_skipped"),
+                        key=f"pp_checkpoint_skip_{checkpoint['checkpoint_id']}",
+                        disabled=checkpoint["status"] != "pending",
+                    ):
+                        update_checkpoint_status(checkpoint["checkpoint_id"], "skipped")
+                        st.rerun()
+                    confirmation_key = f"pp_checkpoint_delete_pending_{checkpoint['checkpoint_id']}"
+                    if st.session_state.get(confirmation_key):
+                        st.warning(TR("performance_planner.checkpoint_delete_notice"))
+                        confirmation_actions = st.columns(2)
+                        if confirmation_actions[0].button(
+                            TR("performance_planner.checkpoint_delete_confirm"),
+                            key=f"pp_checkpoint_delete_confirm_{checkpoint['checkpoint_id']}",
+                        ):
+                            delete_checkpoint(checkpoint["checkpoint_id"])
+                            st.session_state.pop(confirmation_key, None)
+                            _flash("performance_planner.checkpoint_deleted")
+                        if confirmation_actions[1].button(
+                            TR("performance_planner.checkpoint_delete_cancel"),
+                            key=f"pp_checkpoint_delete_cancel_{checkpoint['checkpoint_id']}",
+                        ):
+                            st.session_state.pop(confirmation_key, None)
+                            st.rerun()
+                    elif checkpoint_actions[1].button(
+                        TR("performance_planner.delete"),
+                        key=f"pp_checkpoint_delete_{checkpoint['checkpoint_id']}",
+                    ):
+                        st.session_state[confirmation_key] = True
+                        st.rerun()
 
 with recommendation_tab:
     st.caption(TR("performance_planner.generate_hint"))

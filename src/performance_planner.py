@@ -56,6 +56,10 @@ RECOMMENDATION_TYPES = (
 )
 ADAPTIVE_RECOVERY_TITLE = "__adaptive_recovery__"
 RULE_ENGINE_VERSION = "performance_planner_rules_v2"
+COGNITIVE_CHECK_SUGGESTION_LIMIT = 2
+SUGGESTED_COGNITIVE_CHECK_TYPE = "focus_check"
+SUGGESTED_COGNITIVE_CHECK_TRIGGER = "before_block"
+_COGNITIVE_SUGGESTION_EXCLUDED_TYPES = frozenset({"exercise", "recovery", "routine"})
 
 
 class PlannerError(RuntimeError):
@@ -778,6 +782,160 @@ def delete_checkpoint(
                 (checkpoint_id,),
             ).rowcount
         )
+
+
+def _cognitive_suggestion_candidates(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return explicit high-cognitive blocks in the order worth sampling."""
+    priority_rank = {"high": 0, "medium": 1, "low": 2}
+    candidates = [
+        block for block in blocks
+        if block["cognitive_demand"] == "high"
+        and block["block_type"] not in _COGNITIVE_SUGGESTION_EXCLUDED_TYPES
+        and block["status"] in {"planned", "in_progress"}
+    ]
+    return sorted(
+        candidates,
+        key=lambda block: (
+            datetime.fromisoformat(block["planned_start"]),
+            priority_rank[block["priority"]],
+            -(
+                datetime.fromisoformat(block["planned_end"])
+                - datetime.fromisoformat(block["planned_start"])
+            ).total_seconds(),
+            block["sort_order"],
+        ),
+    )
+
+
+def build_daily_cognitive_check_suggestions(
+    plan_id: str,
+    *,
+    max_suggestions: int = COGNITIVE_CHECK_SUGGESTION_LIMIT,
+    db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Build up to two transparent, before-task cognitive check suggestions.
+
+    This is read-only: it never creates checkpoints, changes a plan, or starts
+    a cognitive run. A checkpoint is persisted only after the user starts or
+    skips a specific suggestion.
+    """
+    if max_suggestions < 1:
+        return []
+    with _database(db_path) as connection:
+        plan = _require_record(connection, "performance_plans", "plan_id", plan_id)
+        blocks = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT * FROM performance_plan_blocks
+                   WHERE plan_id=? ORDER BY sort_order, planned_start""",
+                (plan_id,),
+            ).fetchall()
+        ]
+        checkpoints = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM performance_checkpoints WHERE plan_id=?",
+                (plan_id,),
+            ).fetchall()
+        ]
+        completed_run_count = connection.execute(
+            """SELECT COUNT(*) FROM cognitive_training_sessions
+               WHERE substr(started_at, 1, 10)=? AND completed=1""",
+            (plan["plan_date"],),
+        ).fetchone()[0]
+
+    candidates = _cognitive_suggestion_candidates(blocks)
+    candidate_ids = {block["block_id"] for block in candidates}
+    recorded = [
+        checkpoint for checkpoint in checkpoints
+        if checkpoint["related_block_id"] in candidate_ids
+        and checkpoint["checkpoint_type"] == SUGGESTED_COGNITIVE_CHECK_TYPE
+        and checkpoint["trigger_type"] == SUGGESTED_COGNITIVE_CHECK_TRIGGER
+    ]
+    recorded_block_ids = {checkpoint["related_block_id"] for checkpoint in recorded}
+    remaining_budget = max(0, max_suggestions - max(len(recorded), completed_run_count))
+    suggestions = []
+    for block in candidates:
+        if block["block_id"] in recorded_block_ids or remaining_budget <= 0:
+            continue
+        starts_at = datetime.fromisoformat(block["planned_start"])
+        suggested_at = max(
+            starts_at - timedelta(minutes=5),
+            datetime.combine(starts_at.date(), datetime.min.time()),
+        )
+        suggestions.append({
+            "suggestion_id": f"before:{block['block_id']}",
+            "plan_id": plan_id,
+            "related_block_id": block["block_id"],
+            "block_title": block["title"],
+            "block_type": block["block_type"],
+            "scheduled_at": suggested_at.isoformat(),
+            "planned_start": block["planned_start"],
+            "checkpoint_type": SUGGESTED_COGNITIVE_CHECK_TYPE,
+            "trigger_type": SUGGESTED_COGNITIVE_CHECK_TRIGGER,
+        })
+        remaining_budget -= 1
+    return suggestions
+
+
+def ensure_suggested_cognitive_checkpoint(
+    plan_id: str,
+    related_block_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Create the deterministic before-task checkpoint once, on user action."""
+    suggestions = build_daily_cognitive_check_suggestions(plan_id, db_path=db_path)
+    suggestion = next(
+        (item for item in suggestions if item["related_block_id"] == related_block_id),
+        None,
+    )
+    if suggestion is None:
+        with _database(db_path) as connection:
+            checkpoint = connection.execute(
+                """SELECT * FROM performance_checkpoints
+                   WHERE plan_id=? AND related_block_id=?
+                     AND checkpoint_type=? AND trigger_type=?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (
+                    plan_id,
+                    related_block_id,
+                    SUGGESTED_COGNITIVE_CHECK_TYPE,
+                    SUGGESTED_COGNITIVE_CHECK_TRIGGER,
+                ),
+            ).fetchone()
+            if checkpoint is not None:
+                return dict(checkpoint)
+        raise PlannerNotFoundError("cognitive check suggestion not found")
+    return create_checkpoint(
+        plan_id,
+        suggestion["checkpoint_type"],
+        suggestion["scheduled_at"],
+        suggestion["trigger_type"],
+        related_block_id=related_block_id,
+        db_path=db_path,
+    )
+
+
+def dismiss_suggested_cognitive_checkpoint(
+    plan_id: str,
+    related_block_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Persist a user's today-only skip as a checkpoint without a run."""
+    checkpoint = ensure_suggested_cognitive_checkpoint(
+        plan_id,
+        related_block_id,
+        db_path=db_path,
+    )
+    if checkpoint["status"] == "skipped":
+        return checkpoint
+    return update_checkpoint_status(
+        checkpoint["checkpoint_id"],
+        "skipped",
+        db_path=db_path,
+    )
 
 
 def build_source_snapshot(

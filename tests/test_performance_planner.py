@@ -13,11 +13,14 @@ from src.performance_planner import (
     add_block,
     apply_recommendation,
     build_source_snapshot,
+    build_daily_cognitive_check_suggestions,
     create_checkpoint,
     create_plan,
     delete_block,
     delete_checkpoint,
     delete_plan,
+    dismiss_suggested_cognitive_checkpoint,
+    ensure_suggested_cognitive_checkpoint,
     generate_recommendations,
     get_plan,
     get_progress_lab_rows,
@@ -218,6 +221,99 @@ class PerformancePlannerTests(unittest.TestCase):
         for block_type, defaults in expected.items():
             self.assertEqual(get_block_defaults(block_type), defaults)
         self.assertIsNot(get_block_defaults("deep_work"), get_block_defaults("deep_work"))
+
+    def test_high_cognitive_blocks_receive_before_task_suggestions_in_priority_order(self):
+        first = self.add_test_block(
+            "First focus", "09:00", "10:00", block_type="deep_work",
+            priority="medium", cognitive_demand="high", physical_demand="low",
+        )
+        self.add_test_block(
+            "Low-demand admin", "10:00", "11:00", block_type="routine",
+            cognitive_demand="low", physical_demand="low",
+        )
+        second = self.add_test_block(
+            "Long study", "13:00", "15:00", block_type="learning",
+            priority="high", cognitive_demand="high", physical_demand="low",
+        )
+        suggestions = build_daily_cognitive_check_suggestions(
+            self.plan["plan_id"], db_path=self.db_path,
+        )
+        self.assertEqual(
+            [item["related_block_id"] for item in suggestions],
+            [first["block_id"], second["block_id"]],
+        )
+        self.assertEqual(suggestions[0]["scheduled_at"], f"{self.DAY}T08:55:00")
+        self.assertEqual(suggestions[0]["trigger_type"], "before_block")
+
+    def test_suggestions_are_limited_to_two_and_exclude_physical_blocks(self):
+        for title, start, block_type in (
+            ("Focus", "08:00", "deep_work"),
+            ("Study", "10:00", "learning"),
+            ("Review", "13:00", "other"),
+            ("Workout", "16:00", "exercise"),
+        ):
+            self.add_test_block(
+                title, start, f"{int(start[:2]) + 1:02d}:00",
+                block_type=block_type, cognitive_demand="high",
+            )
+        suggestions = build_daily_cognitive_check_suggestions(
+            self.plan["plan_id"], db_path=self.db_path,
+        )
+        self.assertEqual(len(suggestions), 2)
+        self.assertEqual([item["block_title"] for item in suggestions], ["Focus", "Study"])
+        self.insert_cognitive_run("already-sampled")
+        reduced = build_daily_cognitive_check_suggestions(
+            self.plan["plan_id"], db_path=self.db_path,
+        )
+        self.assertEqual(len(reduced), 1)
+
+    def test_start_and_skip_actions_create_one_related_checkpoint_without_a_run(self):
+        block = self.add_test_block(cognitive_demand="high")
+        checkpoint = ensure_suggested_cognitive_checkpoint(
+            self.plan["plan_id"], block["block_id"], db_path=self.db_path,
+        )
+        replay = ensure_suggested_cognitive_checkpoint(
+            self.plan["plan_id"], block["block_id"], db_path=self.db_path,
+        )
+        self.assertEqual(checkpoint["checkpoint_id"], replay["checkpoint_id"])
+        self.assertEqual(checkpoint["related_block_id"], block["block_id"])
+        self.assertEqual(checkpoint["trigger_type"], "before_block")
+        skipped = dismiss_suggested_cognitive_checkpoint(
+            self.plan["plan_id"], block["block_id"], db_path=self.db_path,
+        )
+        self.assertEqual(skipped["status"], "skipped")
+        self.assertIsNone(skipped["cognitive_run_id"])
+        self.assertEqual(
+            build_daily_cognitive_check_suggestions(self.plan["plan_id"], db_path=self.db_path),
+            [],
+        )
+
+    def test_automatic_checkpoint_link_reuses_existing_idempotent_run_link(self):
+        block = self.add_test_block(cognitive_demand="high")
+        checkpoint = ensure_suggested_cognitive_checkpoint(
+            self.plan["plan_id"], block["block_id"], db_path=self.db_path,
+        )
+        self.insert_cognitive_run("suggested-run")
+        first = link_checkpoint_run(checkpoint["checkpoint_id"], "suggested-run", db_path=self.db_path)
+        second = link_checkpoint_run(checkpoint["checkpoint_id"], "suggested-run", db_path=self.db_path)
+        self.assertEqual(first["cognitive_run_id"], second["cognitive_run_id"])
+        with connect(self.db_path) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM cognitive_training_trials WHERE session_id='suggested-run'"
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_normal_checkpoint_ui_hides_manual_run_linking_in_advanced_settings(self):
+        page = (Path(__file__).parents[1] / "src" / "pages" / "8_Performance_Planner.py").read_text(encoding="utf-8")
+        cognitive_page = (Path(__file__).parents[1] / "src" / "pages" / "6_Training_Studio.py").read_text(encoding="utf-8")
+        self.assertIn('TR("performance_planner.cognitive_check_suggestions")', page)
+        self.assertIn('TR("performance_planner.advanced_research_settings"), expanded=False', page)
+        self.assertIn('TR("performance_planner.technical_details"), expanded=False', page)
+        self.assertIn('st.switch_page("pages/6_Training_Studio.py")', page)
+        self.assertIn("planner_cognitive_checkpoint_context", cognitive_page)
+        self.assertIn("link_checkpoint_run(", cognitive_page)
 
     def test_planner_add_form_keeps_advanced_options_collapsed_and_preserves_all_fields(self):
         page = (Path(__file__).parents[1] / "src" / "pages" / "8_Performance_Planner.py").read_text(encoding="utf-8")
