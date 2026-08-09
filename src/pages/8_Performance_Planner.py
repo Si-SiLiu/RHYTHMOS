@@ -88,11 +88,18 @@ PLANNER_STYLE = """
 .pp-block small{opacity:.72}
 div[data-testid="stMetric"]{min-width:0}
 div[data-testid="stExpander"]:has(.pp-add-block-marker) label{text-align:center;justify-content:center;width:100%}
-div[data-testid="stExpander"]:has(.pp-add-block-marker) input,
-div[data-testid="stExpander"]:has(.pp-add-block-marker) textarea{text-align:center!important}
-div[data-testid="stExpander"]:has(.pp-add-block-marker) input{text-align:center!important}
-div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child{flex:1;justify-content:center}
-div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child>div{text-align:center;width:100%}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="input"] input,
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="textarea"] textarea{text-align:center!important}
+/* Streamlit selectboxes use a separate value container from their native input.
+   Center that container while keeping the disclosure icon anchored at the right. */
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div{position:relative}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child{
+  position:absolute!important;inset:0;display:flex!important;
+  align-items:center;justify-content:center!important;text-align:center!important
+}
+div[data-testid="stExpander"]:has(.pp-add-block-marker) [data-baseweb="select"]>div>div:first-child *{
+  text-align:center!important
+}
 @media(max-width:600px){
   .pp-subtitle{font-size:1.05rem}
   .pp-block{padding-left:.55rem}
