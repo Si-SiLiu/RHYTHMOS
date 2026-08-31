@@ -10,6 +10,7 @@ try:
     from .pipeline import fetch as fetch_step
     from .pipeline import governance as governance_step
     from .pipeline import confidence as confidence_step
+    from .pipeline import ai_feedback as ai_feedback_step
     from .pipeline import importer as import_step
     from .pipeline import local_coach as local_coach_step
     from .pipeline import manual_summary as manual_summary_step
@@ -29,6 +30,7 @@ except ImportError:
     from pipeline import fetch as fetch_step
     from pipeline import governance as governance_step
     from pipeline import confidence as confidence_step
+    from pipeline import ai_feedback as ai_feedback_step
     from pipeline import importer as import_step
     from pipeline import local_coach as local_coach_step
     from pipeline import manual_summary as manual_summary_step
@@ -56,6 +58,7 @@ DEFAULT_STEPS = {
     "recovery": recovery_step.run,
     "confidence": confidence_step.run,
     "local-coach": local_coach_step.run,
+    "ai-feedback": ai_feedback_step.run,
     "report": report_step.run,
     "governance": governance_step.run,
 }

@@ -83,6 +83,10 @@
   };
   let generation = 0;
   let state = null;
+  // A task may finish from its response deadline and its session deadline at
+  // nearly the same time.  Serialize the hand-off so only one callback can
+  // move the session forward, after the previous task is fully torn down.
+  let advancing = false;
 
   function token() {
     return generation;
@@ -153,7 +157,8 @@
     return {
       response_window_ms: [2700, 2450, 2200, 1950, 1750][levelIndex - 1],
       iti_ms: [220, 200, 180, 160, 150][levelIndex - 1],
-      symbol_count: Math.min(6, levelIndex + 2),
+      // Symbol Match always uses four response keys.
+      symbol_count: 4,
       mapping_visible: true,
     };
   }
@@ -169,7 +174,10 @@
       bar.style.width = Math.min(100, elapsed / seconds * 100) + "%";
     }, 100);
   }
-  window.setup = setup;
+  // Keep this timer private to the control-speed tasks.  Exposing it as
+  // `window.setup` replaces the shared task timer used by Target Focus and
+  // the other standard tasks.  That private timer only paints the countdown,
+  // so those tasks would reach 0 seconds without ever calling finishTask().
 
   function stroopBlock() {
     const conditions = shuffle([
@@ -273,7 +281,7 @@
       if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") return "right";
       return null;
     }
-    return /^[1-6]$/.test(event.key) ? event.key : null;
+    return /^[1-4]$/.test(event.key) ? event.key : null;
   }
   function renderTrial(item, practice, respond) {
     stage.innerHTML = "";
@@ -293,9 +301,9 @@
       ];
     } else {
       expected = String(item.digit);
-      const symbols = practice ? SYMBOLS.slice(0, 3) : SYMBOLS.slice(0, difficultyConfig(task, level).symbol_count);
+      const symbols = practice ? SYMBOLS.slice(0, 3) : SYMBOLS.slice(0, 4);
       const mapping = symbols.map((symbol, index) => `${symbol[1]} = ${practice ? index + 1 : state.mapping[index]}`).join("　");
-      stage.innerHTML = `<div class="symbol-map" aria-label="符号数字对应表">${mapping}</div><div class="control-stimulus" aria-label="目标符号">${SYMBOLS[item.symbol][1]}</div><div class="small">按键 1—6</div>`;
+      stage.innerHTML = `<div class="symbol-map" aria-label="符号数字对应表">${mapping}</div><div class="control-stimulus" aria-label="目标符号">${SYMBOLS[item.symbol][1]}</div><div class="small">按键 1—4</div>`;
       options = [...Array(symbols.length)].map((_, index) => ({label: String(index + 1), value: String(index + 1)}));
     }
     const row = document.createElement("div");
@@ -418,7 +426,7 @@
       initialLevel: level,
       practiceProtocolVersion: PRACTICE_PROTOCOLS[task],
       practiceRepeatedCount: repeats,
-      mapping: shuffle([1, 2, 3, 4, 5, 6]),
+      mapping: shuffle([1, 2, 3, 4]),
       mappingId: null,
     };
     state.mappingId = `map_${state.mapping.join("")}_${cfg.run_id}`;
@@ -572,6 +580,7 @@
   };
 
   startTask = function () {
+    advancing = false;
     nextGeneration();
     task = cfg.task_types[taskIndex];
     trials = [];
@@ -592,14 +601,26 @@
     return legacy.abortPractice();
   };
   finishTask = function () {
-    if (done) return;
+    if (done || advancing) return;
+    advancing = true;
     const taskResult = stats();
     clearAllTaskTimers();
     window.onkeydown = null;
     results.push(taskResult);
     taskIndex += 1;
     state = null;
-    if (taskIndex >= cfg.task_types.length) return finish();
+    if (taskIndex >= cfg.task_types.length) {
+      advancing = false;
+      return finish();
+    }
+    // Do not queue the hand-off on the same timer registry we have just
+    // cleared.  A completion can occur from a response deadline at the same
+    // instant as the session deadline; in that case a zero-delay callback can
+    // be removed with the stale task timers, leaving the UI at 100% forever.
+    // Starting synchronously after teardown is safe: `advancing` prevents a
+    // second completion callback from re-entering this transition.
+    nextGeneration();
+    advancing = false;
     startTask();
   };
   finish = function () {
@@ -643,6 +664,7 @@
   };
   begin = function (args) {
     nextGeneration();
+    advancing = false;
     practiceState = null;
     clearTargetPracticeTimers();
     targetPracticeState = null;

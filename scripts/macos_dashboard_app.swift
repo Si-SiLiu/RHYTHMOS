@@ -21,10 +21,51 @@ final class DashboardWindow: NSWindow {
     }
 }
 
-final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var keyEventMonitor: Any?
+    private var revealWhenDashboardLoads = false
+
+    private static let downloadBridgeScript = #"""
+    document.addEventListener("click", function(event) {
+      const element = event.target instanceof Element ? event.target : null;
+      const anchor = element ? element.closest("a[download]") : null;
+      if (!anchor || anchor.dataset.rhythmosDownloading === "1") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      anchor.dataset.rhythmosDownloading = "1";
+      fetch(anchor.href)
+        .then(function(response) {
+          if (!response.ok) throw new Error("DOWNLOAD_HTTP_" + response.status);
+          return response.blob();
+        })
+        .then(function(blob) {
+          return new Promise(function(resolve, reject) {
+            const reader = new FileReader();
+            reader.onload = function() { resolve(reader.result); };
+            reader.onerror = function() { reject(reader.error); };
+            reader.readAsDataURL(blob);
+          });
+        })
+        .then(function(dataURL) {
+          const comma = String(dataURL).indexOf(",");
+          if (comma < 0) throw new Error("DOWNLOAD_DATA_INVALID");
+          window.webkit.messageHandlers.rhythmosDownload.postMessage({
+            filename: anchor.download || "rhythmos_export.csv",
+            base64: String(dataURL).slice(comma + 1)
+          });
+        })
+        .catch(function(error) {
+          window.webkit.messageHandlers.rhythmosDownload.postMessage({
+            error: String(error && error.message ? error.message : error)
+          });
+        })
+        .finally(function() {
+          delete anchor.dataset.rhythmosDownloading;
+        });
+    }, true);
+    """#
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installApplicationMenu()
@@ -42,14 +83,161 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        configuration.userContentController.add(self, name: "rhythmosDownload")
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.downloadBridgeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
         webView = WKWebView(frame: frame, configuration: configuration)
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         window.contentView = webView
-        showLoadingPage()
+        startDashboard()
+    }
 
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard revealWhenDashboardLoads else { return }
+        revealWhenDashboardLoads = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        startDashboard()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        preferences: WKWebpagePreferences,
+        decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow, preferences)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        let response = navigationResponse.response
+        let contentDisposition = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
+        let isAttachment = contentDisposition.contains("attachment")
+        let isCSV = response.mimeType?.lowercased() == "text/csv"
+        decisionHandler(
+            isAttachment || isCSV || !navigationResponse.canShowMIMEType ? .download : .allow
+        )
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationAction: WKNavigationAction,
+        didBecome download: WKDownload
+    ) {
+        download.delegate = self
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationResponse: WKNavigationResponse,
+        didBecome download: WKDownload
+    ) {
+        download.delegate = self
+    }
+
+    func download(
+        _ download: WKDownload,
+        decideDestinationUsing response: URLResponse,
+        suggestedFilename: String,
+        completionHandler: @escaping (URL?) -> Void
+    ) {
+        chooseExportDestination(for: suggestedFilename, completion: completionHandler)
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == "rhythmosDownload",
+              let body = message.body as? [String: Any] else { return }
+        if let error = body["error"] as? String {
+            showDownloadResult(destination: nil, error: error)
+            return
+        }
+        guard let base64 = body["base64"] as? String,
+              let data = Data(base64Encoded: base64) else {
+            showDownloadResult(destination: nil, error: "DOWNLOAD_DATA_INVALID")
+            return
+        }
+        chooseExportDestination(for: body["filename"] as? String ?? "rhythmos_export.csv") { destination in
+            guard let destination else { return }
+            do {
+                try data.write(to: destination, options: .atomic)
+                self.showDownloadResult(destination: destination, error: nil)
+            } catch {
+                self.showDownloadResult(destination: nil, error: error.localizedDescription)
+            }
+        }
+    }
+
+    private func chooseExportDestination(
+        for suggestedFilename: String,
+        completion: @escaping (URL?) -> Void
+    ) {
+        let rawFilename = URL(fileURLWithPath: suggestedFilename).lastPathComponent
+        let filename = rawFilename.isEmpty ? "rhythmos_export.csv" : rawFilename
+        DispatchQueue.main.async {
+            let panel = NSSavePanel()
+            panel.title = "导出 CSV"
+            panel.message = "选择 CSV 文件保存位置"
+            panel.nameFieldStringValue = filename
+            panel.canCreateDirectories = true
+            panel.allowedFileTypes = ["csv"]
+            panel.directoryURL = FileManager.default.urls(
+                for: .downloadsDirectory,
+                in: .userDomainMask
+            ).first
+            panel.beginSheetModal(for: self.window) { response in
+                completion(response == .OK ? panel.url : nil)
+            }
+        }
+    }
+
+    private func showDownloadResult(destination: URL?, error: String?) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            if let destination {
+                alert.alertStyle = .informational
+                alert.messageText = "CSV 已导出"
+                alert.informativeText = destination.path
+                alert.addButton(withTitle: "完成")
+                alert.addButton(withTitle: "在 Finder 中显示")
+                let response = alert.runModal()
+                if response == .alertSecondButtonReturn {
+                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                }
+            } else {
+                alert.alertStyle = .warning
+                alert.messageText = "CSV 导出失败"
+                alert.informativeText = error ?? "DOWNLOAD_FAILED"
+                alert.addButton(withTitle: "关闭")
+                alert.runModal()
+            }
+        }
     }
 
     private func installQuitShortcut() {
@@ -124,49 +312,14 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         return true
     }
 
-    private func showLoadingPage() {
-        let html = """
-        <!doctype html>
-        <html lang="zh-CN">
-        <meta charset="utf-8">
-        <style>
-          :root { color-scheme: light dark; --surface: #f6f8fb;
-                  --text: #243447; --muted: #536578; }
-          @media (prefers-color-scheme: dark) {
-            :root { --surface: #17191d; --text: #f4f7fa; --muted: #aeb9c5; }
-          }
-          html, body { min-height: 100%; }
-          body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                 display: grid; place-items: center; height: 100vh; margin: 0;
-                 overflow: hidden; background: var(--surface); color: var(--text);
-                 transition: background-color .2s ease, color .2s ease; }
-          main { display: grid; justify-items: center; gap: 1.2rem;
-                 width: min(92vw, 980px); text-align: center; }
-          img { display: block; width: min(92vw, 980px); max-height: 70vh;
-                object-fit: contain; }
-          .dot { margin: 0; color: var(--muted); font-size: 14px;
-                 letter-spacing: .02em; animation: pulse 1.2s infinite; }
-          @keyframes pulse { 50% { opacity: .25; } }
-        </style>
-        <main>
-          <img src="startup_splash.png" alt="RHYTHMOS｜律衡 · Personal Performance OS">
-          <p class="dot">正在启动本地数据看板…</p>
-        </main>
-        </html>
-        """
-        webView.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
-    }
-
     private func startDashboard() {
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
             let uid = getuid()
             let urlPath = "/tmp/daily-recovery-coach-url-\(uid).txt"
             let errorPath = "/tmp/daily-recovery-coach-error-\(uid).txt"
-            let commandPath = "/tmp/daily-recovery-coach-launch-\(uid).command"
             try? fileManager.removeItem(atPath: urlPath)
             try? fileManager.removeItem(atPath: errorPath)
-            try? fileManager.removeItem(atPath: commandPath)
             // Prefer the project directory next to this App bundle so the
             // application keeps working when the project folder is renamed
             // or moved. The build-time path remains a fallback for a copied
@@ -183,36 +336,33 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
                 self.showLaunchError(message: "DASHBOARD_PROJECT_ROOT_NOT_FOUND")
                 return
             }
-            let projectRoot = projectRootURL.path
-            let command = """
-            #!/bin/zsh
-            '\(projectRoot)/.venv/bin/python' '\(projectRoot)/src/dashboard_launcher.py' --no-browser > '\(urlPath)' 2> '\(errorPath)'
-            """
-            do {
-                try command.write(toFile: commandPath, atomically: true, encoding: .utf8)
-                try fileManager.setAttributes(
-                    [.posixPermissions: 0o700], ofItemAtPath: commandPath
-                )
-            } catch {
-                self.showLaunchError(message: "DASHBOARD_HELPER_WRITE_FAILED")
+            self.startStartupCatchUp(projectRootURL)
+            guard fileManager.createFile(atPath: urlPath, contents: nil),
+                  fileManager.createFile(atPath: errorPath, contents: nil),
+                  let standardOutput = FileHandle(forWritingAtPath: urlPath),
+                  let standardError = FileHandle(forWritingAtPath: errorPath) else {
+                self.showLaunchError(message: "DASHBOARD_LOG_FILE_CREATE_FAILED")
                 return
             }
+            defer {
+                try? standardOutput.close()
+                try? standardError.close()
+            }
+
+            let pythonURL = projectRootURL.appendingPathComponent(".venv/bin/python")
+            let launcherURL = projectRootURL.appendingPathComponent("src/dashboard_launcher.py")
             let process = Process()
-            // macOS protects Documents/Desktop access for Finder-launched GUI
-            // children. Terminal already owns the user's local shell permission,
-            // so open the short helper there, hidden and in the background.
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-g", "-j", "-a", "Terminal", commandPath]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            // Start the local launcher directly. A dashboard launch must never
+            // open Terminal or expose a temporary shell script to the user.
+            process.executableURL = pythonURL
+            process.arguments = [launcherURL.path, "--no-browser"]
+            process.currentDirectoryURL = projectRootURL
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = standardOutput
+            process.standardError = standardError
 
             do {
                 try process.run()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else {
-                    self.showLaunchError(message: "DASHBOARD_TERMINAL_OPEN_FAILED")
-                    return
-                }
 
                 let deadline = Date().addingTimeInterval(30)
                 while Date() < deadline {
@@ -221,6 +371,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
                         try? fileManager.removeItem(atPath: urlPath)
                         try? fileManager.removeItem(atPath: errorPath)
                         DispatchQueue.main.async {
+                            self.revealWhenDashboardLoads = true
                             self.webView.load(URLRequest(url: url))
                         }
                         return
@@ -233,6 +384,26 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
             } catch {
                 self.showLaunchError(message: "DASHBOARD_APP_LAUNCH_FAILED")
             }
+        }
+    }
+
+    private func startStartupCatchUp(_ projectRootURL: URL) {
+        let pythonURL = projectRootURL.appendingPathComponent(".venv/bin/python")
+        let runnerURL = projectRootURL.appendingPathComponent("scripts/run_scheduled_sync.py")
+        guard FileManager.default.isExecutableFile(atPath: pythonURL.path),
+              FileManager.default.fileExists(atPath: runnerURL.path) else { return }
+        let process = Process()
+        process.executableURL = pythonURL
+        process.arguments = [runnerURL.path, "--trigger-type", "catch_up"]
+        process.currentDirectoryURL = projectRootURL
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            // Dashboard availability must never depend on the optional
+            // background catch-up process.
         }
     }
 

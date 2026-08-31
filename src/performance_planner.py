@@ -24,6 +24,10 @@ BLOCK_TYPES = (
     "routine",
     "other",
 )
+# Exercise sessions are sourced from Polar in the user-facing planner. Keep
+# the canonical value above for legacy records and deterministic compatibility,
+# but do not offer it as a manually planned block type.
+PLANNABLE_BLOCK_TYPES = tuple(block_type for block_type in BLOCK_TYPES if block_type != "exercise")
 DEMAND_LEVELS = ("low", "moderate", "high")
 PRIORITY_LEVELS = ("low", "medium", "high")
 BLOCK_DEFAULTS = {

@@ -1,21 +1,20 @@
 # AI Coach Privacy and Security Threat Model
 
-> Status: Design review complete; runtime not implemented  
+> Status: Design review complete; standard-retention runtime enabled
 > Threat-model version: `1.0.0`  
 > Review date: 2026-07-11
 
 ## Scope and Assumptions
 
-This model covers the future AI Coach path from read-only local facts through
+This model covers the AI Coach path from read-only local facts through
 context minimization, cloud inference, schema validation, local audit, and
 Dashboard presentation. Polar collection, deterministic Recovery/Baseline/
 Confidence calculations, and the cloud provider's internal platform are outside
 the implementation trust boundary but are represented as dependencies.
 
-Assumptions are fail-closed: no provider is approved, `model_version` is
-`unreleased`, migration `0.4.0` is not applied, tools are disabled, and no real
-health data leaves the device. A future provider must pass
-[PROVIDER_DUE_DILIGENCE.md](PROVIDER_DUE_DILIGENCE.md).
+Assumptions are fail-closed: the approval record fixes the OpenAI Responses
+endpoint and `gpt-5.4`, tools are disabled, and only the closed minimum-necessary
+schema leaves the device. The product owner accepted standard API retention.
 
 ## Protected Assets
 
@@ -34,7 +33,7 @@ health data leaves the device. A future provider must pass
 TB-1 Local SQLite (read-only)
   -> TB-2 allowlist context builder and identifier scrubber
   -> TB-3 outbound HTTPS adapter and project-scoped credential
-  -> TB-4 approved ZDR cloud inference endpoint
+  -> TB-4 approved standard-retention cloud inference endpoint
   -> TB-5 local schema/safety validator
   -> TB-6 local audit store with expiry
   -> TB-7 read-only Dashboard presentation
@@ -43,7 +42,7 @@ TB-1 Local SQLite (read-only)
 - `TB-1`: business data boundary; AI cannot write or migrate it.
 - `TB-2`: privacy boundary; unknown fields and high-precision/history expansion fail.
 - `TB-3`: secret and network boundary; logs never contain bodies or authorization headers.
-- `TB-4`: external processor boundary; exact endpoint/model/region/ZDR evidence is mandatory.
+- `TB-4`: external processor boundary; exact endpoint/model and retention-mode evidence is mandatory.
 - `TB-5`: untrusted-output boundary; model text is data, never code or instructions.
 - `TB-6`: sensitive local retention boundary; content and metadata have different expiry.
 - `TB-7`: user interpretation boundary; AI text cannot masquerade as deterministic fact.
@@ -59,7 +58,7 @@ High residual risk blocks runtime approval.
 | `TM-02` | User question contains name, contact detail, account id, credential, or hidden identifier. | High | 1,000-character cap, local identifier/credential scrubber, deny on uncertain credential match, never persist verbatim. | Low |
 | `TM-03` | Prompt injection in user text asks the model to reveal system prompt, alter score, or use tools. | High | Delimit user data, immutable system policy, no tools/files/search/MCP, output schema, injection evaluation suite. | Low |
 | `TM-04` | Cloud credential leaks through repository, logs, exception, shell, or Dashboard. | Critical | Project-scoped environment secret, startup presence check without echo, header redaction, safe error codes, secret scanning and rotation runbook. | Low |
-| `TM-05` | Request/response body appears in application, proxy, SDK, tracing, or provider logs. | Critical | Body logging disabled, no debug HTTP, ZDR evidence, stateless endpoint, integration log assertions, fail closed on configuration drift. | Low |
+| `TM-05` | Request/response body appears in application, proxy, SDK, tracing, or provider logs. | Critical | Body logging disabled, no debug HTTP, approved standard-retention disclosure, stateless endpoint, integration log assertions, fail closed on configuration drift. | Medium |
 | `TM-06` | Unsupported region, proxy, DNS override, redirect, or wrong endpoint bypasses provider approval. | Critical | Exact HTTPS origin allowlist, redirects disabled, TLS verification, deployment-region evidence, runtime config fingerprint, no user-supplied URL. | Low |
 | `TM-07` | Provider silently changes alias, retention, region, subprocessor, or review policy. | High | Immutable model snapshot, annual/change-triggered due diligence, config expiry, startup approval check, kill switch. | Medium |
 | `TM-08` | Model fabricates metrics, medical diagnosis, medication guidance, or unsafe training advice. | Critical | Strict evidence references, prohibited-content validator, Confidence language policy, safety notice, 200-case three-run gate, deterministic fallback. | Low |
@@ -74,14 +73,14 @@ High residual risk blocks runtime approval.
 | `TM-17` | Dashboard caches or exposes AI content to another local user/session. | High | Local single-user boundary, no shared cache, session isolation, audit access control, explicit clear/delete action, no URL query content. | Medium |
 | `TM-18` | Consent or provider approval expires while runtime continues sending data. | Critical | Approval record with expiry, startup and per-request gate, kill switch default off, revalidation trigger, safe deterministic-only mode. | Low |
 
-TM-18's provider-independent approval record, expiry check, dual-review check,
+TM-18's provider approval record, expiry check, dual-review check,
 HTTPS endpoint check, and configuration fingerprint are implemented in
 `src/ai_coach_approval.py`. Integration before serialization remains mandatory
 for any future adapter.
 
 TB-2's provider-independent closed projection and approval-before-build path are
-implemented in `src/ai_coach_context.py`. Database query implementation remains
-out of scope until provider approval; current tests use synthetic source objects.
+implemented in `src/ai_coach_context.py`. `src/ai_feedback.py` performs the
+minimum-necessary database projection and persists only validated output.
 
 ## Mandatory Security Controls
 
@@ -124,7 +123,7 @@ out of scope until provider approval; current tests use synthetic source objects
 - **Unlinkability:** no account/device id or historical series; local linkage expires.
 - **Transparency:** UI names AI text, model/prompt/safety versions, Confidence, and limitations.
 - **Intervenability:** the user can disable AI and request local content deletion.
-- **Retention limitation:** provider ZDR, local content 90 days, metadata 365 days.
+- **Retention limitation:** standard API retention is disclosed to the user; local content is stored per day and may be deleted locally.
 - **Integrity:** model output cannot change source facts or execute instructions.
 
 ## Verification Requirements

@@ -24,7 +24,12 @@ def _literal_text(node: ast.AST) -> str | None:
         return node.value.strip()
     if isinstance(node, ast.JoinedStr):
         literal = "".join(part.value for part in node.values if isinstance(part, ast.Constant) and isinstance(part.value, str)).strip()
-        return literal if re.search(r"[A-Za-z0-9\u4e00-\u9fff]", literal) else None
+        # A dynamic HTML fragment can contain only tag names/classes in its
+        # literal portions while the visible copy comes from translated
+        # expressions (for example ``<div>{TR(...)} </div>``). Do not report
+        # those structural fragments as hard-coded user-facing text.
+        visible = re.sub(r"<[^>]*>", "", literal)
+        return literal if re.search(r"[A-Za-z0-9\u4e00-\u9fff]", visible) else None
     if isinstance(node, (ast.Tuple, ast.List)):
         values = [_literal_text(item) for item in node.elts]
         if values and all(value is not None for value in values):

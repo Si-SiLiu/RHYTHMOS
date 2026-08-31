@@ -35,7 +35,7 @@ class RecoveryScoreTests(unittest.TestCase):
         self.assertEqual(recovery_score.recommendation_for_score(50), "减量训练")
         self.assertEqual(recovery_score.recommendation_for_score(30), "恢复优先")
 
-    def test_calculate_recovery_score_uses_load_to_reduce_recovery(self):
+    def test_load_without_recovery_evidence_is_not_scored(self):
         easy = recovery_score.calculate_recovery_score(
             {
                 "date": "2026-07-10",
@@ -55,9 +55,10 @@ class RecoveryScoreTests(unittest.TestCase):
             }
         )
 
-        self.assertGreater(easy["recovery_score"], hard["recovery_score"])
-        self.assertEqual(easy["recommendation"], "正常训练")
-        self.assertEqual(hard["recommendation"], "恢复优先")
+        self.assertIsNone(easy["recovery_score"])
+        self.assertIsNone(hard["recovery_score"])
+        self.assertIsNone(easy["recommendation"])
+        self.assertIsNone(hard["recommendation"])
 
     def test_rebuild_recovery_scores_upserts_rows(self):
         connection = self.make_connection()
@@ -68,6 +69,11 @@ class RecoveryScoreTests(unittest.TestCase):
             )
             VALUES ('2026-07-10', 1000, 100, 0, NULL, 0)
             """
+        )
+        connection.execute(
+            """INSERT INTO recovery_scores
+               (date,recovery_score,activity_load_score,training_load_score,score_version,recommendation)
+               VALUES ('2026-07-10', 74, 20, 20, 'v1.0', '适度训练')"""
         )
         connection.commit()
 
@@ -85,11 +91,10 @@ class RecoveryScoreTests(unittest.TestCase):
         row_count = connection.execute("SELECT COUNT(*) FROM recovery_scores").fetchone()[0]
         row = connection.execute("SELECT * FROM recovery_scores").fetchone()
 
-        self.assertEqual(first_count, 1)
-        self.assertEqual(second_count, 1)
-        self.assertEqual(row_count, 1)
-        self.assertEqual(row["recommendation"], "恢复优先")
-        self.assertLess(row["recovery_score"], 40)
+        self.assertEqual(first_count, 0)
+        self.assertEqual(second_count, 0)
+        self.assertEqual(row_count, 0)
+        self.assertIsNone(row)
         connection.close()
 
 

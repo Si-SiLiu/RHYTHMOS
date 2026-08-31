@@ -63,6 +63,50 @@ class CognitiveTrainingTests(unittest.TestCase):
         self.assertEqual(len(saved_task_types), len(PLANS) * 2 * 3)
         self.assertEqual(set(saved_task_types), {task_type for tasks in PLANS.values() for task_type in tasks})
 
+    def test_schema_repair_retargets_legacy_session_foreign_keys_without_data_loss(self):
+        connection = db.connect(self.path)
+        connection.execute(
+            """INSERT INTO cognitive_training_sessions(
+                   id,training_plan,session_mode,started_at,timezone,protocol_version
+               ) VALUES('preserved','focus_alertness','quick','2026-08-02T09:00:00+08:00','Asia/Shanghai','v1')"""
+        )
+        connection.commit()
+        session_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='cognitive_training_sessions'"
+        ).fetchone()[0]
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.executescript(
+            "ALTER TABLE cognitive_training_sessions RENAME TO cognitive_training_sessions_legacy;"
+            + session_sql
+            + "; INSERT INTO cognitive_training_sessions SELECT * FROM cognitive_training_sessions_legacy;"
+            + " DROP TABLE cognitive_training_sessions_legacy;"
+            + " DELETE FROM schema_migrations WHERE version='0.41.0';"
+        )
+        connection.close()
+
+        repaired = db.connect(self.path)
+        try:
+            task_targets = {
+                row["table"]
+                for row in repaired.execute("PRAGMA foreign_key_list(cognitive_training_task_results)")
+            }
+            trial_targets = {
+                row["table"]
+                for row in repaired.execute("PRAGMA foreign_key_list(cognitive_training_trials)")
+            }
+            self.assertEqual(task_targets, {"cognitive_training_sessions"})
+            self.assertEqual(
+                trial_targets,
+                {"cognitive_training_sessions", "cognitive_training_task_results"},
+            )
+            self.assertEqual(
+                repaired.execute("SELECT COUNT(*) FROM cognitive_training_sessions WHERE id='preserved'").fetchone()[0],
+                1,
+            )
+            self.assertEqual(repaired.execute("PRAGMA foreign_key_check").fetchall(), [])
+        finally:
+            repaired.close()
+
     def test_d_prime_is_finite_at_extreme_rates(self):
         self.assertTrue(abs(bounded_d_prime(10, 10, 0, 10)) < 10)
         self.assertIsNone(bounded_d_prime(1, 0, 0, 1))
@@ -129,6 +173,50 @@ class CognitiveTrainingTests(unittest.TestCase):
         for marker in ("stroop_control", "task_switching", "symbol_match", "stroop_practice_v1", "task_switching_practice_v1", "symbol_match_practice_v1", "adaptive_control_speed_v1", "performance.now", "开始 5 秒练习", "练习数据不进入正式成绩", "window.onkeydown"):
             self.assertIn(marker, source)
         self.assertIn("number:[1,2,3,4,6,7,8,9]", source)
+
+    def test_symbol_match_uses_only_four_consistent_response_keys(self):
+        source = (Path(__file__).parents[1] / "src" / "cognitive_component_frontend" / "control_speed_hotfix.js").read_text(encoding="utf-8")
+        self.assertIn("symbol_count: 4", source)
+        self.assertIn("SYMBOLS.slice(0, 4)", source)
+        self.assertIn("按键 1—4", source)
+        self.assertIn("/^[1-4]$/.test(event.key)", source)
+        self.assertIn("mapping: shuffle([1, 2, 3, 4])", source)
+        self.assertNotIn("按键 1—6", source)
+
+    def test_component_serializes_task_handoffs_before_starting_the_next_task(self):
+        source = (Path(__file__).parents[1] / "src" / "cognitive_component_frontend" / "control_speed_hotfix.js").read_text(encoding="utf-8")
+        self.assertIn("let advancing = false", source)
+        self.assertIn("if (done || advancing) return", source)
+        self.assertIn("nextGeneration();\n    advancing = false;\n    startTask();", source)
+        self.assertIn("Do not queue the hand-off on the same timer registry", source)
+
+    def test_control_speed_timer_does_not_replace_the_shared_task_timer(self):
+        source = (Path(__file__).parents[1] / "src" / "cognitive_component_frontend" / "control_speed_hotfix.js").read_text(encoding="utf-8")
+        self.assertNotIn("window.setup = setup", source)
+        self.assertIn("private to the control-speed tasks", source)
+        component = (Path(__file__).parents[1] / "src" / "cognitive_component_frontend" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("taskEndTimer=setTimeout(finishTask,seconds*1000+30)", component)
+
+    def test_standard_tasks_keep_a_stable_completion_timer(self):
+        component = (Path(__file__).parents[1] / "src" / "cognitive_component_frontend" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function completeStandardTask()", component)
+        self.assertIn("taskEndTimer=setTimeout(completeStandardTask,seconds*1000+30)", component)
+        self.assertIn("function submitStandardSession()", component)
+        self.assertIn("completed third task always returns control to the Streamlit summary page", component)
+        self.assertIn("if(taskIndex===cfg.task_types.length-1)", component)
+        self.assertIn("return submitStandardSession()", component)
+        for marker in (
+            "clockStarted=true;standardTaskSetup(sec);deadline()",
+            "function search(sec)",
+            "}standardTaskSetup(sec)}",
+            "nback=function(sec)",
+        ):
+            self.assertIn(marker, component)
+
+    def test_training_page_surfaces_database_save_failures(self):
+        page = (Path(__file__).parents[1] / "src" / "pages" / "6_Training_Studio.py").read_text(encoding="utf-8")
+        self.assertIn("import sqlite3", page)
+        self.assertIn("except (ValueError, KeyError, OSError, sqlite3.Error) as exc:", page)
 
     def test_run_id_is_the_idempotency_key_and_replay_does_not_duplicate(self):
         payload = self.payload("legacy-id")

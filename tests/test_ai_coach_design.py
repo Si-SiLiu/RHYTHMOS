@@ -13,10 +13,10 @@ class AICoachDesignTests(unittest.TestCase):
         cls.decisions = (BASE_DIR / "docs" / "DECISIONS.md").read_text(encoding="utf-8")
         cls.roadmap = (BASE_DIR / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
 
-    def test_design_is_explicitly_not_runtime(self):
-        self.assertIn("runtime not implemented", self.design)
-        self.assertIn("model version: `unreleased`", self.design.lower())
-        self.assertRegex(self.design, r"No named provider, exact model")
+    def test_design_records_the_enabled_runtime(self):
+        self.assertIn("runtime enabled with standard API retention", self.design)
+        self.assertIn("model version: `gpt-5.4`", self.design.lower())
+        self.assertIn("OpenAI's Responses API", self.design)
 
     def test_input_is_allowlisted_and_sensitive_sources_are_denied(self):
         self.assertIn("Minimum Necessary Input Allowlist", self.design)
@@ -44,7 +44,7 @@ class AICoachDesignTests(unittest.TestCase):
         for adr in ("ADR-020", "ADR-021", "ADR-022"):
             self.assertIn(adr, self.decisions)
         self.assertIn("Phase 12.0 — AI Coach Architecture & Safety Design — Completed", self.roadmap)
-        self.assertIn("Phase 12.1 — AI Coach Implementation — Planned", self.roadmap)
+        self.assertIn("Phase 12.1 — AI Coach Implementation — Completed", self.roadmap)
 
     def test_design_contains_no_secret_like_assignment(self):
         self.assertIsNone(re.search(r"(?i)(access_token|refresh_token|client_secret)\s*[:=]\s*[^`\s]", self.design))

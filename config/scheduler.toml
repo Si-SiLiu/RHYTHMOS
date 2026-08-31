@@ -2,5 +2,5 @@ enabled = true
 sync_time = "23:00"
 timezone_mode = "system"
 catch_up_on_app_start = true
-prompt_before_catch_up = true
+prompt_before_catch_up = false
 max_catch_up_runs_per_day = 1

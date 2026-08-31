@@ -14,21 +14,21 @@ Simplified Structured Training Entry UI
 - Recovery Engine Version: 1.0.0
 - Baseline Engine Version: 1.0.0
 - Confidence Engine Version: 1.0.0
-- Database Schema Version: 0.26.0
-- Schema Migration Count: 26
-- Latest Schema Migration: 0.26.0
+- Database Schema Version: 0.47.0
+- Schema Migration Count: 47
+- Latest Schema Migration: 0.47.0
 - Dashboard Version: 2.0.1
 - Training Logging Version: 2.0.0
 - Training Entry UI Version: 1.0.0
-- Test Total: 801
-- Test Passed: 801
+- Test Total: 989
+- Test Passed: 989
 - Test Failed: 0
 - Test Success: true
-- Baseline Record Count: 760
-- Scored Day Count: 38
-- Recovery v1 Day Count: 31
-- Confidence Record Count: 38
-- Latest Data Date: 2026-07-26
+- Baseline Record Count: 1040
+- Scored Day Count: 52
+- Recovery v1 Day Count: 45
+- Confidence Record Count: 52
+- Latest Data Date: 2026-08-09
 
 ## Goal
 
@@ -51,8 +51,8 @@ changelog, roadmap, and release record.
 ## Version Changes
 
 App 0.31.0; Sleep Regularity Engine 2.0.0; Dashboard 2.0.1; Training Logging
-2.0.0; Training Entry UI 1.0.0.
-Schema is 0.26.0. Recovery, Baseline, and Confidence remain 1.0.0.
+2.0.0; Training Entry UI 1.0.0; local input-habit learning 1.0.0.
+Schema is 0.47.0. Recovery, Baseline, and Confidence remain 1.0.0.
 
 ## Database Migrations
 

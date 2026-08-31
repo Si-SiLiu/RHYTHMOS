@@ -123,6 +123,17 @@ def has_polar_recovery_data(metric):
     )
 
 
+def unscored_recovery(metric):
+    """Retain load components, but never mistake load alone for recovery."""
+    load_only = calculate_recovery_score_v1(metric)
+    return {
+        **load_only,
+        "recovery_score": None,
+        "recommendation": None,
+        "score_version": "unscored_insufficient_recovery_evidence",
+    }
+
+
 def calculate_recovery_score_v1(metric):
     activity_load_score = calculate_activity_load_score(
         metric["steps"],
@@ -329,6 +340,11 @@ def calculate_recovery_score_v10(metric, baselines):
 
 
 def calculate_recovery_score(metric, baselines=None):
+    # Training/activity load describes strain, not recovery capacity.  A
+    # recovery score needs at least one current Kubios or overnight recovery
+    # signal; otherwise its numerical value would be fabricated from load.
+    if not has_kubios_data(metric) and not has_polar_recovery_data(metric):
+        return unscored_recovery(metric)
     if baselines and has_usable_baselines(baselines):
         return calculate_recovery_score_v10(metric, baselines)
     return calculate_recovery_score_without_baseline(metric)
@@ -427,7 +443,14 @@ def upsert_recovery_scores(connection, scores):
         recommendation = excluded.recommendation,
         updated_at = CURRENT_TIMESTAMP
     """
+    written = 0
     for score in scores:
+        if score["recovery_score"] is None:
+            # The schema intentionally stores only real numerical scores. This
+            # also removes a stale prior score if today's recovery evidence was
+            # cleared or became unavailable.
+            connection.execute("DELETE FROM recovery_scores WHERE date=?", (score["date"],))
+            continue
         connection.execute(
             sql,
             (
@@ -442,8 +465,9 @@ def upsert_recovery_scores(connection, scores):
                 score["recommendation"],
             ),
         )
+        written += 1
     connection.commit()
-    return len(scores)
+    return written
 
 
 def rebuild_recovery_scores(connection=None):

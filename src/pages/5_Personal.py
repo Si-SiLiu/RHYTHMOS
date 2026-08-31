@@ -12,7 +12,9 @@ from src.pages._bootstrap import ensure_project_root
 ensure_project_root()
 
 from datetime import date
+from html import escape
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -48,6 +50,28 @@ render_manual_input_styles(st)
 
 PERSONAL_PAGE_CSS = """
 <style>
+.personal-page-heading{margin:.1rem 0 2rem;max-width:44rem}
+.personal-page-heading h1{margin:0;color:var(--rh-text);font-size:clamp(1.85rem,3vw,2.35rem);font-weight:720;letter-spacing:-.035em;line-height:1.12}
+.personal-page-heading p{margin:.6rem 0 0;color:var(--rh-text-muted);font-size:.95rem;line-height:1.65}
+.personal-overview-section{margin:0 0 1.25rem;padding:1.1rem 1.15rem 1.15rem;border:1px solid var(--rh-border-subtle);border-radius:var(--rh-radius-emphasis);background:var(--rh-surface-raised);box-shadow:var(--rh-shadow-raised)}
+.personal-overview-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:0 0 .85rem}
+.personal-overview-section-title{margin:0;color:var(--rh-text);font-size:1.05rem;font-weight:680;letter-spacing:-.014em;line-height:1.35}
+.personal-overview-section-detail{margin:0;color:var(--rh-text-muted);font-size:.78rem;line-height:1.4;text-align:right}
+.personal-profile-grid,.personal-body-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.55rem}
+.personal-body-grid{grid-template-columns:1.28fr repeat(2,minmax(0,1fr))}
+.personal-summary-cell{min-width:0;padding:.75rem .8rem;border-radius:var(--rh-radius-standard);background:var(--rh-surface-inset)}
+.personal-summary-cell--primary{background:color-mix(in srgb,var(--rh-surface-inset) 86%,#3f7bb7 14%)}
+.personal-summary-label{overflow:hidden;color:var(--rh-text-muted);font-size:.74rem;font-weight:620;letter-spacing:.018em;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+.personal-summary-value{overflow:hidden;margin-top:.35rem;color:var(--rh-text);font-size:clamp(1.18rem,1.65vw,1.55rem);font-weight:680;font-variant-numeric:tabular-nums;letter-spacing:-.028em;line-height:1.18;text-overflow:ellipsis;white-space:nowrap}
+.personal-body-grid .personal-summary-value{font-size:clamp(1.4rem,2.15vw,1.95rem);letter-spacing:-.034em}
+.personal-trend-chip{display:flex;align-items:baseline;justify-content:flex-end;gap:.45rem;min-width:0;color:var(--rh-text-secondary);font-size:.75rem;line-height:1.35;text-align:right}
+.personal-trend-chip strong{color:var(--rh-text);font-size:.94rem;font-weight:680;font-variant-numeric:tabular-nums;letter-spacing:-.015em;white-space:nowrap}
+.st-key-personal_weight_trend_card{margin:0 0 1.25rem;border:1px solid var(--rh-border-subtle);border-radius:var(--rh-radius-emphasis);background:var(--rh-surface-raised);box-shadow:var(--rh-shadow-raised)}
+.st-key-personal_weight_trend_card [data-testid="stVerticalBlockBorderWrapper"]{border:0;background:transparent;box-shadow:none}
+.personal-trend-marker{margin:0 0 -.15rem}
+@media (prefers-color-scheme:dark){.personal-summary-cell--primary{background:color-mix(in srgb,var(--rh-surface-inset) 84%,#5387bb 16%)}}
+@media (max-width:900px){.personal-profile-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.personal-profile-grid .personal-summary-cell:nth-child(n+4){margin-top:.1rem}}
+@media (max-width:640px){.personal-page-heading{margin-bottom:1.35rem}.personal-overview-section{padding:.95rem}.personal-overview-section-head{align-items:flex-start;flex-direction:column;gap:.25rem}.personal-overview-section-detail,.personal-trend-chip{text-align:left;justify-content:flex-start}.personal-profile-grid,.personal-body-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.personal-profile-grid .personal-summary-cell:last-child,.personal-body-grid .personal-summary-cell--primary{grid-column:span 2}.personal-summary-cell{padding:.7rem .75rem}}
 div[data-testid="stMetric"] {
     align-items: flex-start !important;
     text-align: left;
@@ -190,8 +214,34 @@ def _training_goal_name(code):
     return TR(f"personal_info.training_goals.{code}")
 
 
+def _summary_cell(label, value, *, primary=False):
+    primary_class = " personal-summary-cell--primary" if primary else ""
+    return (
+        f'<div class="personal-summary-cell{primary_class}">'
+        f'<div class="personal-summary-label">{escape(str(label))}</div>'
+        f'<div class="personal-summary-value">{escape(str(value))}</div>'
+        "</div>"
+    )
+
+
+def _overview_section(title, cells, *, detail="", class_name=""):
+    detail_markup = (
+        f'<p class="personal-overview-section-detail">{escape(str(detail))}</p>'
+        if detail
+        else ""
+    )
+    st.markdown(
+        f'<section class="personal-overview-section {class_name}">'
+        '<header class="personal-overview-section-head">'
+        f'<h2 class="personal-overview-section-title">{escape(str(title))}</h2>'
+        f"{detail_markup}</header>"
+        f"{''.join(cells)}"
+        "</section>",
+        unsafe_allow_html=True,
+    )
+
+
 def _basic_information(profile):
-    st.subheader(TR("personal_info.basic"))
     age = calculate_age(profile["birth_date"]) if profile else None
     values = (
         ("name", profile.get("name") if profile else None),
@@ -203,41 +253,97 @@ def _basic_information(profile):
         ("age", _value(age, TR("personal_info.years"))),
         ("height", _value(profile.get("height_cm") if profile else None, " cm")),
     )
-    for column, (key, value) in zip(st.columns(len(values)), values):
-        column.metric(TR(f"personal_info.{key}"), _value(value))
+    cells = [
+        _summary_cell(TR(f"personal_info.{key}"), _value(value))
+        for key, value in values
+    ]
+    _overview_section(
+        TR("personal_info.basic"),
+        [f'<div class="personal-profile-grid">{"".join(cells)}</div>'],
+    )
 
 
 def _body_status(connection, latest):
-    st.subheader(TR("personal_info.body_status"))
-    if latest:
-        st.caption(TR("personal_info.latest_date", date=format_date(latest["date"], LANGUAGE)))
     values = (
         ("weight", _value(latest.get("weight_kg") if latest else None, " kg")),
         ("body_fat", _value(latest.get("body_fat_percent") if latest else None, "%")),
         ("waist", _value(latest.get("waist_cm") if latest else None, " cm")),
     )
-    for column, (key, value) in zip(st.columns(3), values):
-        column.metric(TR(f"personal_info.{key}"), value)
+    body_detail = (
+        TR("personal_info.latest_date", date=format_date(latest["date"], LANGUAGE))
+        if latest
+        else ""
+    )
+    cells = [
+        _summary_cell(TR(f"personal_info.{key}"), value, primary=key == "weight")
+        for key, value in values
+    ]
+    _overview_section(
+        TR("personal_info.body_status"),
+        [f'<div class="personal-body-grid">{"".join(cells)}</div>'],
+        detail=body_detail,
+    )
 
-    st.markdown(TR("personal_info.weight_trend_title"))
     trend = weight_trend(connection, 28)
     if len(trend) < 2:
         st.info(TR("personal_info.weight_trend_insufficient"))
         return
+
     date_label = TR("personal_info.trend_date")
     weight_label = TR("personal_info.weight")
     frame = pd.DataFrame([
         {date_label: row["date"], weight_label: row["weight_kg"]}
         for row in trend
     ])
-    st.line_chart(frame, x=date_label, y=weight_label, height=260)
+    frame[date_label] = pd.to_datetime(frame[date_label])
     change = trend[-1]["weight_kg"] - trend[0]["weight_kg"]
-    st.metric(TR("personal_info.weight_change"), f"{change:+.2f} kg")
+    trend_header = (
+        '<div class="personal-trend-marker">'
+        '<header class="personal-overview-section-head">'
+        f'<h2 class="personal-overview-section-title">{escape(TR("personal_info.weight_trend_title"))}</h2>'
+        '<div class="personal-trend-chip">'
+        f'<span>{escape(TR("personal_info.weight_change"))}</span>'
+        f"<strong>{change:+.2f} kg</strong>"
+        "</div></header></div>"
+    )
+    chart = (
+        alt.Chart(frame)
+        .mark_line(color="#2f72c4", strokeWidth=2.5, point=alt.OverlayMarkDef(
+            filled=True, fill="#2f72c4", size=38,
+        ))
+        .encode(
+            x=alt.X(
+                f"{date_label}:T",
+                axis=alt.Axis(title=None, format="%m/%d", labelAngle=0, tickCount=5, grid=False),
+            ),
+            y=alt.Y(
+                f"{weight_label}:Q",
+                axis=alt.Axis(title=None, tickCount=4, gridColor="#dfe6ee", gridOpacity=0.8),
+                scale=alt.Scale(zero=False, nice=True, padding=12),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{date_label}:T", title=date_label, format="%Y-%m-%d"),
+                alt.Tooltip(f"{weight_label}:Q", title=weight_label, format=".2f"),
+            ],
+        )
+        .properties(height=225)
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            domain=False,
+            labelColor="#8792a3",
+            labelFontSize=11,
+            labelPadding=8,
+            tickColor="#dfe6ee",
+            tickSize=0,
+        )
+    )
+    with st.container(border=True, key="personal_weight_trend_card"):
+        st.markdown(trend_header, unsafe_allow_html=True)
+        st.altair_chart(chart, width="stretch")
 
 
 def _profile_form(profile):
     with st.form("personal_profile_form"):
-        st.markdown(TR("personal_info.profile_form"))
         left, middle, right = st.columns(3)
         name = left.text_input(TR("personal_info.name"), value=(profile or {}).get("name") or "")
         current_gender = (profile or {}).get("gender") or "prefer_not_to_say"
@@ -277,7 +383,6 @@ def _profile_form(profile):
 
 def _body_form(profile, latest):
     with st.form("personal_body_form"):
-        st.markdown(TR("personal_info.body_form"))
         body_date = st.date_input(TR("personal_info.measurement_date"), value=date.today())
         left, middle, right = st.columns(3)
         weight = left.number_input(
@@ -307,15 +412,15 @@ def _body_form(profile, latest):
 
 
 def _goal_form(goals):
+    current_training_goal = (goals or {}).get("training_goal") or "maintenance"
+    training_goal = st.selectbox(
+        TR("personal_info.training_goal"),
+        TRAINING_GOALS,
+        index=TRAINING_GOALS.index(current_training_goal),
+        format_func=_training_goal_name,
+        key="personal_training_goal_editor",
+    )
     with st.form("personal_goal_form"):
-        st.markdown(TR("personal_info.goal_form"))
-        current_training_goal = (goals or {}).get("training_goal") or "maintenance"
-        training_goal = st.selectbox(
-            TR("personal_info.training_goal"),
-            TRAINING_GOALS,
-            index=TRAINING_GOALS.index(current_training_goal),
-            format_func=_training_goal_name,
-        )
         left, middle, right = st.columns(3)
         target_weight = left.number_input(
             TR("personal_info.target_weight"), min_value=1.0, max_value=500.0,
@@ -332,18 +437,41 @@ def _goal_form(goals):
             value=float(goals["target_waist_cm"]) if goals and goals.get("target_waist_cm") is not None else None,
             step=0.1,
         )
+        calorie_adjustment = None
+        if training_goal == "fat_loss":
+            calorie_adjustment = st.number_input(
+                TR("personal_info.daily_calorie_deficit"), min_value=1.0, max_value=2000.0,
+                value=float(goals["daily_calorie_adjustment_kcal"])
+                if goals and goals.get("training_goal") == "fat_loss"
+                and goals.get("daily_calorie_adjustment_kcal") is not None else 350.0,
+                step=50.0,
+            )
+        elif training_goal == "muscle_gain":
+            calorie_adjustment = st.number_input(
+                TR("personal_info.daily_calorie_surplus"), min_value=1.0, max_value=2000.0,
+                value=float(goals["daily_calorie_adjustment_kcal"])
+                if goals and goals.get("training_goal") == "muscle_gain"
+                and goals.get("daily_calorie_adjustment_kcal") is not None else 250.0,
+                step=50.0,
+            )
         submitted = st.form_submit_button(TR("personal_info.save_goals"), type="primary")
     return submitted, {
         "training_goal": training_goal,
         "target_weight_kg": target_weight,
         "target_body_fat_percent": target_body_fat,
         "target_waist_cm": target_waist,
+        "daily_calorie_adjustment_kcal": calorie_adjustment,
     }
 
 
 def main():
-    st.title(TR("personal_info.title"))
-    st.caption(TR("personal_info.intro"))
+    st.markdown(
+        '<header class="personal-page-heading">'
+        f'<h1>{escape(TR("personal_info.title"))}</h1>'
+        f'<p>{escape(TR("personal_info.intro"))}</p>'
+        "</header>",
+        unsafe_allow_html=True,
+    )
     save_notice = st.session_state.pop("personal_save_notice", None)
     connection = connect(migrate=False)
     try:
@@ -354,7 +482,8 @@ def main():
         _body_status(connection, latest)
         st.subheader(TR("personal_info.edit"))
 
-        profile_submitted, profile_data = _profile_form(profile)
+        with st.expander(TR("personal_info.profile_form"), expanded=False):
+            profile_submitted, profile_data = _profile_form(profile)
         if profile_submitted:
             try:
                 save_personal_profile(connection, profile_data)
@@ -362,7 +491,8 @@ def main():
             except ValueError:
                 st.error(TR("personal_info.invalid_profile"))
 
-        body_submitted, body_data = _body_form(profile, latest)
+        with st.expander(TR("personal_info.body_form"), expanded=False):
+            body_submitted, body_data = _body_form(profile, latest)
         if body_submitted:
             if body_data["height_cm"] is None:
                 st.error(TR("personal_info.save_profile_first"))
@@ -373,7 +503,8 @@ def main():
                 except ValueError:
                     st.error(TR("personal_info.invalid_body"))
 
-        goals_submitted, goals_data = _goal_form(goals)
+        with st.expander(TR("personal_info.goal_form"), expanded=False):
+            goals_submitted, goals_data = _goal_form(goals)
         if goals_submitted:
             try:
                 save_personal_goals(connection, goals_data)

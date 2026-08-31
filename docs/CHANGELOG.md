@@ -791,17 +791,17 @@
 ### Latest Local Pipeline Sync
 
 <!-- PIPELINE_SYNC_START -->
-- Last Pipeline Sync: 2026-07-16T16:10:03+08:00
+- Last Pipeline Sync: 2026-08-08T22:04:36+08:00
 - Result: completed through report generation
 - Records Imported: 0
-- Metrics Updated: 27
-- Baselines Updated: 540
-- Recovery Scores Updated: 27
+- Metrics Updated: 51
+- Baselines Updated: 1020
+- Recovery Scores Updated: 51
 - Reports Generated: 1
-- Endpoint Warnings: 2
-- Confidence Updated: 27
-- Local Coach Records Updated: 27
-- Prospective Eligible Days: 1 / 14
+- Endpoint Warnings: 0
+- Confidence Updated: 51
+- Local Coach Records Updated: 51
+- Prospective Eligible Days: 19 / 14
 <!-- PIPELINE_SYNC_END -->
 
 ## 0.10.0 — 2026-07-10 — Governance Finalization & Release Readiness

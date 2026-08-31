@@ -2,12 +2,12 @@
   "app_version": "0.31.0",
   "recovery_engine_version": "1.0.0",
   "baseline_engine_version": "1.0.0",
-  "database_schema_version": "0.33.0",
+  "database_schema_version": "0.54.0",
   "dashboard_version": "2.0.1",
   "confidence_engine_version": "1.0.0",
   "local_coach_engine_version": "1.0.0",
   "personal_logging_version": "1.1.0",
-  "nutrition_logging_engine_version": "5.0.0",
+  "nutrition_logging_engine_version": "5.2.0",
   "food_catalog_version": "1.0.0",
   "training_logging_version": "2.0.0",
   "training_entry_ui_version": "1.0.0",
@@ -22,5 +22,5 @@
   "i18n_engine_version": "1.0.0",
   "kubios_screenshot_import_version": "1.2.0",
   "kubios_data_model_version": "1.1.0",
-  "model_version": "unreleased"
+  "model_version": "gpt-5.4"
 }

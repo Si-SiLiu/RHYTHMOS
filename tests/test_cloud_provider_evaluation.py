@@ -10,10 +10,10 @@ class CloudProviderEvaluationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.document = (BASE_DIR / "docs" / "CLOUD_PROVIDER_EVALUATION.md").read_text(encoding="utf-8")
 
-    def test_selection_is_blocked_without_weakening_gates(self):
-        self.assertIn("Status: Blocked", self.document)
+    def test_historical_zdr_selection_is_recorded_without_weakening_gates(self):
+        self.assertIn("Historical ZDR evaluation", self.document)
         self.assertIn("Missing public evidence is a failed gate", self.document)
-        self.assertIn("model version: `unreleased`", self.document.lower())
+        self.assertIn("model version: `gpt-5.4`", self.document.lower())
 
     def test_candidates_have_explicit_results(self):
         for candidate in ("OpenAI API", "Alibaba Cloud Model Studio", "Baidu Qianfan", "Tencent Hunyuan/TokenHub"):

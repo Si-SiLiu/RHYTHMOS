@@ -1,8 +1,8 @@
 # AI Coach Cloud Provider Evaluation
 
 > Evaluation date: 2026-07-11  
-> Status: Blocked — no candidate currently satisfies every approved gate  
-> Runtime model version: `unreleased`
+> Status: Historical ZDR evaluation — blocked under the former ZDR-only policy
+> Runtime model version: `gpt-5.4` (standard API retention accepted on 2026-08-24)
 
 ## Required Gates
 

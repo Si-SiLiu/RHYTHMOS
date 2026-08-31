@@ -81,19 +81,28 @@ def save_personal_goals(connection, data: dict[str, Any]) -> None:
         "target_body_fat_percent", data.get("target_body_fat_percent"), 100,
     )
     target_waist = _optional_positive("target_waist_cm", data.get("target_waist_cm"), 300)
+    calorie_adjustment = (
+        _optional_positive(
+            "daily_calorie_adjustment_kcal",
+            data.get("daily_calorie_adjustment_kcal"), 2000,
+        )
+        if training_goal in {"fat_loss", "muscle_gain"} else None
+    )
     connection.execute(
         """
         INSERT INTO personal_goals(
-            id,training_goal,target_weight_kg,target_body_fat_percent,target_waist_cm
-        ) VALUES(1,?,?,?,?)
+            id,training_goal,target_weight_kg,target_body_fat_percent,target_waist_cm,
+            daily_calorie_adjustment_kcal
+        ) VALUES(1,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             training_goal=excluded.training_goal,
             target_weight_kg=excluded.target_weight_kg,
             target_body_fat_percent=excluded.target_body_fat_percent,
             target_waist_cm=excluded.target_waist_cm,
+            daily_calorie_adjustment_kcal=excluded.daily_calorie_adjustment_kcal,
             updated_at=CURRENT_TIMESTAMP
         """,
-        (training_goal, target_weight, target_body_fat, target_waist),
+        (training_goal, target_weight, target_body_fat, target_waist, calorie_adjustment),
     )
     connection.commit()
 

@@ -2197,6 +2197,562 @@ SCHEMA_MIGRATIONS = (
             CHECK (training_goal IN ('muscle_gain','fat_loss','maintenance'));
         """,
     ),
+    SchemaMigration(
+        35,
+        "0.35.0",
+        "food_ocr_nutrition_profiles",
+        "nutrition-label-ocr-v1-confirmed-food-priority",
+        """
+        CREATE TABLE IF NOT EXISTS food_ocr_nutrition_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_catalog_id INTEGER NOT NULL UNIQUE,
+            brand TEXT,
+            basis_quantity REAL NOT NULL CHECK(basis_quantity > 0),
+            basis_unit TEXT NOT NULL CHECK(basis_unit IN ('g','ml','serving')),
+            calories_kcal REAL CHECK(calories_kcal IS NULL OR calories_kcal >= 0),
+            protein_g REAL CHECK(protein_g IS NULL OR protein_g >= 0),
+            carbohydrate_g REAL CHECK(carbohydrate_g IS NULL OR carbohydrate_g >= 0),
+            fat_g REAL CHECK(fat_g IS NULL OR fat_g >= 0),
+            fiber_g REAL CHECK(fiber_g IS NULL OR fiber_g >= 0),
+            sodium_mg REAL CHECK(sodium_mg IS NULL OR sodium_mg >= 0),
+            ocr_confidence REAL CHECK(ocr_confidence IS NULL OR (ocr_confidence BETWEEN 0 AND 1)),
+            source_file_sha256 TEXT,
+            ocr_text TEXT,
+            user_confirmed INTEGER NOT NULL DEFAULT 1 CHECK(user_confirmed IN (0,1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(food_catalog_id) REFERENCES food_catalog(id) ON DELETE CASCADE
+        );
+        ALTER TABLE meal_items ADD COLUMN sodium_mg REAL
+            CHECK(sodium_mg IS NULL OR sodium_mg >= 0);
+        """,
+    ),
+    SchemaMigration(
+        36,
+        "0.36.0",
+        "custom_food_nutrition_library",
+        "nutrition-label-library-v1-image-history-custom-foods",
+        """
+        CREATE TABLE IF NOT EXISTS custom_food_nutrition_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_catalog_id INTEGER NOT NULL,
+            food_name TEXT NOT NULL,
+            brand TEXT,
+            source_file_name TEXT,
+            source_mime_type TEXT,
+            source_file_sha256 TEXT NOT NULL,
+            source_image_blob BLOB NOT NULL,
+            basis_quantity REAL NOT NULL CHECK(basis_quantity > 0),
+            basis_unit TEXT NOT NULL CHECK(basis_unit IN ('g','ml','serving')),
+            nutrients_json TEXT NOT NULL,
+            ocr_text TEXT,
+            ocr_confidence REAL CHECK(ocr_confidence IS NULL OR (ocr_confidence BETWEEN 0 AND 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(food_catalog_id) REFERENCES food_catalog(id) ON DELETE CASCADE,
+            UNIQUE(food_catalog_id,source_file_sha256)
+        );
+        CREATE INDEX IF NOT EXISTS idx_custom_food_nutrition_library_food
+            ON custom_food_nutrition_library(food_catalog_id,created_at DESC);
+        """,
+    ),
+    SchemaMigration(
+        37,
+        '0.37.0',
+        'performance_planner_v1_root',
+        'performance-planner-v1-plans-blocks-checkpoints-recommendations-snapshots-root-sequence-37',
+        "\n        CREATE TABLE IF NOT EXISTS performance_plans (\n            plan_id TEXT PRIMARY KEY,\n            plan_date TEXT NOT NULL UNIQUE,\n            title TEXT NOT NULL CHECK(length(trim(title)) > 0),\n            status TEXT NOT NULL DEFAULT 'active'\n                CHECK(status IN ('draft','active','completed','archived')),\n            timezone TEXT NOT NULL,\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n        );\n        CREATE INDEX IF NOT EXISTS idx_performance_plans_plan_date\n            ON performance_plans(plan_date);\n\n        CREATE TABLE IF NOT EXISTS performance_plan_blocks (\n            block_id TEXT PRIMARY KEY,\n            plan_id TEXT NOT NULL,\n            title TEXT NOT NULL CHECK(length(trim(title)) > 0),\n            block_type TEXT NOT NULL CHECK(block_type IN (\n                'deep_work','learning','meeting','exercise',\n                'recovery','routine','other'\n            )),\n            planned_start TEXT NOT NULL,\n            planned_end TEXT NOT NULL,\n            priority TEXT NOT NULL DEFAULT 'medium'\n                CHECK(priority IN ('low','medium','high')),\n            cognitive_demand TEXT NOT NULL DEFAULT 'moderate'\n                CHECK(cognitive_demand IN ('low','moderate','high')),\n            physical_demand TEXT NOT NULL DEFAULT 'moderate'\n                CHECK(physical_demand IN ('low','moderate','high')),\n            context TEXT,\n            notes TEXT,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            status TEXT NOT NULL DEFAULT 'planned'\n                CHECK(status IN (\n                    'planned','in_progress','completed','skipped','postponed'\n                )),\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY(plan_id) REFERENCES performance_plans(plan_id)\n                ON DELETE CASCADE,\n            CHECK(planned_end > planned_start)\n        );\n        CREATE INDEX IF NOT EXISTS idx_performance_blocks_plan_id\n            ON performance_plan_blocks(plan_id, sort_order, planned_start);\n\n        CREATE TABLE IF NOT EXISTS performance_checkpoints (\n            checkpoint_id TEXT PRIMARY KEY,\n            plan_id TEXT NOT NULL,\n            related_block_id TEXT,\n            checkpoint_type TEXT NOT NULL CHECK(checkpoint_type IN (\n                'quick_neural_check','control_speed_check',\n                'focus_check','working_memory_check'\n            )),\n            scheduled_at TEXT NOT NULL,\n            trigger_type TEXT NOT NULL CHECK(trigger_type IN (\n                'before_block','after_block','fixed_time','manual'\n            )),\n            status TEXT NOT NULL DEFAULT 'pending'\n                CHECK(status IN ('pending','completed','skipped')),\n            cognitive_run_id TEXT,\n            result_snapshot_json TEXT,\n            completed_at TEXT,\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY(plan_id) REFERENCES performance_plans(plan_id)\n                ON DELETE CASCADE,\n            FOREIGN KEY(related_block_id)\n                REFERENCES performance_plan_blocks(block_id) ON DELETE SET NULL\n        );\n        CREATE INDEX IF NOT EXISTS idx_performance_checkpoints_plan_id\n            ON performance_checkpoints(plan_id);\n        CREATE INDEX IF NOT EXISTS idx_performance_checkpoints_scheduled_at\n            ON performance_checkpoints(scheduled_at);\n        CREATE INDEX IF NOT EXISTS idx_performance_checkpoints_related_block\n            ON performance_checkpoints(related_block_id);\n        CREATE UNIQUE INDEX IF NOT EXISTS idx_performance_checkpoints_run_id\n            ON performance_checkpoints(cognitive_run_id)\n            WHERE cognitive_run_id IS NOT NULL;\n\n        CREATE TABLE IF NOT EXISTS performance_recommendations (\n            recommendation_id TEXT PRIMARY KEY,\n            plan_id TEXT NOT NULL,\n            related_block_id TEXT,\n            recommendation_type TEXT NOT NULL CHECK(recommendation_type IN (\n                'continue_as_planned','shorten_block','add_recovery_break',\n                'move_high_demand_block','switch_to_low_demand_task',\n                'take_neural_check','resume_after_check'\n            )),\n            severity TEXT NOT NULL CHECK(severity IN ('info','warning','high')),\n            title_key TEXT NOT NULL,\n            message_key TEXT NOT NULL,\n            rationale TEXT NOT NULL,\n            source_snapshot_json TEXT NOT NULL,\n            data_sufficiency TEXT NOT NULL\n                CHECK(data_sufficiency IN ('sufficient','partial','insufficient')),\n            generated_at TEXT NOT NULL,\n            acknowledged_at TEXT,\n            applied_at TEXT,\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY(plan_id) REFERENCES performance_plans(plan_id)\n                ON DELETE CASCADE,\n            FOREIGN KEY(related_block_id)\n                REFERENCES performance_plan_blocks(block_id) ON DELETE SET NULL\n        );\n        CREATE INDEX IF NOT EXISTS idx_performance_recommendations_plan_id\n            ON performance_recommendations(plan_id, generated_at);\n        CREATE INDEX IF NOT EXISTS idx_performance_recommendations_related_block\n            ON performance_recommendations(related_block_id);\n        ",
+    ),
+    SchemaMigration(
+        38,
+        '0.38.0',
+        'performance_planner_recommendation_fingerprints_v1_root',
+        'performance-planner-v1-recommendation-fingerprint-idempotency-root-sequence-38',
+        '\n        ALTER TABLE performance_recommendations\n            ADD COLUMN recommendation_fingerprint TEXT;\n        CREATE UNIQUE INDEX IF NOT EXISTS idx_performance_recommendations_fingerprint\n            ON performance_recommendations(recommendation_fingerprint)\n            WHERE recommendation_fingerprint IS NOT NULL;\n        ',
+    ),
+    SchemaMigration(
+        39,
+        "0.39.0",
+        "custom_supplement_nutrition_library",
+        "nutrition-label-library-v2-supplement-ocr-history",
+        """
+        CREATE TABLE IF NOT EXISTS custom_supplement_nutrition_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplement_product_id INTEGER,
+            product_name TEXT NOT NULL,
+            brand TEXT,
+            source_file_name TEXT,
+            source_mime_type TEXT,
+            source_file_sha256 TEXT NOT NULL UNIQUE,
+            source_image_blob BLOB NOT NULL,
+            serving_quantity REAL,
+            serving_unit TEXT,
+            ingredients_json TEXT NOT NULL,
+            ocr_text TEXT,
+            ocr_confidence REAL CHECK(ocr_confidence IS NULL OR (ocr_confidence BETWEEN 0 AND 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(supplement_product_id) REFERENCES supplement_products(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_custom_supplement_nutrition_library_product
+            ON custom_supplement_nutrition_library(supplement_product_id,created_at DESC);
+        """,
+    ),
+    SchemaMigration(
+        40,
+        "0.40.0",
+        "common_supplement_inorganic_salts_glucose",
+        "supplement-products-v1-inorganic-salts-glucose-options",
+        """
+        INSERT OR IGNORE INTO supplement_products(
+            uuid,brand_name,product_name,product_variant,display_name_zh,display_name_en,
+            dosage_form,product_kind,default_intake_unit,serving_quantity,serving_unit,
+            data_source,verification_status,legacy_identity_key
+        ) VALUES
+          (lower(hex(randomblob(16))),NULL,'无机盐',NULL,'无机盐','Inorganic Salts',
+           'powder','supplement','g',1,'g','imported','unverified','builtin:inorganic_salts'),
+          (lower(hex(randomblob(16))),NULL,'葡萄糖',NULL,'葡萄糖','Glucose',
+           'powder','supplement','g',1,'g','imported','unverified','builtin:glucose');
+        """,
+    ),
+    SchemaMigration(
+        41,
+        "0.41.0",
+        "repair_cognitive_training_foreign_keys",
+        "cognitive-training-v1-repair-session-foreign-key-targets",
+        """
+        PRAGMA foreign_keys=OFF;
+        BEGIN IMMEDIATE;
+        DROP TABLE IF EXISTS cognitive_training_trials_fk_repair;
+        DROP TABLE IF EXISTS cognitive_training_task_results_fk_repair;
+
+        CREATE TABLE cognitive_training_task_results_fk_repair (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            task_order INTEGER NOT NULL,
+            protocol_version TEXT NOT NULL,
+            difficulty_start INTEGER,
+            difficulty_end INTEGER,
+            total_trials INTEGER NOT NULL DEFAULT 0,
+            correct_count INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            omission_count INTEGER NOT NULL DEFAULT 0,
+            median_rt_ms REAL,
+            mean_rt_ms REAL,
+            rt_cv REAL,
+            accuracy REAL,
+            score REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id,task_order)
+        );
+        INSERT INTO cognitive_training_task_results_fk_repair
+            SELECT * FROM cognitive_training_task_results;
+
+        CREATE TABLE cognitive_training_trials_fk_repair (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            task_result_id TEXT NOT NULL,
+            trial_index INTEGER NOT NULL,
+            stimulus_type TEXT NOT NULL,
+            stimulus_payload TEXT NOT NULL DEFAULT '{}',
+            expected_response TEXT,
+            actual_response TEXT,
+            response_time_ms REAL,
+            correct INTEGER,
+            difficulty_level INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES cognitive_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_result_id) REFERENCES cognitive_training_task_results_fk_repair(id) ON DELETE CASCADE,
+            UNIQUE(task_result_id,trial_index)
+        );
+        INSERT INTO cognitive_training_trials_fk_repair
+            SELECT * FROM cognitive_training_trials;
+
+        DROP TABLE cognitive_training_trials;
+        DROP TABLE cognitive_training_task_results;
+        ALTER TABLE cognitive_training_task_results_fk_repair
+            RENAME TO cognitive_training_task_results;
+        ALTER TABLE cognitive_training_trials_fk_repair
+            RENAME TO cognitive_training_trials;
+        COMMIT;
+        PRAGMA foreign_keys=ON;
+        """,
+    ),
+    SchemaMigration(
+        42,
+        "0.42.0",
+        "rename_custom_food_bell_pepper_to_sweet_pepper",
+        "nutrition-food-label-rename-cai-jiao-to-tian-jiao-v1",
+        """
+        UPDATE meal_items SET custom_food_name='甜椒'
+            WHERE custom_food_name='彩椒';
+        UPDATE meal_event_items SET item_name='甜椒'
+            WHERE item_name='彩椒';
+        UPDATE nutrition_logs SET food_name='甜椒'
+            WHERE food_name='彩椒';
+        UPDATE custom_food_nutrition_library SET food_name='甜椒'
+            WHERE food_name='彩椒';
+        UPDATE food_catalog SET display_name_zh='甜椒'
+            WHERE display_name_zh='彩椒';
+        """,
+    ),
+    SchemaMigration(
+        43,
+        "0.43.0",
+        "add_sweet_pepper_food_catalog_option",
+        "food-catalog-v1.2-sweet-pepper-with-cai-jiao-compatibility-alias",
+        """
+        INSERT OR IGNORE INTO food_catalog(
+            canonical_name,display_name_zh,display_name_en,aliases_json,
+            default_unit,allowed_units_json,category_tags_json,serving_unit,
+            serving_weight_g,serving_volume_ml,calories_per_100g,
+            protein_per_100g,carbohydrate_per_100g,fat_per_100g,
+            fiber_per_100g,water_per_100g,caffeine_per_100g,alcohol_per_100g,
+            nutrition_source,data_quality
+        ) VALUES(
+            'sweet_pepper','甜椒','Sweet Pepper','["彩椒","灯笼椒","bell pepper"]',
+            'g','["g","kg","piece","serving"]','["vegetable","fiber_source"]',
+            'piece',150,NULL,26,0.99,6.03,0.30,2.10,92.21,0,0,
+            'builtin_reference_v1.2','reference'
+        );
+        """,
+    ),
+    SchemaMigration(
+        44,
+        "0.44.0",
+        "personal_goal_daily_calorie_adjustment",
+        "personal-goals-v2-goal-specific-daily-calorie-deficit-surplus",
+        """
+        ALTER TABLE personal_goals ADD COLUMN daily_calorie_adjustment_kcal REAL
+            CHECK(daily_calorie_adjustment_kcal IS NULL OR
+                  (daily_calorie_adjustment_kcal > 0 AND daily_calorie_adjustment_kcal <= 2000));
+        """,
+    ),
+    SchemaMigration(
+        45,
+        "0.45.0",
+        "local_coach_combined_training_summary",
+        "local-coach-combined-training-summary-v1",
+        """
+        ALTER TABLE local_coach_recommendations
+            ADD COLUMN training_summary_json TEXT NOT NULL DEFAULT '{}';
+        """,
+    ),
+    SchemaMigration(
+        46,
+        "0.46.0",
+        "local_user_input_habits",
+        "local-user-input-habits-v1-aggregate-only",
+        """
+        CREATE TABLE IF NOT EXISTS user_input_habits (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+            event_count INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+            habits_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO user_input_habits(id) VALUES (1);
+        """,
+    ),
+    SchemaMigration(
+        47,
+        "0.47.0",
+        "training_plan_manual_dates",
+        "training-plan-v2-manual-date-per-day",
+        """
+        ALTER TABLE training_day_templates
+            ADD COLUMN planned_date TEXT;
+        """,
+    ),
+    SchemaMigration(
+        48,
+        "0.48.0",
+        "independent_user_weekly_plan",
+        "user-weekly-plan-v1-intent-layer-with-execution-comparison",
+        """
+        CREATE TABLE IF NOT EXISTS user_weekly_plans (
+            plan_id TEXT PRIMARY KEY,
+            week_start TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            timezone TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_weekly_plans_week
+            ON user_weekly_plans(week_start);
+
+        CREATE TABLE IF NOT EXISTS user_weekly_plan_items (
+            item_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN (
+                'work','study','training','meal','recovery','personal','other'
+            )),
+            notes TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT,
+            FOREIGN KEY(plan_id) REFERENCES user_weekly_plans(plan_id)
+                ON DELETE CASCADE,
+            CHECK(end_time > start_time)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_weekly_plan_items_plan
+            ON user_weekly_plan_items(plan_id,weekday,start_time,sort_order);
+        """,
+    ),
+    SchemaMigration(
+        49,
+        "0.49.0",
+        "training_plan_actual_matrix",
+        "training-plan-actual-v1-cycles-matrix-links-comparisons",
+        """
+        CREATE TABLE IF NOT EXISTS training_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL CHECK(end_date >= start_date),
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'planned'
+                CHECK(status IN ('planned','active','completed','archived')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_training_cycles_dates
+            ON training_cycles(start_date,end_date,status);
+
+        CREATE TABLE IF NOT EXISTS planned_training_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            training_cycle_id INTEGER,
+            planned_date TEXT NOT NULL,
+            session_name TEXT NOT NULL,
+            training_type TEXT NOT NULL,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'planned'
+                CHECK(status IN ('planned','active','completed','archived')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(training_cycle_id) REFERENCES training_cycles(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_planned_training_sessions_date
+            ON planned_training_sessions(planned_date,status,id);
+        CREATE INDEX IF NOT EXISTS idx_planned_training_sessions_cycle
+            ON planned_training_sessions(training_cycle_id,planned_date,id);
+
+        CREATE TABLE IF NOT EXISTS planned_training_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            planned_session_id INTEGER NOT NULL,
+            exercise_catalog_id INTEGER,
+            exercise_canonical_name TEXT,
+            exercise_display_name TEXT,
+            order_index INTEGER NOT NULL CHECK(order_index > 0),
+            target_sets INTEGER CHECK(target_sets IS NULL OR target_sets >= 0),
+            target_reps INTEGER CHECK(target_reps IS NULL OR target_reps >= 0),
+            target_weight REAL CHECK(target_weight IS NULL OR target_weight >= 0),
+            target_load_unit TEXT NOT NULL DEFAULT 'kg',
+            target_duration_seconds REAL CHECK(target_duration_seconds IS NULL OR target_duration_seconds >= 0),
+            target_distance_meters REAL CHECK(target_distance_meters IS NULL OR target_distance_meters >= 0),
+            target_rpe REAL CHECK(target_rpe IS NULL OR target_rpe BETWEEN 1 AND 10),
+            notes TEXT,
+            substitution_allowed INTEGER NOT NULL DEFAULT 0 CHECK(substitution_allowed IN (0,1)),
+            module_key TEXT NOT NULL DEFAULT 'main_strength',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(planned_session_id) REFERENCES planned_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(exercise_catalog_id) REFERENCES exercise_catalog(id) ON DELETE SET NULL,
+            CHECK(exercise_catalog_id IS NOT NULL OR exercise_canonical_name IS NOT NULL OR exercise_display_name IS NOT NULL),
+            UNIQUE(planned_session_id,order_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_planned_training_exercises_session
+            ON planned_training_exercises(planned_session_id,order_index,id);
+        CREATE INDEX IF NOT EXISTS idx_planned_training_exercises_module
+            ON planned_training_exercises(planned_session_id,module_key,order_index,id);
+
+        CREATE TABLE IF NOT EXISTS planned_session_revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            planned_session_id INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(planned_session_id) REFERENCES planned_training_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS plan_actual_session_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            planned_session_id INTEGER NOT NULL,
+            actual_training_session_id INTEGER NOT NULL UNIQUE,
+            match_source TEXT NOT NULL CHECK(match_source IN ('automatic','manual')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(planned_session_id) REFERENCES planned_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(actual_training_session_id) REFERENCES training_sessions(id) ON DELETE CASCADE,
+            UNIQUE(planned_session_id,actual_training_session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_plan_actual_session_links_plan
+            ON plan_actual_session_links(planned_session_id,id);
+
+        CREATE TABLE IF NOT EXISTS plan_actual_exercise_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            planned_exercise_id INTEGER NOT NULL UNIQUE,
+            actual_training_exercise_id INTEGER NOT NULL UNIQUE,
+            relationship TEXT NOT NULL CHECK(relationship IN ('matched','substituted')),
+            match_source TEXT NOT NULL CHECK(match_source IN ('automatic','manual')),
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(planned_exercise_id) REFERENCES planned_training_exercises(id) ON DELETE CASCADE,
+            FOREIGN KEY(actual_training_exercise_id) REFERENCES training_exercises(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS plan_actual_comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            planned_session_id INTEGER NOT NULL,
+            actual_training_session_id INTEGER,
+            planned_exercise_id INTEGER,
+            actual_training_exercise_id INTEGER,
+            relationship TEXT NOT NULL CHECK(relationship IN ('matched','substituted','unplanned','unmatched')),
+            status TEXT NOT NULL CHECK(status IN ('completed','partially_completed','not_completed','substituted','unplanned','unmatched')),
+            planned_sets REAL,
+            actual_sets REAL,
+            planned_reps REAL,
+            actual_reps REAL,
+            planned_volume REAL,
+            actual_volume REAL,
+            sets_completion REAL,
+            reps_completion REAL,
+            load_completion REAL,
+            volume_completion REAL,
+            overall_completion REAL,
+            calculated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(planned_session_id) REFERENCES planned_training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(actual_training_session_id) REFERENCES training_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(planned_exercise_id) REFERENCES planned_training_exercises(id) ON DELETE CASCADE,
+            FOREIGN KEY(actual_training_exercise_id) REFERENCES training_exercises(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_plan_actual_comparisons_session
+            ON plan_actual_comparisons(planned_session_id,id);
+        """,
+    ),
+    SchemaMigration(
+        50,
+        "0.50.0",
+        "training_cycle_domains",
+        "training-plan-v1-cycle-domain-separation",
+        """
+        ALTER TABLE training_cycles ADD COLUMN training_domain TEXT NOT NULL DEFAULT 'indoor_strength';
+        CREATE INDEX IF NOT EXISTS idx_training_cycles_domain_dates
+            ON training_cycles(training_domain,start_date,end_date,status);
+        """,
+    ),
+    SchemaMigration(
+        51,
+        "0.51.0",
+        "custom_nutrition_library_product_kinds",
+        "nutrition-label-library-v3-supplement-medication-separation",
+        """
+        ALTER TABLE custom_supplement_nutrition_library
+            ADD COLUMN product_kind TEXT NOT NULL DEFAULT 'supplement'
+            CHECK(product_kind IN ('supplement','medication'));
+        UPDATE custom_supplement_nutrition_library
+           SET product_kind='medication'
+         WHERE supplement_product_id IN (
+             SELECT id FROM supplement_products WHERE product_kind='medication'
+         );
+        CREATE INDEX IF NOT EXISTS idx_custom_supplement_nutrition_library_kind
+            ON custom_supplement_nutrition_library(product_kind,created_at DESC);
+        """,
+    ),
+    SchemaMigration(
+        52,
+        "0.52.0",
+        "nutrition_recurring_plan_cycle",
+        "nutrition-recurring-plan-cycle-v1-editable-cycle-settings",
+        """
+        CREATE TABLE IF NOT EXISTS nutrition_plan_cycle_settings (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            start_date TEXT NOT NULL,
+            duration_weeks INTEGER NOT NULL DEFAULT 1 CHECK(duration_weeks >= 1),
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    ),
+    SchemaMigration(
+        53,
+        "0.53.0",
+        "nutrition_plan_cycles",
+        "nutrition-recurring-plan-v2-cycle-management",
+        """
+        CREATE TABLE IF NOT EXISTS nutrition_plan_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL CHECK(end_date >= start_date),
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'planned'
+                CHECK(status IN ('planned','active','completed','archived')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_nutrition_plan_cycles_dates
+            ON nutrition_plan_cycles(start_date,end_date,status);
+
+        INSERT INTO nutrition_plan_cycles(uuid,name,start_date,end_date,status)
+        SELECT lower(hex(randomblob(16))), '每周饮食循环', start_date,
+               date(start_date, '+' || CAST(duration_weeks * 7 - 1 AS TEXT) || ' days'),
+               'active'
+          FROM nutrition_plan_cycle_settings
+         WHERE id=1
+           AND NOT EXISTS (SELECT 1 FROM nutrition_plan_cycles);
+
+        ALTER TABLE user_weekly_plans
+            ADD COLUMN nutrition_cycle_id INTEGER;
+        CREATE INDEX IF NOT EXISTS idx_user_weekly_plans_nutrition_cycle
+            ON user_weekly_plans(nutrition_cycle_id,week_start);
+
+        UPDATE user_weekly_plans
+           SET nutrition_cycle_id=(SELECT id FROM nutrition_plan_cycles
+                                     ORDER BY id DESC LIMIT 1)
+         WHERE nutrition_cycle_id IS NULL
+           AND title IN ('周期性饮食计划','Recurring Nutrition Plan');
+        """,
+    ),
+    SchemaMigration(
+        54,
+        "0.54.0",
+        "ai_feedback_outputs",
+        "codex-feedback-output-v1-minimum-necessary-audit",
+        """
+        CREATE TABLE IF NOT EXISTS ai_feedback_outputs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL UNIQUE,
+            provider_id TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            data_retention_mode TEXT NOT NULL
+                CHECK(data_retention_mode IN ('zero_data_retention','standard_api_retention')),
+            input_snapshot_digest TEXT NOT NULL,
+            output_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_feedback_outputs_generated
+            ON ai_feedback_outputs(date DESC, generated_at DESC);
+        """,
+    ),
 )
 
 

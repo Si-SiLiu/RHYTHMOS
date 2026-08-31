@@ -15,6 +15,7 @@ from src.i18n import (
     load_language_preference, normalize_language, save_language_preference,
 )
 from src.i18n.storage import load_preferences
+from src.i18n.traditional import traditionalize
 from src.i18n.translator import Translator
 from src.i18n.validation import TranslationValidationError, flatten_keys, validate_matching_keys
 from src.personal_logging.config import MEAL_TYPES, SESSION_TYPES
@@ -51,6 +52,10 @@ class InternationalizationTests(unittest.TestCase):
 
     def test_zh_tw_resource_loads(self):
         self.assertEqual(Translator("zh-TW")("common.no_data"), "暫無資料")
+
+    def test_traditionalize_converts_page_local_copy_only_for_zh_tw(self):
+        self.assertEqual(traditionalize("历史训练建议：28分钟"), "歷史訓練建議：28分鐘")
+        self.assertEqual(traditionalize("干扰抑制"), "干擾抑制")
 
     def test_en_resource_loads(self):
         self.assertEqual(Translator("en")("common.no_data"), "No data")
@@ -145,6 +150,7 @@ class InternationalizationTests(unittest.TestCase):
         self.assertIn('"pages/1_Sleep.py"', source)
         self.assertIn('"pages/2_Recovery.py"', source)
         self.assertIn('"pages/3_Nutrition.py"', source)
+        self.assertIn('"pages/7_Overall_Feedback.py"', source)
         self.assertIn('"pages/5_Personal.py"', source)
         self.assertIn('"pages/4_System.py"', source)
         self.assertNotIn('"src/dashboard.py"', source)

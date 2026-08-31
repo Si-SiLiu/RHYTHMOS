@@ -1,20 +1,22 @@
 {
-  "parser_version": "1.2.0",
+  "parser_version": "1.6.0",
   "supported_fields": [
-    "date", "measurement_time", "rmssd", "mean_hr", "readiness",
-    "sdnn", "pns_index", "sns_index", "stress_index", "mean_rr_ms",
+    "date", "rmssd", "mean_hr", "sdnn", "pns_index", "sns_index",
+    "stress_index", "mean_rr_ms",
     "poincare_sd1_ms", "poincare_sd2_ms", "respiratory_rate_bpm",
     "lf_power_ms2", "hf_power_ms2", "lf_power_nu", "hf_power_nu",
-    "lf_hf_ratio", "physiological_age", "measurement_quality", "mood_code",
-    "recovery_status", "artefact_correction", "measurement_duration"
+    "lf_hf_ratio", "physiological_age", "measurement_quality", "mood_code"
   ],
-  "minimum_required_fields": ["date", "rmssd", "mean_hr"],
+  "capture_fields": [
+    "mean_hr", "rmssd", "pns_index", "sns_index", "physiological_age",
+    "mean_rr_ms", "sdnn", "poincare_sd1_ms", "poincare_sd2_ms",
+    "stress_index", "respiratory_rate_bpm", "lf_power_ms2", "hf_power_ms2",
+    "lf_power_nu", "hf_power_nu", "lf_hf_ratio", "measurement_quality", "mood_code"
+  ],
+  "minimum_required_fields": ["rmssd", "mean_hr"],
   "field_aliases": {
-    "date": ["date", "measurement date", "measured"],
-    "measurement_time": ["time", "measurement time", "measured at"],
     "rmssd": ["rmssd", "rms-sd"],
     "mean_hr": ["mean hr", "mean heart rate", "average heart rate", "avg hr"],
-    "readiness": ["readiness", "readiness score", "readiness status"],
     "sdnn": ["sdnn"],
     "pns_index": ["pns index", "parasympathetic nervous system index"],
     "sns_index": ["sns index", "sympathetic nervous system index"],
@@ -28,25 +30,19 @@
     "lf_hf_ratio": ["lf/hf ratio", "lf hf ratio"],
     "physiological_age": ["physiological age"],
     "measurement_quality": ["measurement quality", "quality"],
-    "mood_code": ["mood"],
-    "recovery_status": ["recovery status", "recovery"],
-    "artefact_correction": ["artefact correction", "artifact correction", "corrected beats"],
-    "measurement_duration": ["measurement duration", "duration"]
+    "mood_code": ["mood"]
   },
   "expected_units": {
     "rmssd": ["ms"], "mean_hr": ["bpm"], "sdnn": ["ms"],
     "mean_rr_ms": ["ms"], "poincare_sd1_ms": ["ms"], "poincare_sd2_ms": ["ms"],
     "respiratory_rate_bpm": ["breaths/min"], "lf_power_ms2": ["ms²"],
     "hf_power_ms2": ["ms²"], "lf_power_nu": ["%"], "hf_power_nu": ["%"],
-    "physiological_age": ["years"],
-    "artefact_correction": ["%"], "measurement_duration": ["s", "sec", "min"]
+    "physiological_age": ["years"]
   },
   "valid_ranges": {
-    "rmssd": [0.1, 1000.0], "mean_hr": [20.0, 250.0],
-    "readiness": [0.0, 100.0], "sdnn": [0.1, 1000.0],
+    "rmssd": [0.1, 1000.0], "mean_hr": [20.0, 250.0], "sdnn": [0.1, 1000.0],
     "pns_index": [-20.0, 20.0], "sns_index": [-20.0, 20.0],
-    "stress_index": [0.0, 10000.0], "artefact_correction": [0.0, 100.0],
-    "measurement_duration": [1.0, 7200.0], "mean_rr_ms": [100.0, 3000.0],
+    "stress_index": [0.0, 10000.0], "mean_rr_ms": [100.0, 3000.0],
     "poincare_sd1_ms": [0.1, 1000.0], "poincare_sd2_ms": [0.1, 2000.0],
     "respiratory_rate_bpm": [1.0, 80.0], "lf_power_ms2": [0.0, 10000000.0],
     "hf_power_ms2": [0.0, 10000000.0], "lf_power_nu": [0.0, 100.0],

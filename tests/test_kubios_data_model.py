@@ -51,7 +51,7 @@ class KubiosDataModelTests(unittest.TestCase):
     def test_versions_are_v1(self):
         versions = json.loads((db.BASE_DIR / "config/versions.json").read_text())
         self.assertEqual(versions["kubios_data_model_version"], "1.1.0")
-        self.assertEqual(versions["database_schema_version"], "0.15.0")
+        self.assertEqual(versions["database_schema_version"], db.SCHEMA_MIGRATIONS[-1].version)
 
     def test_migration_creates_three_layers(self):
         tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}

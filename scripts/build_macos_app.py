@@ -94,7 +94,7 @@ def build_app_bundle(
     macos_dir.mkdir(parents=True)
     resources_dir.mkdir()
 
-    executable_path = macos_dir / "daily-recovery-coach"
+    executable_path = macos_dir / "rhythmos"
     source_path = resources_dir / "DashboardApp.swift"
     source_path.write_text(render_swift_source(project_root), encoding="utf-8")
     shutil.copy2(ICON_PATH, resources_dir / "app_icon.icns")
@@ -107,8 +107,8 @@ def build_app_bundle(
 
     info = {
         "CFBundleDisplayName": "RHYTHMOS｜律衡",
-        "CFBundleExecutable": "daily-recovery-coach",
-        "CFBundleIdentifier": "local.daily-recovery-coach.dashboard",
+        "CFBundleExecutable": "rhythmos",
+        "CFBundleIdentifier": "local.rhythmos.dashboard",
         "CFBundleIconFile": "app_icon.icns",
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "RHYTHMOS｜律衡",

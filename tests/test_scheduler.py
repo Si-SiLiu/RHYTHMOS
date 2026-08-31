@@ -14,6 +14,7 @@ from scripts.uninstall_daily_sync_launch_agent import main as uninstall_main
 from src.pipeline.history import SyncHistory
 from src.scheduler.config import (
     DEFAULT_CONFIG,
+    SCHEDULED_SYNC_TIMES,
     SchedulerConfig,
     SchedulerConfigError,
     load_scheduler_config,
@@ -54,6 +55,7 @@ class SchedulerConfigTests(unittest.TestCase):
     def test_default_time_is_strictly_0600(self):
         self.assertEqual(DEFAULT_CONFIG.sync_time, "23:00")
         self.assertEqual((DEFAULT_CONFIG.hour, DEFAULT_CONFIG.minute), (23, 0))
+        self.assertEqual(DEFAULT_CONFIG.scheduled_times, ("12:00", "18:00", "23:00"))
 
     def test_time_and_fields_are_strictly_validated(self):
         valid = {
@@ -122,7 +124,7 @@ class LaunchAgentTests(unittest.TestCase):
             )
             self.assertEqual(
                 value["StartCalendarInterval"],
-                [{"Hour": hour, "Minute": 0} for hour in range(0, 24, 2)],
+                [{"Hour": int(value[:2]), "Minute": int(value[3:])} for value in SCHEDULED_SYNC_TIMES],
             )
             self.assertFalse(value["RunAtLoad"])
             self.assertNotIn("EnvironmentVariables", value)
@@ -145,7 +147,7 @@ class LaunchAgentTests(unittest.TestCase):
             value = plistlib.loads(render_launch_agent(root, config))
             self.assertEqual(
                 value["StartCalendarInterval"],
-                [{"Hour": hour, "Minute": 0} for hour in range(0, 24, 2)],
+                [{"Hour": int(value[:2]), "Minute": int(value[3:])} for value in SCHEDULED_SYNC_TIMES],
             )
 
     def test_install_without_loading_and_uninstall_are_idempotent(self):
@@ -271,7 +273,7 @@ class SchedulerHistoryAndCatchUpTests(unittest.TestCase):
             self.assertEqual(latest["trigger_type"], "catch_up")
             self.assertEqual(latest["warning_count"], 2)
 
-    def test_catch_up_is_read_only_prompt_after_schedule(self):
+    def test_catch_up_is_eligible_after_the_most_recent_missed_slot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler_history = SchedulerHistory(root / "scheduler.db")
@@ -287,7 +289,7 @@ class SchedulerHistoryAndCatchUpTests(unittest.TestCase):
                     lock_path=lock_path,
                     now=before,
                 ).state,
-                "not_due",
+                "eligible",
             )
             due = evaluate_catch_up(
                 DEFAULT_CONFIG,
@@ -296,7 +298,7 @@ class SchedulerHistoryAndCatchUpTests(unittest.TestCase):
                 lock_path=lock_path,
                 now=after,
             )
-            self.assertEqual(due.state, "prompt_required")
+            self.assertEqual(due.state, "eligible")
             self.assertTrue(due.eligible)
             self.assertFalse(sync_path.exists())
             self.assertFalse((root / "scheduler.db").exists())
@@ -356,7 +358,7 @@ class SchedulerHistoryAndCatchUpTests(unittest.TestCase):
             root = Path(directory)
             now = datetime(2026, 7, 15, 23, 1, tzinfo=UTC)
             next_run = next_scheduled_datetime(DEFAULT_CONFIG, now=now)
-            self.assertEqual(next_run, datetime(2026, 7, 16, 23, 0, tzinfo=UTC))
+            self.assertEqual(next_run, datetime(2026, 7, 16, 12, 0, tzinfo=UTC))
             status = get_daily_scheduler_status(
                 DEFAULT_CONFIG,
                 scheduler_history=SchedulerHistory(root / "scheduler.db"),
@@ -413,7 +415,7 @@ class TriggeredRunnerTests(unittest.TestCase):
             self.assertTrue(summary["pipeline_invoked"])
             self.assertTrue(runner.logger.closed)
 
-    def test_scheduled_trigger_skips_after_success_today(self):
+    def test_scheduled_trigger_runs_after_a_successful_sync_today(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             now = datetime(2026, 7, 15, 8, 0, tzinfo=UTC)
@@ -427,17 +429,17 @@ class TriggeredRunnerTests(unittest.TestCase):
                 "pipeline",
                 "completed",
             )
-            called = []
+            calls = []
             summary = run_triggered_pipeline(
                 "scheduled",
                 scheduler_history=SchedulerHistory(root / "scheduler.db"),
                 pipeline_history_path=sync_path,
-                pipeline_factory=lambda: called.append(True),
+                pipeline_factory=lambda: self.FakeRunner(calls),
                 now_provider=lambda: now,
             )
-            self.assertEqual(called, [])
-            self.assertFalse(summary["pipeline_invoked"])
-            self.assertEqual(summary["status"], "already_synced")
+            self.assertEqual(calls, [{"dry_run": False, "trigger_type": "scheduled", "acquire_lock": True}])
+            self.assertTrue(summary["pipeline_invoked"])
+            self.assertEqual(summary["status"], "success")
 
     def test_manual_scheduled_and_catch_up_are_all_accepted(self):
         with tempfile.TemporaryDirectory() as directory:

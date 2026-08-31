@@ -12,7 +12,8 @@ from src.sync_pipeline import PipelineError, PipelineRunner
 from . import TRIGGER_TYPES
 from .history import CatchUpLimitReached, SchedulerHistory
 from .lock import PipelineLockBusy
-from .status import has_successful_sync_today
+from .config import load_scheduler_config
+from .status import evaluate_catch_up
 
 
 TriggerType = Literal["manual", "scheduled", "catch_up"]
@@ -48,9 +49,11 @@ def run_triggered_pipeline(
 ) -> dict:
     """Run the shared pipeline with lock and trigger provenance.
 
-    Scheduled and catch-up requests are skipped after any successful canonical
-    pipeline run on the same local day. Manual requests remain explicitly
-    user-driven and may always run when the lock is available.
+    Scheduled requests run at every LaunchAgent interval so the local dataset
+    stays current throughout the day. Catch-up requests are still limited to
+    one successful canonical pipeline run per local day; manual requests
+    remain explicitly user-driven and may always run when the lock is
+    available.
     """
     if trigger_type not in TRIGGER_TYPES:
         raise ValueError("SCHEDULER_TRIGGER_TYPE_INVALID")
@@ -61,18 +64,21 @@ def run_triggered_pipeline(
         started_at = now_provider()
         if started_at.tzinfo is None:
             raise ValueError("SCHEDULER_TIMESTAMP_MUST_BE_AWARE")
-        if (
-            trigger_type in ("scheduled", "catch_up")
-            and not dry_run
-            and has_successful_sync_today(pipeline_history_path, now=started_at)
-        ):
-            return {
-                "success": True,
-                "status": "already_synced",
-                "trigger_type": trigger_type,
-                "pipeline_invoked": False,
-                "today_synced": True,
-            }
+        if trigger_type == "catch_up" and not dry_run:
+            state = evaluate_catch_up(
+                load_scheduler_config().config,
+                scheduler_history=history,
+                sync_history_path=pipeline_history_path,
+                now=started_at,
+            )
+            if not state.eligible:
+                return {
+                    "success": True,
+                    "status": state.state,
+                    "trigger_type": trigger_type,
+                    "pipeline_invoked": False,
+                    "today_synced": state.today_synced,
+                }
         try:
             invocation_id = history.begin(trigger_type, started_at, dry_run=dry_run)
         except CatchUpLimitReached as exc:

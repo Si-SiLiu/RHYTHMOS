@@ -34,6 +34,9 @@ def load_rules(path=RULES_PATH) -> dict[str, Any]:
         "recovery_score_thresholds", "confidence_thresholds",
         "minimum_data_completeness", "sleep_insufficient_hours",
         "sleep_score_low", "high_load_score", "freshness_days",
+        "training_high_duration_minutes", "training_high_rpe_load",
+        "neural_fatigue_high", "neural_heaviness_high", "neural_lapse_high",
+        "nutrition_min_completeness",
         "training_adjustments", "fixed_schedule",
     }
     if set(rules) != required:
@@ -51,6 +54,11 @@ def load_rules(path=RULES_PATH) -> dict[str, Any]:
         raise LocalCoachConfigError("Confidence thresholds are invalid")
     if not 0 <= rules["minimum_data_completeness"] <= 100:
         raise LocalCoachConfigError("Completeness threshold is invalid")
+    for key in ("training_high_duration_minutes", "training_high_rpe_load",
+                "neural_fatigue_high", "neural_heaviness_high", "neural_lapse_high",
+                "nutrition_min_completeness"):
+        if not isinstance(rules[key], (int, float)) or rules[key] < 0:
+            raise LocalCoachConfigError(f"Invalid combined coaching threshold: {key}")
     expected_adjustments = {"normal", "moderate_reduction", "major_reduction", "technique_only", "mobility_only", "rest"}
     if set(rules["training_adjustments"]) != expected_adjustments:
         raise LocalCoachConfigError("Training adjustment keys are invalid")

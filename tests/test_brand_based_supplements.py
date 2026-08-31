@@ -59,12 +59,21 @@ class BrandBasedSupplementTests(unittest.TestCase):
         connection.execute("PRAGMA foreign_keys=ON")
         connection.executescript(db.SCHEMA)
         for table_name, columns in db.MIGRATIONS.items():
+            if not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone():
+                continue
             existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})")}
             for name, kind in columns.items():
                 if name not in existing:
                     connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {kind}")
         db.ensure_migration_ledger(connection)
-        for migration in db.SCHEMA_MIGRATIONS[:-1]:
+        # Build a genuinely pre-0.15 database.  The migration list has grown
+        # well beyond the original test's ``[:-1]`` assumption.
+        for migration in db.SCHEMA_MIGRATIONS:
+            if migration.sequence >= 15:
+                break
             if migration.sql:
                 connection.executescript(migration.sql)
             db.record_schema_migration(connection, migration)
@@ -89,7 +98,7 @@ class BrandBasedSupplementTests(unittest.TestCase):
 
     def test_04_migration_is_idempotent(self):
         db.apply_migrations(self.connection); db.apply_migrations(self.connection)
-        self.assertEqual(db.current_schema_version(self.connection), "0.15.0")
+        self.assertEqual(db.current_schema_version(self.connection), db.SCHEMA_MIGRATIONS[-1].version)
 
     def test_05_sqlite_integrity(self):
         self.assertEqual(self.connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -117,7 +126,12 @@ class BrandBasedSupplementTests(unittest.TestCase):
             c.execute("""INSERT INTO meal_event_items(meal_event_id,category,position,item_name,quantity,unit,
                 active_component_name,active_amount,active_unit) VALUES(?,'supplement',?,'fish_oil',1,'capsule','EPA+DHA',?,'mg')""", (event_id, position, amount))
         db.apply_migrations(c)
-        self.assertEqual(c.execute("SELECT COUNT(*) FROM supplement_products").fetchone()[0], 2); c.close()
+        self.assertEqual(
+            c.execute(
+                "SELECT COUNT(*) FROM supplement_products WHERE product_name='fish_oil'"
+            ).fetchone()[0],
+            2,
+        ); c.close()
 
     def test_09_product_version_history_fields(self):
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(supplement_products)")}
@@ -151,7 +165,11 @@ class BrandBasedSupplementTests(unittest.TestCase):
     def test_16_formula_versions_do_not_overwrite(self):
         old = self.product(variant="old")
         new = create_product(self.connection, {"brand_name":"Omacor","product_name":"鱼油软胶囊","product_variant":"new","dosage_form":"softgel","default_intake_unit":"capsule","serving_quantity":1,"serving_unit":"capsule","supersedes_product_id":old}, [])
-        self.assertEqual(len(list_products(self.connection)), 2); self.assertEqual(get_product(self.connection, new)["supersedes_product_id"], old)
+        self.assertEqual(get_product(self.connection, new)["supersedes_product_id"], old)
+        self.assertEqual(
+            len([item for item in list_products(self.connection) if item["id"] in {old, new}]),
+            2,
+        )
 
     def test_17_record_confirmed_product_intake(self):
         pid = self.product(); rid = create_meal_record(self.connection, self.meal, [], [{"supplement_product_id":pid,"quantity":1,"unit":"capsule"}])
@@ -180,11 +198,13 @@ class BrandBasedSupplementTests(unittest.TestCase):
 
     def test_24_daily_ui_removes_active_inputs(self):
         source = (ROOT / "src/pages/3_Nutrition.py").read_text()
-        editor = source[source.index("def _supplement_editor"):source.index("def _product_catalog_editor")]
+        editor = source[source.index("def _supplement_editor"):source.index("def _quick_actions")]
         self.assertNotIn("active_amount", editor); self.assertNotIn("active_component_name", editor); self.assertNotIn("active_unit", editor)
 
-    def test_25_daily_ui_displays_brand(self):
-        self.assertIn('"supplement_products.brand"', (ROOT / "src/pages/3_Nutrition.py").read_text())
+    def test_25_daily_ui_omits_brand(self):
+        source = (ROOT / "src/pages/3_Nutrition.py").read_text()
+        editor = source[source.index("def _supplement_editor"):source.index("def _quick_actions")]
+        self.assertNotIn('"brand", "product_name"', editor)
 
     def test_26_daily_ui_displays_product(self):
         self.assertIn('"supplement_products.product_name"', (ROOT / "src/pages/3_Nutrition.py").read_text())
@@ -193,7 +213,7 @@ class BrandBasedSupplementTests(unittest.TestCase):
         source = (ROOT / "src/pages/3_Nutrition.py").read_text(); self.assertIn('"quantity", "unit", "actions"', source)
 
     def test_28_product_selection_sets_default_unit(self):
-        self.assertIn("reset_product_unit", (ROOT / "src/pages/3_Nutrition.py").read_text())
+        self.assertIn("reset_supplement_preferences", (ROOT / "src/pages/3_Nutrition.py").read_text())
 
     def test_29_recent_products(self):
         pid = self.product(); create_meal_record(self.connection, self.meal, [], [{"supplement_product_id":pid,"quantity":1,"unit":"capsule"}])

@@ -28,8 +28,10 @@ def _candidate_value(field, text, config):
     if field == "measurement_time":
         match = TIME_RE.search(text)
         return (parse_time(match.group(0), config), None) if match else (None, None)
-    if field in {"recovery_status"}:
-        cleaned = re.sub(r"^[^:]*:?\s*", "", text).strip()
+    if field in {"recovery_status", "measurement_quality", "mood_code"}:
+        cleaned = str(text).strip()
+        if ":" in cleaned:
+            cleaned = cleaned.split(":", 1)[1].strip()
         return (cleaned, None) if cleaned and not NUMBER_RE.fullmatch(cleaned) else (None, None)
     match = NUMBER_RE.search(text)
     if match:
@@ -44,11 +46,12 @@ def _candidate_value(field, text, config):
 
 
 def _source_without_label(text, alias):
-    normalized = normalized_label(text)
-    if normalized.startswith(alias):
-        words = text.strip().split()
-        alias_count = len(alias.split())
-        return " ".join(words[alias_count:]).lstrip(": ")
+    # Alias tokens and visual tokens are not always one-to-one: ``(n.u.)`` is
+    # one visual token but three normalized tokens. Consume the original text
+    # up to the exact normalized alias instead of counting whitespace words.
+    for end in range(1, len(text) + 1):
+        if normalized_label(text[:end]) == alias:
+            return text[end:].lstrip(": ")
     return text
 
 
@@ -58,9 +61,10 @@ def parse_ocr_result(ocr_result: OCRResult, config=None):
     fields = {}
     warnings = list(ocr_result.processing_warnings)
 
+    capture_fields = set(config["capture_fields"])
     for index, block in enumerate(blocks):
         field, alias = match_field_label(block.text, config)
-        if not field or field in fields:
+        if not field or field not in capture_fields or field in fields:
             continue
         same_line = _source_without_label(block.text, alias)
         value, unit = _candidate_value(field, same_line, config)
@@ -80,7 +84,8 @@ def parse_ocr_result(ocr_result: OCRResult, config=None):
         expected = config["expected_units"].get(field, [])
         unit_match = not expected or unit is not None
         score = field_confidence(
-            min(confidence_values), label_exact=normalized_label(block.text) == alias,
+            min(confidence_values), label_exact=normalized_label(block.text) == alias
+            or _source_without_label(block.text, alias) != block.text,
             unit_match=unit_match, value_valid=valid, adjacent=adjacent,
         )
         if not valid:
@@ -88,19 +93,27 @@ def parse_ocr_result(ocr_result: OCRResult, config=None):
             continue
         fields[field] = ParsedField(value, score, source[:160], unit)
 
-    # Dates and times often appear without an explicit label in Kubios layouts.
-    for field, patterns in (("date", DATE_CANDIDATES), ("measurement_time", (TIME_RE,))):
-        if field in fields:
-            continue
-        for block in blocks:
-            matched = next((pattern.search(block.text) for pattern in patterns if pattern.search(block.text)), None)
-            if not matched:
-                continue
-            value = parse_date(matched.group(0), config) if field == "date" else parse_time(matched.group(0), config)
-            if value:
-                fields[field] = ParsedField(value, field_confidence(block.confidence, False, True, True, False), block.text[:160])
-                break
-
     missing = [name for name in config["minimum_required_fields"] if name not in fields]
     score = overall_confidence(fields, missing, config)
     return ParseResult(fields, missing, warnings, config["parser_version"], score, True)
+
+
+def merge_parse_results(primary: ParseResult, supplement: ParseResult, config=None):
+    """Add valid fields recovered by a focused second OCR pass.
+
+    Existing values always win. A retry is only evidence for a field that was
+    absent, never a reason to silently overwrite the first visible reading.
+    """
+    config = config or load_config()
+    fields = dict(primary.fields)
+    fields.update({name: value for name, value in supplement.fields.items() if name not in fields})
+    missing = [name for name in config["minimum_required_fields"] if name not in fields]
+    warnings = list(dict.fromkeys([*primary.warnings, *supplement.warnings]))
+    return ParseResult(
+        fields,
+        missing,
+        warnings,
+        config["parser_version"],
+        overall_confidence(fields, missing, config),
+        True,
+    )

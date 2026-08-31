@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 import statistics
 
-from .sleep_regularity import SleepRegularityService
+from .sleep_regularity import (
+    SleepRegularityService,
+    calculate_rolling_regularity_scores,
+)
 
 
 def build_sleep_baseline_summary(points, target_date, window_days=28):
@@ -81,17 +84,17 @@ def build_sleep_regularity_points(records, target_date, window_days=28):
         (record for record in records if record and record.get("date")),
         key=lambda record: record["date"],
     )
+    rolling_scores = calculate_rolling_regularity_scores(source)
+    scored_dates = sorted(rolling_scores)
     points = []
     for record in source:
         record_date = date.fromisoformat(str(record["date"]))
         if not start <= record_date < target:
             continue
-        history_through_date = [
-            item for item in source if str(item["date"]) <= record_date.isoformat()
-        ]
-        result = SleepRegularityService.calculate_regularity(history_through_date)
-        if result.score is not None:
-            points.append((record_date.isoformat(), float(result.score)))
+        eligible_dates = [day for day in scored_dates if day <= record_date]
+        score = rolling_scores.get(eligible_dates[-1]) if eligible_dates else None
+        if score is not None:
+            points.append((record_date.isoformat(), float(score)))
     return points
 
 

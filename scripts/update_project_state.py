@@ -26,6 +26,7 @@ RECOVERY_SOURCE_PATH = BASE_DIR / "src" / "recovery_score.py"
 GENERATED_BY = "scripts/update_project_state.py"
 
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+MODEL_ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,127}$")
 PRIORITIES = {"P0", "P1", "P2", "P3"}
 ISSUE_STATUSES = {
     "open",
@@ -496,9 +497,10 @@ def load_versions(path=VERSIONS_PATH):
             raise ProjectStateError(f"{key} must be SemVer: {value!r}")
     model_version = versions["model_version"]
     if model_version != "unreleased" and (
-        not isinstance(model_version, str) or not SEMVER_RE.fullmatch(model_version)
+        not isinstance(model_version, str)
+        or not (SEMVER_RE.fullmatch(model_version) or MODEL_ID_RE.fullmatch(model_version))
     ):
-        raise ProjectStateError("model_version must be SemVer or 'unreleased'")
+        raise ProjectStateError("model_version must be a model identifier, SemVer, or 'unreleased'")
     return versions
 
 

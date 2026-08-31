@@ -9,7 +9,7 @@ import sqlite3
 
 from src.pipeline.history import HISTORY_PATH, SyncHistory
 
-from .config import SchedulerConfig
+from .config import SchedulerConfig, SCHEDULED_SYNC_TIMES
 from .history import SchedulerHistory
 from .lock import LOCK_PATH, pipeline_is_running
 
@@ -84,13 +84,14 @@ def has_successful_sync_today(
 
 
 def scheduled_datetime(config: SchedulerConfig, *, now: datetime | None = None) -> datetime:
+    """Return the latest elapsed fixed refresh slot in local time."""
     local_now = _local_now(now)
-    return local_now.replace(
-        hour=config.hour,
-        minute=config.minute,
-        second=0,
-        microsecond=0,
-    )
+    candidates = [
+        local_now.replace(hour=int(value[:2]), minute=int(value[3:]), second=0, microsecond=0)
+        for value in SCHEDULED_SYNC_TIMES
+    ]
+    elapsed = [candidate for candidate in candidates if candidate <= local_now]
+    return elapsed[-1] if elapsed else candidates[-1] - timedelta(days=1)
 
 
 def next_scheduled_datetime(
@@ -101,8 +102,12 @@ def next_scheduled_datetime(
     if not config.enabled:
         return None
     local_now = _local_now(now)
-    candidate = scheduled_datetime(config, now=local_now)
-    return candidate if candidate > local_now else candidate + timedelta(days=1)
+    candidates = [
+        local_now.replace(hour=int(value[:2]), minute=int(value[3:]), second=0, microsecond=0)
+        for value in SCHEDULED_SYNC_TIMES
+    ]
+    future = [candidate for candidate in candidates if candidate > local_now]
+    return future[0] if future else candidates[0] + timedelta(days=1)
 
 
 def evaluate_catch_up(
@@ -121,13 +126,10 @@ def evaluate_catch_up(
         return CatchUpState(
             "disabled", False, False, today_synced, attempts, "CATCH_UP_DISABLED"
         )
-    if today_synced:
+    due_at = scheduled_datetime(config, now=local_now)
+    if _has_successful_sync_since(sync_history_path, due_at):
         return CatchUpState(
-            "already_synced", False, False, True, attempts, "TODAY_ALREADY_SYNCED"
-        )
-    if local_now < scheduled_datetime(config, now=local_now):
-        return CatchUpState(
-            "not_due", False, False, False, attempts, "SCHEDULE_NOT_REACHED"
+            "already_synced", False, False, today_synced, attempts, "SCHEDULE_ALREADY_SYNCED"
         )
     if config.max_catch_up_runs_per_day == 0 or attempts >= config.max_catch_up_runs_per_day:
         return CatchUpState(
@@ -148,6 +150,29 @@ def evaluate_catch_up(
         False,
         attempts,
         "TODAY_SYNC_MISSING",
+    )
+
+
+def _has_successful_sync_since(history_path: Path | str, due_at: datetime) -> bool:
+    """Avoid a startup catch-up when a later full sync already completed."""
+    path = Path(history_path)
+    if not path.exists():
+        return False
+    connection = sqlite3.connect(path)
+    try:
+        rows = connection.execute(
+            """SELECT finish_time FROM sync_history
+               WHERE step='pipeline' AND success=1
+                 AND message NOT LIKE 'completed_selective:%'
+               ORDER BY id DESC"""
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        connection.close()
+    return any(
+        (finished := _parse_timestamp(value)) is not None and finished >= due_at
+        for (value,) in rows
     )
 
 

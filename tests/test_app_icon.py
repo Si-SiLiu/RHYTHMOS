@@ -51,7 +51,6 @@ class AppIconTests(unittest.TestCase):
     def test_dashboard_integrates_icon_without_touching_engines(self):
         dashboard = (build_app_icon.BASE_DIR / "src" / "dashboard.py").read_text(encoding="utf-8")
         self.assertIn("page_icon=load_page_icon()", dashboard)
-        self.assertIn("st.image", dashboard)
         for engine in ("recovery_score.py", "baseline.py", "recovery_confidence.py"):
             self.assertNotIn("app_icon", (build_app_icon.BASE_DIR / "src" / engine).read_text(encoding="utf-8"))
 

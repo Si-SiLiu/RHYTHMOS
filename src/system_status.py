@@ -3,10 +3,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from .dashboard_data import DB_PATH, is_database_readable
+    from .dashboard_data import DB_PATH, get_data_freshness, is_database_readable
     from .pipeline.history import HISTORY_PATH, get_last_sync
 except ImportError:
-    from dashboard_data import DB_PATH, is_database_readable
+    from dashboard_data import DB_PATH, get_data_freshness, is_database_readable
     from pipeline.history import HISTORY_PATH, get_last_sync
 
 
@@ -54,7 +54,10 @@ def _parse_date(value):
 
 
 def _active_p1_issues(state):
-    closed = {"completed", "closed", "resolved"}
+    # A blocked or external future-program issue belongs in the dedicated
+    # roadmap/governance surfaces. It must not make an otherwise healthy local
+    # data system appear degraded.
+    closed = {"completed", "closed", "resolved", "blocked", "external_constraint"}
     return [
         issue
         for issue in state.get("prioritized_issues", [])
@@ -71,6 +74,7 @@ def load_system_status(
     sync_history_path=HISTORY_PATH,
     database_check=None,
     sync_reader=None,
+    freshness_reader=None,
     today=None,
     stale_after_days=3,
 ):
@@ -81,6 +85,7 @@ def load_system_status(
     versions = versions or {}
     database_check = database_check or is_database_readable
     sync_reader = sync_reader or get_last_sync
+    freshness_reader = freshness_reader or get_data_freshness
     try:
         database_ok = bool(database_check(db_path))
     except (OSError, RuntimeError, ValueError):
@@ -106,7 +111,22 @@ def load_system_status(
         and test_success == (test_failed == 0)
     )
 
+    # project_state.json is a governance snapshot and can lag behind a valid
+    # local pipeline run. The canonical System page should use the live,
+    # aggregate-only freshness result whenever it is reading the real app
+    # state; isolated callers retain the supplied snapshot for deterministic
+    # tests and tooling.
     latest_data_date = state.get("latest_data_date")
+    if Path(state_path).resolve() == STATE_PATH.resolve():
+        try:
+            freshness = freshness_reader(db_path=db_path, today=today) or {}
+        except (OSError, RuntimeError, ValueError):
+            freshness = {}
+        latest_data_date = (
+            freshness.get("latest_daily_metrics_date")
+            or freshness.get("latest_source_data_date")
+            or latest_data_date
+        )
     latest = _parse_date(latest_data_date)
     current_day = today or datetime.now().astimezone().date()
     data_age_days = (current_day - latest).days if latest else None
@@ -139,7 +159,7 @@ def load_system_status(
     if p1_issues:
         warning_reasons.append(f"{len(p1_issues)} active P1 issue(s) remain.")
     sync_warning_count = int(last_sync.get("warning_count", 0) or 0) if last_sync else 0
-    if sync_warning_count:
+    if sync_warning_count and last_sync and bool(last_sync.get("success")):
         warning_reasons.append(
             f"Last sync completed with {sync_warning_count} endpoint warning(s)."
         )

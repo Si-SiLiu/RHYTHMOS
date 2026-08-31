@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RHYTHMOS — App Shell Prototype</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; color: #2d3442; background: #fbfcfe; }
+    button, select { font: inherit; }
+    .stage { min-height: 100vh; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); background: #fbfcfe; }
+    .shell__sidebar { min-height: 100vh; padding: 26px 14px 20px; background: var(--sidebar-surface); border-right: 1px solid var(--sidebar-edge); display: flex; flex-direction: column; }
+    .shell__main { min-width: 0; padding: 52px clamp(28px, 5vw, 88px); background: var(--main-surface); }
+    .brand { padding: 4px 12px 22px; }
+    .brand__wordmark { margin: 0; font-size: 17px; font-weight: 710; letter-spacing: -.015em; line-height: 1.2; color: #273041; }
+    .brand__divider { color: #9ba5b2; font-weight: 400; padding: 0 6px; }
+    .brand__descriptor { margin: 12px 0 0; color: #778293; font-size: 12px; font-weight: 550; line-height: 1.45; letter-spacing: .01em; }
+    .brand__chinese { margin: 2px 0 0; color: #9aa3af; font-size: 12px; line-height: 1.45; }
+    .language { margin: 0 8px 20px; }
+    .language label { display: block; margin: 0 0 7px; color: #7b8594; font-size: 11px; font-weight: 650; letter-spacing: .04em; }
+    .language select { width: 100%; height: 34px; padding: 0 28px 0 10px; border: 1px solid #dfe5ed; border-radius: 7px; color: #485264; background: #fff; appearance: auto; outline: none; }
+    .language select:focus-visible { outline: 2px solid #7c8da3; outline-offset: 2px; }
+    .nav { display: grid; gap: 2px; }
+    .nav__group { display: grid; gap: 2px; }
+    .nav__group + .nav__group { margin-top: 18px; }
+    .nav__label { margin: 0 10px 7px; color: #98a1ae; font-size: 10px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
+    .nav__item { position: relative; min-height: 38px; display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: var(--item-radius); padding: 0 10px; color: #667181; background: transparent; cursor: pointer; text-align: left; font-size: 14px; font-weight: 560; transition: background-color 120ms ease-out, color 120ms ease-out; }
+    .nav__item svg { width: 16px; height: 16px; flex: none; stroke: currentColor; stroke-width: 1.65; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    @media (hover: hover) and (pointer: fine) { .nav__item:hover { color: #3e495a; background: rgba(117, 130, 148, .065); } }
+    .nav__item:active { transform: scale(.985); }
+    .nav__item:focus-visible { outline: 2px solid #8292a8; outline-offset: 2px; }
+    .nav__item[aria-current="page"] { color: #273041; font-weight: 680; background: var(--active-surface); }
+    .nav__item[aria-current="page"]::before { content: ""; position: absolute; left: var(--marker-offset); width: var(--marker-width); height: var(--marker-height); border-radius: 999px; background: #536980; }
+    .sidebar-footer { margin-top: auto; padding: 20px 10px 0; color: #96a0ad; font-size: 11px; line-height: 1.5; }
+    .sidebar-footer::before { content: ""; display: block; height: 1px; margin: 0 0 14px; background: #e4e9f0; }
+    .main__eyebrow { margin: 0 0 11px; color: #7d8795; font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+    .main__title { margin: 0; color: #273041; font-size: clamp(28px, 3.2vw, 40px); font-weight: 690; letter-spacing: -.035em; line-height: 1.1; }
+    .main__caption { max-width: 48rem; margin: 13px 0 32px; color: #6d7888; font-size: 15px; line-height: 1.65; }
+    .recovery-preview { max-width: 980px; display: grid; gap: 16px; }
+    .summary-card, .metric-card { border: 1px solid rgba(117, 130, 148, .18); border-radius: 14px; background: rgba(117, 130, 148, .065); }
+    .summary-card { padding: 23px 25px; }
+    .summary-card__kicker { color: #7a8594; font-size: 12px; font-weight: 650; }
+    .summary-card__title { margin: 8px 0 6px; color: #293345; font-size: 25px; font-weight: 680; letter-spacing: -.025em; }
+    .summary-card__copy { margin: 0; color: #687486; font-size: 14px; line-height: 1.6; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .metric-card { min-height: 176px; padding: 20px; }
+    .metric-card__top { display: flex; justify-content: space-between; gap: 12px; color: #3c4757; font-size: 14px; font-weight: 650; }
+    .metric-card__status { color: #728091; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .metric-card__value { margin: 32px 0 4px; color: #293345; font-size: 30px; font-weight: 690; letter-spacing: -.03em; }
+    .metric-card__unit, .metric-card__meta { color: #718092; font-size: 12px; }
+    .metric-card__meta { margin-top: 24px; }
+    .shell--quiet { --sidebar-width: 248px; --sidebar-surface: #f6f8fa; --sidebar-edge: #e3e8ee; --main-surface: #fcfdfe; --active-surface: transparent; --item-radius: 6px; --marker-offset: 3px; --marker-width: 2px; --marker-height: 16px; }
+    .shell--quiet .language { margin-top: 2px; }
+    .shell--quiet .nav__label { display: none; }
+    .shell--quiet .nav__group + .nav__group { margin-top: 12px; }
+    .shell--quiet .nav__item { min-height: 36px; }
+    .shell--quiet .nav__item[aria-current="page"] { background: rgba(117, 130, 148, .045); }
+    .shell--quiet .nav__item[aria-current="page"]::before { left: 1px; }
+    .shell--workspace { --sidebar-width: 292px; --sidebar-surface: #f3f6f9; --sidebar-edge: #dce3eb; --main-surface: #fbfcfe; --active-surface: rgba(117, 130, 148, .09); --item-radius: 8px; --marker-offset: auto; --marker-width: 0; --marker-height: 0; }
+    .shell--workspace .brand { padding: 9px 12px 26px; }
+    .shell--workspace .brand__wordmark { font-size: 18px; letter-spacing: .005em; }
+    .shell--workspace .brand__descriptor { color: #647286; font-weight: 640; }
+    .shell--workspace .language { padding: 10px; margin: 0 0 22px; border: 1px solid #dce4ed; border-radius: 10px; background: rgba(255,255,255,.56); }
+    .shell--workspace .language label { margin-bottom: 6px; }
+    .shell--workspace .language select { border-color: #d4dce7; background: rgba(255,255,255,.82); }
+    .shell--workspace .nav__item { min-height: 40px; padding: 0 12px; }
+    .shell--workspace .nav__item[aria-current="page"]::before { display: none; }
+    .shell--workspace .nav__item[aria-current="page"] svg { stroke-width: 2; }
+    .shell--workspace .sidebar-footer::before { background: #dce4ed; }
+    .shell--os { --sidebar-width: 268px; --sidebar-surface: #f8f9fb; --sidebar-edge: #e0e5eb; --main-surface: #fff; --active-surface: rgba(84, 105, 128, .09); --item-radius: 10px; --marker-offset: auto; --marker-width: 0; --marker-height: 0; }
+    .shell--os .brand { position: relative; padding: 11px 12px 25px 22px; }
+    .shell--os .brand::before { content: "R"; position: absolute; left: 0; top: 9px; width: 14px; height: 14px; display: grid; place-items: center; border: 1px solid #8794a5; border-radius: 50%; color: #68798c; font-size: 8px; font-weight: 700; }
+    .shell--os .brand__wordmark { font-size: 16px; letter-spacing: .045em; }
+    .shell--os .brand__descriptor { margin-top: 13px; font-size: 11px; letter-spacing: .055em; text-transform: uppercase; }
+    .shell--os .language { margin: 0 8px 23px; }
+    .shell--os .nav__group { gap: 4px; }
+    .shell--os .nav__item { min-height: 42px; padding: 0 12px; }
+    .shell--os .nav__item svg { width: 17px; height: 17px; }
+    .shell--os .nav__item[aria-current="page"] { box-shadow: inset 0 0 0 1px rgba(117,130,148,.16); }
+    .shell--os .nav__item[aria-current="page"]::before { display: none; }
+    .shell--os .sidebar-footer { padding-left: 12px; }
+    @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .shell__sidebar { min-height: auto; padding: 18px 14px 14px; border-right: 0; border-bottom: 1px solid var(--sidebar-edge); } .brand { padding-bottom: 16px; } .brand__descriptor, .brand__chinese, .language label, .nav__label, .sidebar-footer { display: none; } .language { margin: 0 8px 12px; } .nav { grid-template-columns: repeat(4, minmax(0,1fr)); gap: 4px; } .nav__group { display: contents; } .nav__group + .nav__group { margin-top: 0; } .nav__item { justify-content: center; padding: 0 5px; font-size: 0; } .nav__item svg { width: 18px; height: 18px; } .nav__item[aria-current="page"]::before { left: 50%; bottom: 2px; top: auto; width: 12px; height: 2px; transform: translateX(-50%); } .shell__main { padding: 32px 20px 90px; } .metric-grid { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { .nav__item { transition: none; } }
+    .proto-picker {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px;
+      border-radius: 999px;
+      background: rgba(10, 10, 10, 0.82);
+      -webkit-backdrop-filter: blur(12px) saturate(1.4);
+      backdrop-filter: blur(12px) saturate(1.4);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+        0 8px 24px rgba(0, 0, 0, 0.24),
+        0 2px 6px rgba(0, 0, 0, 0.12);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      line-height: 1;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .proto-picker-highlight {
+      position: absolute;
+      top: 4px;
+      left: 0;
+      height: 28px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      will-change: transform;
+    }
+    .proto-picker[data-ready] .proto-picker-highlight {
+      transition:
+        transform 250ms cubic-bezier(0.23, 1, 0.32, 1),
+        width 250ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .proto-picker[data-ready] .proto-picker-highlight { transition: none; }
+    }
+    .proto-picker-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      height: 28px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.55);
+      font: inherit;
+      cursor: pointer;
+      transition: color 150ms ease-out;
+    }
+    .proto-picker-item:hover { color: rgba(255, 255, 255, 0.85); }
+    .proto-picker-item:active { transform: scale(0.97); }
+    .proto-picker-item:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: 2px; }
+    .proto-picker-item[data-active] { color: #fff; }
+    .proto-picker-divider { width: 1px; height: 16px; margin: 0 4px; background: rgba(255, 255, 255, 0.12); }
+    .proto-picker-replay { padding: 0 10px; font-size: 14px; }
+    .proto-picker[data-position="top"] { bottom: auto; top: 24px; }
+  </style>
+</head>
+<body>
+  <main id="stage" class="stage"></main>
+  <nav class="proto-picker" aria-label="Prototype variants">
+    <span class="proto-picker-highlight" aria-hidden="true"></span>
+    <button class="proto-picker-item" data-active aria-current="true">Quiet</button>
+    <button class="proto-picker-item">Workspace</button>
+    <button class="proto-picker-item">Performance OS</button>
+  </nav>
+  <script>
+    const icons = {
+      exercise: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19l3-5 3 2 2-4 4 2"/><path d="M8.5 7.5a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6Z"/></svg>',
+      sleep: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.1 8.1 0 0 1 8.8 4 8.2 8.2 0 1 0 20 15.2Z"/></svg>',
+      recovery: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.7c0 5.6-8.8 10.6-8.8 10.6S3.2 14.3 3.2 8.7A4.7 4.7 0 0 1 12 6.4a4.7 4.7 0 0 1 8.8 2.3Z"/></svg>',
+      nutrition: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20c4.5 0 7-2.6 7-7.2C19 7.4 15.4 4 10.7 4 6.2 4 5 7 5 10.5 5 15.3 7.5 20 12 20Z"/><path d="M7 15c3-1 5.2-3.3 6.4-6.8"/></svg>',
+      plan: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M8 11h8M8 15h5"/></svg>',
+      neural: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4a3 3 0 0 0-5.2 2.1A3.3 3.3 0 0 0 5.4 12a3.2 3.2 0 0 0 1.8 5.8A3.2 3.2 0 0 0 12 20a3.2 3.2 0 0 0 4.8-2.2A3.2 3.2 0 0 0 18.6 12a3.3 3.3 0 0 0 1.6-5.9A3 3 0 0 0 15 4"/><path d="M9 4c1 1 1.4 2.1 1.4 3.4V20M15 4c-1 1-1.4 2.1-1.4 3.4"/></svg>',
+      personal: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg>',
+      settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .2 2.2-2 1.2-1.7-1.3a7.5 7.5 0 0 1-2 .8L13.5 20h-3l-.4-2.1a7.5 7.5 0 0 1-2-.8l-1.7 1.3-2-1.2.2-2.2a7.6 7.6 0 0 1-1-1.8L2 12l1.6-1.2a7.6 7.6 0 0 1 1-1.8l-.2-2.2 2-1.2 1.7 1.3a7.5 7.5 0 0 1 2-.8l.4-2.1h3l.4 2.1a7.5 7.5 0 0 1 2 .8l1.7-1.3 2 1.2-.2 2.2a7.6 7.6 0 0 1 1 1.8L22 12l-1.6 1.2a7.6 7.6 0 0 1-1 1.8Z"/></svg>'
+    };
+    const navGroups = [
+      [['exercise','训练'],['sleep','睡眠'],['recovery','恢复'],['nutrition','营养']],
+      [['plan','表现计划'],['neural','认知训练']],
+      [['personal','我的'],['settings','设置']]
+    ];
+    const descriptors = { exercise: '训练负荷与计划执行', sleep: '夜间恢复与睡眠结构', recovery: '今日自主神经恢复状态', nutrition: '营养记录与当日目标', plan: '表现周期与训练计划', neural: '认知状态与训练', personal: '个人档案与长期趋势', settings: '应用偏好与数据连接' };
+    function navButton([key, label], active) { return `<button class="nav__item" data-page="${key}" ${active ? 'aria-current="page"' : ''}>${icons[key]}<span>${label}</span></button>`; }
+    function renderShell(kind) {
+      const groupNames = kind === 'workspace' ? ['每日状态', '表现系统', '账户'] : ['', '', ''];
+      return `<div class="shell shell--${kind}"><aside class="shell__sidebar">
+        <header class="brand"><h1 class="brand__wordmark">RHYTHMOS<span class="brand__divider">|</span>律衡</h1><p class="brand__descriptor">Personal Performance OS</p><p class="brand__chinese">个人表现与恢复系统</p></header>
+        <div class="language"><label for="language">界面语言</label><select id="language" aria-label="界面语言"><option>简体中文</option><option>繁體中文</option><option>English</option></select></div>
+        <nav class="nav" aria-label="主导航">${navGroups.map((group, index) => `<div class="nav__group">${groupNames[index] ? `<p class="nav__label">${groupNames[index]}</p>` : ''}${group.map(item => navButton(item, item[0] === 'recovery')).join('')}</div>`).join('')}</nav>
+        <footer class="sidebar-footer">RHYTHMOS · 本地优先<br>个人数据仅用于你的表现洞察</footer>
+      </aside><section class="shell__main">
+        <p class="main__eyebrow">今日 / 恢复</p><h2 class="main__title" data-main-title>恢复情况</h2><p class="main__caption" data-main-caption>用可解释的个人基线，理解今天的身体状态与训练准备度。</p>
+        <div class="recovery-preview"><article class="summary-card"><div class="summary-card__kicker">今日恢复总览</div><h3 class="summary-card__title">恢复情况较好</h3><p class="summary-card__copy">RMSSD、静息心率等可用信号整体偏积极；结合主观状态调整训练。</p></article><div class="metric-grid"><article class="metric-card"><div class="metric-card__top"><span>起床后 RMSSD（ms）</span><span class="metric-card__status">接近个人范围</span></div><div class="metric-card__value">25 <span class="metric-card__unit">ms</span></div><div class="metric-card__meta">个人基线中心值 · 25 ms</div></article><article class="metric-card"><div class="metric-card__top"><span>起床后静息心率</span><span class="metric-card__status">支持恢复</span></div><div class="metric-card__value">63 <span class="metric-card__unit">bpm</span></div><div class="metric-card__meta">个人基线中心值 · 65 bpm</div></article></div></div>
+      </section></div>`;
+    }
+    const variants = [() => renderShell('quiet'), () => renderShell('workspace'), () => renderShell('os')];
+    const stage = document.getElementById('stage');
+    const picker = document.querySelector('.proto-picker');
+    const highlight = picker.querySelector('.proto-picker-highlight');
+    const items = [...picker.querySelectorAll('.proto-picker-item:not(.proto-picker-replay)')];
+    let current = 0;
+    function moveHighlight() { const el = items[current]; highlight.style.width = el.offsetWidth + 'px'; highlight.style.transform = `translateX(${el.offsetLeft}px)`; }
+    function bindShell() {
+      stage.querySelectorAll('.nav__item').forEach(button => button.addEventListener('click', () => {
+        stage.querySelectorAll('.nav__item').forEach(item => item.removeAttribute('aria-current'));
+        button.setAttribute('aria-current', 'page');
+        const key = button.dataset.page;
+        stage.querySelector('[data-main-title]').textContent = button.textContent.trim();
+        stage.querySelector('[data-main-caption]').textContent = descriptors[key];
+        stage.querySelector('.main__eyebrow').textContent = `导航 / ${button.textContent.trim()}`;
+      }));
+    }
+    function mount(i) { stage.innerHTML = ''; requestAnimationFrame(() => { stage.innerHTML = variants[i](); bindShell(); }); }
+    function setActive(i) { if (i < 0 || i >= variants.length) return; current = i; items.forEach((el, j) => { el.toggleAttribute('data-active', j === i); if (j === i) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current'); }); moveHighlight(); const url = new URL(location); url.searchParams.set('v', i + 1); history.replaceState(null, '', url); mount(i); }
+    items.forEach((el, i) => el.addEventListener('click', () => setActive(i)));
+    window.addEventListener('resize', moveHighlight);
+    document.addEventListener('keydown', (e) => { if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return; if (e.metaKey || e.ctrlKey || e.altKey) return; const num = parseInt(e.key, 10); if (num >= 1 && num <= variants.length) setActive(num - 1); else if (e.key === 'ArrowRight') setActive((current + 1) % variants.length); else if (e.key === 'ArrowLeft') setActive((current - 1 + variants.length) % variants.length); });
+    setActive((parseInt(new URLSearchParams(location.search).get('v'), 10) || 1) - 1);
+    requestAnimationFrame(() => requestAnimationFrame(() => picker.setAttribute('data-ready', '')));
+  </script>
+</body>
+</html>

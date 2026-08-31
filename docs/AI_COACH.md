@@ -1,30 +1,28 @@
 # AI Coach Architecture & Safety Design
 
-> Status: Cloud governance approved; runtime not implemented  
+> Status: OpenAI API runtime enabled with standard API retention
 > Design date: 2026-07-11  
-> Runtime model version: `unreleased`
+> Runtime model version: `gpt-5.4`
 
-Provider evaluation is currently blocked. No candidate meets both deployment
-location and Zero Data Retention gates. See
-[CLOUD_PROVIDER_EVALUATION.md](CLOUD_PROVIDER_EVALUATION.md).
-The implementation threat model is reviewed in
+The product owner has accepted the OpenAI API's standard retention policy for
+this local application. The implementation threat model is reviewed in
 [AI_COACH_THREAT_MODEL.md](AI_COACH_THREAT_MODEL.md).
 
 ## Purpose
 
-Personal Logging `0.15.0` does not implement Cloud AI Coach. AI Context Export
-is a local file projection requiring manual review/upload and cannot bypass provider approval.
+The Cloud AI Coach receives a minimum-necessary, schema-validated daily summary
+after the deterministic pipeline completes. It does not upload local CSV files,
+database files, raw device records, tokens, or personal identifiers.
 
-AI Coach is a future read-only explanation layer downstream of the deterministic
+AI Coach is a read-only explanation layer downstream of the deterministic
 Recovery, Baseline, and Confidence engines. It may translate persisted facts into
 plain-language summaries, limitations, reviewable actions, and follow-up
 questions. It is not a scoring engine, medical device, clinician, or emergency
 service.
 
-Cloud deployment is approved in principle. No named provider, exact model,
-external API, prompt runtime, database table, or Dashboard feature is
-implemented. A runtime call remains prohibited until the named provider and
-exact model satisfy the approved policy below.
+The current runtime uses OpenAI's Responses API with `gpt-5.4`, `store: false`,
+and no tools. Validated output is saved locally per analysis date and displayed
+in 综合反馈. The deterministic engines remain the source of truth.
 
 ## Architecture Boundary
 
@@ -36,12 +34,29 @@ The future dependency direction is:
   query boundary.
 - `src/ai_coach_context.py` implements the provider-independent TB-2 projection.
   `build_approved_context` checks machine approval before constructing a
-  provider-bound object; the committed blocked record prevents construction.
+  provider-bound object; the committed approval record prevents configuration drift.
 - The model adapter is provider-neutral and has no database, OAuth, filesystem,
   network-tool, or Dashboard write access.
 - The schema validator rejects incomplete or malformed output.
 - Deterministic score explanations remain the fallback and source of truth.
 - Generated text never feeds Baseline, Recovery, Confidence, import, or sync.
+
+### Provider and jurisdiction boundary
+
+The runtime exposes an explicit `ProviderAdapter` boundary for future
+OpenAI-compatible and non-OpenAI providers. Each adapter owns only its
+provider's authentication, request serialization, and response extraction;
+the RHYTHMOS context, contract, safety, evaluation, and audit layers remain
+shared. The current implementation registers only the OpenAI Responses adapter.
+
+Future deployments may provide an explicit jurisdiction route containing a
+provider id, processing region, credential environment variable, and separate
+approval record. Routing never infers location from IP, locale, billing data,
+or account metadata; it has no wildcard or silent fallback. An unknown route,
+unregistered adapter, or provider/approval mismatch fails closed to the
+deterministic fallback. Adding a route does not approve a provider: every route
+still requires independent evidence for region support, retention, training,
+human review, exact model, and product/architecture approval.
 
 ## Minimum Necessary Input Allowlist
 
@@ -95,11 +110,11 @@ redacted, preventing uncertain identifiers from leaving the local boundary.
 
 ## Approved Retention Policy
 
-- Provider account/API configuration must disable provider training, model
-  improvement, and human review of request content.
-- Zero Data Retention is required. If the named provider cannot contractually
-  and technically provide it for the selected endpoint, the adapter fails
-  closed and no request is sent.
+- API inputs are not used to train or improve OpenAI models unless the account
+  explicitly opts in. This application does not opt in.
+- The product owner accepts standard OpenAI API abuse-monitoring retention,
+  which may retain request and response content for up to 30 days. ZDR is not
+  claimed or required for this runtime.
 - Request and response bodies are forbidden in application, proxy, error, and
   observability logs.
 - The local audit store keeps validated output for 90 days so the user can
@@ -123,7 +138,7 @@ The proposed columns are:
 - `analysis_date` TEXT and `input_snapshot_digest` TEXT;
 - `provider_id`, `model_version`, `prompt_version`,
   `output_schema_version`, and `safety_policy_version` TEXT;
-- `provider_mode` TEXT constrained to `cloud_zdr`;
+- `provider_mode` TEXT constrained to the approved provider mode;
 - `status` TEXT constrained to validated lifecycle values;
 - `safety_outcome` TEXT containing only an allowlisted category;
 - `response_json` TEXT nullable, containing only schema-validated output;
@@ -194,23 +209,15 @@ embedded in user-supplied data.
 
 The machine gate authority is
 [`ai_coach_provider_approval.json`](../config/ai_coach_provider_approval.json).
-`src/ai_coach_approval.py` must pass before any future health context is
-serialized. The committed record is intentionally `blocked` with implementation
-authorization false and contains no provider, model, endpoint, or region.
+`src/ai_coach_approval.py` must pass before any health context is serialized.
+The committed record identifies the approved provider, exact model, endpoint,
+and retention mode; it fails closed if that configuration changes.
 
-Cloud use, the field allowlist, retention policy, audit migration plan, and
-evaluation thresholds are approved. Before implementation, the user must still
-explicitly approve:
-
-1. named cloud provider, exact model identifier, endpoint, and processing region;
-2. evidence that training/human review are disabled and Zero Data Retention is enabled;
-3. credential storage, timeout, retry, and failure behavior;
-4. the completed privacy threat model and measured synthetic evaluation report;
-5. execution of a future dedicated Cloud AI audit migration after a verified database backup; Local Coach migration `0.4.0` does not satisfy this gate.
-
-Official provider evaluation found no currently eligible candidate. This gate
-cannot be satisfied through unsupported-region access, a proxy, or a generic
-privacy statement that does not guarantee zero request/response retention.
+The product owner approved OpenAI, `gpt-5.4`, the Responses endpoint, existing
+credential storage, one-request/no-retry behavior, and standard API retention
+on 2026-08-24. The dedicated `ai_feedback_outputs` migration stores only the
+validated output and audit metadata locally; it never stores an outbound
+request payload.
 
 ## Failure and Degradation
 
@@ -225,8 +232,7 @@ privacy statement that does not guarantee zero request/response retention.
 
 ## Versioning and Replay
 
-`model_version` remains `unreleased` until a concrete runtime is approved and
-implemented. Prompt, output schema, safety policy, and tools contract versions
+`model_version` is the approved `gpt-5.4` snapshot alias. Prompt, output schema, safety policy, and tools contract versions
 are independent. A version change must not silently rewrite historical output.
 Replay uses the recorded input digest and version envelope; the original
 deterministic score and confidence records remain authoritative.

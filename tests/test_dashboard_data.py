@@ -207,6 +207,11 @@ class DashboardDataTests(unittest.TestCase):
                  nutrition_advice_json,recovery_advice_json,rationale_json,data_limitations_json,safety_notices_json,
                  engine_version,rule_config_version,generated_without_cloud_ai)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+            connection.execute(
+                """INSERT INTO recovery_scores
+                   (date,recovery_score,activity_load_score,training_load_score,score_version,recommendation)
+                   VALUES ('2026-07-08', 75, 20, 20, 'v1.0', '适度训练')"""
+            )
             connection.commit()
             result = dashboard_data.get_latest_local_coach(db_path)
             self.assertEqual(result["date"], "2026-07-08")

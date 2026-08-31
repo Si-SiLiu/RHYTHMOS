@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from .food_catalog import (
-    NUTRIENT_COLUMNS, calculate_food_values, food_catalog_by_id,
+    NUTRIENT_COLUMNS, calculate_food_values, food_catalog_by_id, food_display_name,
 )
 from .supplements import summarize_supplements, validate_supplement
 from .validation import MEAL_TYPES
@@ -80,7 +80,11 @@ def _clean_food_items(connection: sqlite3.Connection, items: list[dict]) -> list
             "item_type": item_type,
             **calculated,
             "category_tags_json": json.dumps(tags, ensure_ascii=False, separators=(",", ":")),
-            "nutrition_source": selected.get("nutrition_source") if selected else None,
+            "nutrition_source": (
+                "label_ocr_confirmed"
+                if calculated.get("_ocr_profile_applied")
+                else selected.get("nutrition_source") if selected else None
+            ),
             "classification_source": "catalog" if selected else "unclassified",
             "user_confirmed": 1 if raw.get("user_confirmed") else 0,
             "brand": str(raw.get("brand") or "").strip() or None,
@@ -117,7 +121,10 @@ def _clean_supplements(connection: sqlite3.Connection, supplements: list[dict], 
         })
         intake = normalize_intake({
             "supplement_product_id": selected["id"] if selected else None,
-            "custom_brand_name": None if selected else raw.get("custom_brand_name"),
+            # A scanned label may add a user-entered brand to a catalog
+            # product. Keep that intake-specific detail without changing the
+            # shared product profile.
+            "custom_brand_name": raw.get("custom_brand_name"),
             "custom_product_name": None if selected else name,
             "quantity": compatibility["quantity"],
             "unit": compatibility["unit"],
@@ -197,9 +204,9 @@ def save_meal_record(
                    uuid,meal_record_id,food_catalog_id,custom_food_name,item_type,
                    quantity,unit,normalized_weight_g,normalized_volume_ml,
                    category_tags_json,calories_kcal,protein_g,carbohydrate_g,
-                   fat_g,fiber_g,water_ml,caffeine_mg,alcohol_g,nutrition_source,
+                   fat_g,fiber_g,water_ml,caffeine_mg,alcohol_g,sodium_mg,nutrition_source,
                    classification_source,user_confirmed,brand,cooking_method,notes
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [(
                 item["uuid"], record_id, item["food_catalog_id"], item["custom_food_name"],
                 item["item_type"], item["quantity"], item["unit"],
@@ -269,6 +276,33 @@ def get_meal_record(connection: sqlite3.Connection, record_id: int) -> dict | No
         """SELECT * FROM meal_items WHERE meal_record_id=? AND deleted_at IS NULL
            ORDER BY id""", (record_id,)
     ).fetchall()]
+    # Older records may have stored a branded catalog display name as
+    # custom_food_name before branded labels were accepted by the selector.
+    # Resolve those names on read so historical totals immediately use the
+    # linked catalog, including any confirmed OCR nutrition profile.
+    catalog = food_catalog_by_id(connection)
+    name_lookup = {}
+    for item in catalog.values():
+        for name in (
+            item.get("canonical_name"), item.get("display_name_zh"),
+            item.get("display_name_en"), food_display_name(item),
+        ):
+            normalized = str(name or "").strip().casefold()
+            if normalized:
+                name_lookup[normalized] = item
+    for item in record["items"]:
+        if item.get("food_catalog_id") is not None:
+            continue
+        selected = name_lookup.get(str(item.get("custom_food_name") or "").strip().casefold())
+        if not selected:
+            continue
+        item["food_catalog_id"] = selected["id"]
+        item["custom_food_name"] = None
+        calculated = calculate_food_values(selected, item.get("quantity"), item.get("unit"))
+        for nutrient in NUTRIENT_COLUMNS:
+            item[nutrient] = calculated.get(nutrient)
+        if calculated.get("_ocr_profile_applied"):
+            item["nutrition_source"] = "label_ocr_confirmed"
     record["supplements"] = _record_supplements(connection, record["legacy_meal_event_id"])
     record["summary"] = summarize_meal(record["items"])
     return record

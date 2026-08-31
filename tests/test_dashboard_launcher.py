@@ -53,6 +53,19 @@ class DashboardLauncherTests(unittest.TestCase):
                 "http://127.0.0.1:8501",
             )
 
+    def test_runtime_fingerprint_includes_cognitive_component_assets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "config").mkdir()
+            (root / "src" / "cognitive_component_frontend").mkdir(parents=True)
+            (root / "locales").mkdir()
+            (root / "config" / "versions.json").write_text('{"app_version":"1"}', encoding="utf-8")
+            component = root / "src" / "cognitive_component_frontend" / "index.html"
+            component.write_text("first", encoding="utf-8")
+            original = dashboard_launcher.runtime_fingerprint(root)
+            component.write_text("second", encoding="utf-8")
+            self.assertNotEqual(original, dashboard_launcher.runtime_fingerprint(root))
+
     def test_render_swift_source_embeds_project_path(self):
         source = render_swift_source(dashboard_launcher.BASE_DIR)
         self.assertIn(str(dashboard_launcher.BASE_DIR), source)
@@ -66,6 +79,21 @@ class DashboardLauncherTests(unittest.TestCase):
             self.assertIn(selector, source)
             self.assertIn(key, source)
 
+    def test_render_swift_source_connects_native_file_picker(self):
+        source = render_swift_source(dashboard_launcher.BASE_DIR)
+        self.assertIn("WKUIDelegate", source)
+        self.assertIn("webView.uiDelegate = self", source)
+        self.assertIn("runOpenPanelWith parameters: WKOpenPanelParameters", source)
+        self.assertIn("NSOpenPanel()", source)
+
+    def test_render_swift_source_launches_dashboard_without_terminal(self):
+        source = render_swift_source(dashboard_launcher.BASE_DIR)
+        self.assertIn('appendingPathComponent(".venv/bin/python")', source)
+        self.assertIn('appendingPathComponent("src/dashboard_launcher.py")', source)
+        self.assertIn('process.arguments = [launcherURL.path, "--no-browser"]', source)
+        self.assertNotIn('"-a", "Terminal"', source)
+        self.assertNotIn("daily-recovery-coach-launch", source)
+
     def test_build_app_bundle_creates_valid_macos_structure(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "Recovery.app"
@@ -75,7 +103,7 @@ class DashboardLauncherTests(unittest.TestCase):
                 should_sign=False,
                 should_compile=False,
             )
-            executable = built_path / "Contents" / "MacOS" / "daily-recovery-coach"
+            executable = built_path / "Contents" / "MacOS" / "rhythmos"
             info_path = built_path / "Contents" / "Info.plist"
             self.assertTrue(executable.is_file())
             self.assertTrue(executable.stat().st_mode & 0o111)

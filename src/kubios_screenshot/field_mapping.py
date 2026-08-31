@@ -21,8 +21,14 @@ def alias_index(config=None):
 
 def match_field_label(text, config=None):
     normalized = normalized_label(text)
+    matches = []
     for field, aliases in alias_index(config).items():
         for alias in aliases:
             if normalized == alias or normalized.startswith(alias + " "):
-                return field, alias
+                matches.append((len(alias), field, alias))
+    if matches:
+        # Prefer the most specific label across every field. For example,
+        # ``LF power n.u.`` must never be consumed by the shorter ``LF power``.
+        _, field, alias = max(matches, key=lambda match: match[0])
+        return field, alias
     return None, None

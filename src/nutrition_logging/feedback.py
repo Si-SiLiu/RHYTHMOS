@@ -82,14 +82,21 @@ def load_nutrition_target_snapshot(connection, day: str) -> dict[str, tuple[floa
 
 
 def recommended_nutrition_targets(connection) -> dict[str, tuple[float, float | None]]:
-    """Offer conservative, editable targets from saved body data and weight goal."""
+    """Calculate automatic targets from body data, training goals, and energy adjustment."""
     body = connection.execute(
         "SELECT weight_kg,height_cm FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC,is_primary DESC,id DESC LIMIT 1"
     ).fetchone()
-    goals = connection.execute("SELECT target_weight_kg FROM personal_goals WHERE id=1").fetchone()
+    goals = connection.execute(
+        "SELECT target_weight_kg,training_goal,daily_calorie_adjustment_kcal FROM personal_goals WHERE id=1"
+    ).fetchone()
     profile = connection.execute("SELECT gender,birth_date,height_cm FROM personal_profile WHERE id=1").fetchone()
     current_weight = float(body["weight_kg"]) if body and body["weight_kg"] else None
     target_weight = float(goals["target_weight_kg"]) if goals and goals["target_weight_kg"] else None
+    training_goal = str(goals["training_goal"] or "maintenance") if goals else "maintenance"
+    configured_adjustment = (
+        float(goals["daily_calorie_adjustment_kcal"])
+        if goals and goals["daily_calorie_adjustment_kcal"] is not None else None
+    )
     reference_weight = target_weight or current_weight
     if reference_weight is None:
         return {}
@@ -103,9 +110,20 @@ def recommended_nutrition_targets(connection) -> dict[str, tuple[float, float | 
         age = date.today().year - born.year - ((date.today().month, date.today().day) < (born.month, born.day))
         gender_adjustment = 5 if profile["gender"] == "male" else -161 if profile["gender"] == "female" else -78
         maintenance = (10 * reference_weight + 6.25 * height - 5 * age + gender_adjustment) * 1.45
-        adjustment = -350 if target_weight and current_weight and target_weight < current_weight else 250 if target_weight and current_weight and target_weight > current_weight else 0
+        if configured_adjustment is not None and training_goal in {"fat_loss", "muscle_gain"}:
+            adjustment = -configured_adjustment if training_goal == "fat_loss" else configured_adjustment
+        else:
+            adjustment = -350 if target_weight and current_weight and target_weight < current_weight else 250 if target_weight and current_weight and target_weight > current_weight else 0
         calories = (round(max(0, maintenance + adjustment - 100)), round(max(0, maintenance + adjustment + 100)))
-    calorie_reference = calories[0] if calories else round(reference_weight * 30)
+    if calories:
+        calorie_reference = calories[0]
+    else:
+        fallback_adjustment = (
+            -configured_adjustment if training_goal == "fat_loss" and configured_adjustment is not None
+            else configured_adjustment if training_goal == "muscle_gain" and configured_adjustment is not None
+            else 0
+        )
+        calorie_reference = max(0, round(reference_weight * 30 + fallback_adjustment))
     return {
         "calories_kcal": calories,
         "protein_g": protein,
@@ -125,6 +143,7 @@ def _empty_summary() -> dict[str, Any]:
         "food_count": 0,
         "identified_food_count": 0,
         "unidentified_food_count": 0,
+        "unidentified_food_names": [],
         **{metric: None for metric in METRICS},
     }
 
@@ -146,6 +165,12 @@ def summarize_food_items(items: list[Mapping[str, Any]]) -> dict[str, Any]:
             summary["identified_food_count"] += 1
         else:
             summary["unidentified_food_count"] += 1
+            name = str(
+                item.get("custom_food_name") or item.get("food_name")
+                or item.get("item_name") or "未命名食物"
+            ).strip()
+            if name and name not in summary["unidentified_food_names"]:
+                summary["unidentified_food_names"].append(name)
         for metric in METRICS:
             value = item.get(metric)
             if value is not None:
@@ -255,7 +280,14 @@ class NutritionFeedbackService:
         if (summary.get("water_ml") or 0) >= 250:
             good.append(_text(self.language, "本餐水分摄入较充足。", "Fluid intake in this meal is substantial."))
         if summary.get("unidentified_food_count"):
-            concerns.append(_text(self.language, "含有未识别食物，营养汇总可能不完整。", "An unrecognised food makes this summary incomplete."))
+            names = "、".join(summary.get("unidentified_food_names") or [])
+            concerns.append(
+                _text(
+                    self.language,
+                    f"未识别食物：{names or '未命名食物'}，营养汇总可能不完整。",
+                    f"Unrecognised food: {names or 'unnamed food'}; the nutrition summary may be incomplete.",
+                )
+            )
         if summary.get("protein_g") is not None and summary["protein_g"] < 15:
             concerns.append(_text(self.language, "本餐蛋白质相对较少。", "Protein is relatively low for this meal."))
         if summary.get("fiber_g") is not None and summary["fiber_g"] < 3:

@@ -11,17 +11,17 @@ from src.pages._bootstrap import ensure_project_root
 
 ensure_project_root()
 
-import math
 from datetime import date
 from html import escape
+from importlib import import_module
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 from src.branding import browser_page_title, load_page_icon
-from src.dashboard_data import get_latest_local_coach
-from src.db import connect
-from src.demo_sandbox import configure_demo_runtime, is_demo_mode
+from src.dashboard_data import get_kubios_advanced_metrics, get_latest_local_coach
+from src.db import connect, get_current_db_path
+from src.demo_sandbox import configure_demo_runtime
 from src.domain_dashboard_data import (
     get_latest_recovery,
     get_recovery_baselines,
@@ -29,11 +29,10 @@ from src.domain_dashboard_data import (
 )
 from src.i18n import format_date, format_number, get_translator
 from src.i18n.ui import current_language, render_sidebar
-from src.kubios_morning_input import MEASUREMENT_QUALITIES, upsert_manual_morning_measurement
-from src.manual_logging import create_recovery_log, update_recovery_log
-from src.post_save_sync import start_recovery_post_save_sync
+from src.i18n.traditional import traditionalize
 from src.recovery_details import build_recovery_details
-from src.ui_scroll import render_interaction_focus
+from src.recovery_metrics_table import recovery_metrics_table_row
+from src.ui_scroll import collapse_expander, render_interaction_focus
 from src.ui_tables import centered_dataframe
 from src.ui_controls import render_manual_input_styles
 
@@ -44,18 +43,53 @@ st.set_page_config(page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("
 LANGUAGE, TR = render_sidebar(st, "recovery")
 render_manual_input_styles(st)
 
+# Historical evidence belongs to the current Recovery-page visit only.
+if st.session_state.get("drc_previous_page") != "recovery":
+    for key in (
+        "recovery_history_details_visible",
+        "recovery_history_sections_open",
+        "recovery_history_focus_nonce",
+        "recovery_history_last_scrolled_nonce",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _recovery_database_revision():
+    """Invalidate cached page inputs only when the SQLite data actually changes."""
+    revision = []
+    db_path = get_current_db_path()
+    for path in (db_path, db_path.with_name(f"{db_path.name}-wal")):
+        try:
+            stat = path.stat()
+            revision.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            revision.append((str(path), None, None))
+    return tuple(revision)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _load_recovery_page_inputs(database_revision, today_value):
+    """Reuse stable Recovery inputs during lightweight Streamlit reruns."""
+    del database_revision  # Deliberately part of Streamlit's cache key.
+    current = get_latest_recovery(log_date=today_value)
+    history = get_recovery_history(limit=60)
+    target_date = (current or {}).get("date", today_value)
+    kubios_rows = get_kubios_advanced_metrics(limit=1, date_value=target_date)
+    return (
+        current,
+        history,
+        get_recovery_baselines(target_date=target_date),
+        get_latest_local_coach(coach_date=target_date),
+        kubios_rows[0] if kubios_rows else {},
+    )
+
 
 def _value(value, suffix=""):
     return TR("common.no_data") if value in (None, "") else f"{format_number(value, LANGUAGE)}{suffix}"
 
 
-def _clean(value):
-    if value is None or (isinstance(value, float) and math.isnan(value)): return None
-    return value.strip() or None if isinstance(value, str) else float(value)
-
-
 def _ui(zh, en):
-    return zh if LANGUAGE != "en" else en
+    return traditionalize(zh) if LANGUAGE == "zh-TW" else zh if LANGUAGE != "en" else en
 
 
 def _baseline(label, item, suffix):
@@ -68,13 +102,22 @@ def _baseline(label, item, suffix):
 
 RECOVERY_CORE_CARD_CSS = """
 <style>
+/* Keep a broad data workspace anchored to the navigation side on ultrawide displays. */
+section[data-testid="stMain"] > div[data-testid="stMainBlockContainer"],
+section[data-testid="stMain"] [data-testid="stMainBlockContainer"],
+[data-testid="stAppViewContainer"] .main .block-container {
+    width: 100% !important;
+    max-width: 88rem !important;
+    margin-right: auto !important;
+    margin-left: 0 !important;
+}
 .drc-core-card {
-    border: 1px solid #d9dee7;
+    border: 1px solid rgba(117, 130, 148, .18);
     border-radius: 16px;
     padding: 1.1rem 1.2rem;
     min-height: 22rem;
-    background: linear-gradient(145deg, #ffffff, #f7f9fc);
-    box-shadow: 0 4px 14px rgba(36, 52, 71, .06);
+    background: rgba(117, 130, 148, .065);
+    box-shadow: none;
 }
 .drc-core-card-head {
     display: flex;
@@ -83,288 +126,421 @@ RECOVERY_CORE_CARD_CSS = """
     gap: .75rem;
     margin-bottom: .7rem;
 }
-.drc-core-card-title { font-size: 1.25rem; font-weight: 700; color: #273142; }
+.drc-core-card-title { font-size: 1.25rem; font-weight: 700; color: inherit; }
 .drc-core-status {
     border-radius: 999px;
     padding: .25rem .65rem;
-    background: #eef2f7;
-    color: #5b6575;
+    background: rgba(117, 130, 148, .11);
+    color: inherit;
+    opacity: .76;
     font-size: .85rem;
     font-weight: 600;
     white-space: nowrap;
 }
 .drc-core-status.good { background: #e7f6ed; color: #1d7a46; }
 .drc-core-status.attention { background: #fff0ee; color: #bd443b; }
-.drc-core-value { font-size: 2.25rem; font-weight: 750; color: #222b3a; line-height: 1.1; }
-.drc-core-unit { color: #697386; margin: .2rem 0 1rem; }
+.drc-core-value { font-size: 2.25rem; font-weight: 750; color: inherit; line-height: 1.1; }
+.drc-core-unit { color: inherit; opacity: .65; margin: .2rem 0 1rem; }
 .drc-core-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem .9rem; }
 .drc-core-detail { border-top: 1px solid #e3e7ee; padding-top: .55rem; }
-.drc-core-detail-label { color: #788294; font-size: .82rem; }
-.drc-core-detail-value { color: #2f3848; font-size: 1rem; font-weight: 650; margin-top: .15rem; }
-.drc-core-foot { color: #788294; font-size: .82rem; margin-top: 1rem; }
-.drc-detail-overview, .drc-detail-confidence {
-    border: 1px solid #d9dee7; border-radius: 16px; padding: 1rem 1.15rem;
-    background: linear-gradient(145deg, #ffffff, #f7f9fc);
-    box-shadow: 0 4px 14px rgba(36, 52, 71, .06); margin-bottom: 1rem;
+.drc-core-detail-label { color: inherit; opacity: .62; font-size: .82rem; }
+.drc-core-detail-value { color: inherit; font-size: 1rem; font-weight: 650; margin-top: .15rem; }
+.drc-core-foot { color: inherit; opacity: .62; font-size: .82rem; margin-top: 1rem; }
+.drc-details-heading-wrap {
+    display: flex !important;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .15rem;
+    margin: .45rem 0 .4rem;
 }
-.drc-detail-overview-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-.drc-detail-overview-title { color: #273142; font-size: 1.15rem; font-weight: 700; }
-.drc-detail-overview-status { color: #273142; font-size: 1.5rem; font-weight: 750; margin: .4rem 0; }
-.drc-detail-overview-summary { color: #5f6b7c; line-height: 1.55; }
-.drc-detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-top: .9rem; }
-.drc-detail-meta-item { border-top: 1px solid #e3e7ee; padding-top: .55rem; }
-.drc-detail-meta-label { color: #788294; font-size: .82rem; }
-.drc-detail-meta-value { color: #2f3848; font-size: 1rem; font-weight: 650; margin-top: .15rem; }
-.drc-detail-card { min-height: 25rem; }
-.drc-detail-card .drc-core-value { margin-top: .35rem; }
-.drc-detail-confidence-title { color: #273142; font-weight: 700; }
-.drc-detail-confidence-copy { color: #5f6b7c; margin-top: .3rem; line-height: 1.5; }
+.drc-details-heading {
+    margin: 0 !important;
+    padding: 0 !important;
+    color: var(--rh-text);
+    font-size: 1.35rem;
+    font-weight: 650;
+    letter-spacing: -.012em;
+    line-height: 1.35;
+}
+.drc-details-context {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem;
+    margin: 0 !important;
+    color: var(--rh-text-muted);
+    font-size: .75rem !important;
+    font-weight: 500;
+    line-height: 1.45;
+}
+.drc-details-context-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .3rem;
+    padding: .18rem .5rem;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .055);
+    white-space: nowrap;
+}
+.drc-details-context-chip strong { color: var(--rh-text-secondary); font-weight: 600; }
+.drc-details-context-basis { padding: .18rem .12rem; color: var(--rh-text-muted); }
+.drc-detail-overview {
+    border: 0;
+    border-radius: 0;
+    padding: .35rem 0 0;
+    background: transparent;
+    box-shadow: none;
+    margin-bottom: 1.6rem;
+}
+.drc-detail-overview-head {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: .625rem;
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+.drc-detail-overview-title {
+    color: var(--rh-text-secondary);
+    font-size: .875rem;
+    font-weight: 600;
+    line-height: 1.45;
+}
+.drc-detail-overview .drc-core-status {
+    border-radius: var(--rh-radius-small);
+    padding: .3125rem .625rem;
+    background: var(--rh-surface-inset);
+    color: var(--rh-text-secondary);
+    font-size: .8125rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.drc-detail-overview--good .drc-core-status {
+    background: var(--rh-status-positive-surface);
+    color: var(--rh-status-positive);
+}
+.drc-detail-overview--low .drc-core-status,
+.drc-detail-overview--conflict .drc-core-status {
+    background: var(--rh-status-caution-surface);
+    color: var(--rh-status-caution);
+}
+.drc-detail-overview--unusable .drc-core-status {
+    background: var(--rh-status-negative-surface);
+    color: var(--rh-status-negative);
+}
+.drc-detail-overview-status {
+    color: var(--rh-text);
+    font-size: 1.8125rem;
+    font-weight: 650;
+    letter-spacing: -.012em;
+    line-height: 1.25;
+    margin: .75rem 0 .4rem;
+}
+.drc-detail-overview-summary {
+    color: var(--rh-text-secondary);
+    font-size: .9rem;
+    line-height: 1.6;
+    max-width: 68ch;
+}
+.drc-detail-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin-top: 1.45rem;
+}
+.drc-detail-meta-item {
+    min-width: 0;
+    padding: 0 1rem;
+    border-left: 1px solid var(--rh-border-subtle);
+}
+.drc-detail-meta-item:first-child {
+    padding-left: 0;
+    border-left: 0;
+}
+.drc-detail-meta-item:last-child { padding-right: 0; }
+.drc-detail-meta-label {
+    color: var(--rh-text-muted);
+    font-size: .8125rem;
+    font-weight: 500;
+    line-height: 1.4;
+}
+.drc-detail-meta-value {
+    color: var(--rh-text);
+    font-size: .9375rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.45;
+    margin-top: .2rem;
+}
+.drc-detail-confidence {
+    border: 1px solid rgba(117, 130, 148, .18); border-radius: 16px; padding: 1rem 1.15rem;
+    background: rgba(117, 130, 148, .065);
+    box-shadow: none; margin-bottom: 1rem;
+}
+.drc-detail-card {
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+    padding: 1.1rem 1.15rem;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 20px;
+    background: rgba(255, 255, 255, .035);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10), 0 16px 32px rgba(0, 0, 0, .18);
+    backdrop-filter: blur(20px) saturate(115%);
+    margin-bottom: .625rem;
+}
+@supports (background: color-mix(in srgb, white 50%, black)) {
+    .drc-details-context-chip {
+        border-color: var(--rh-border-subtle);
+        background: var(--rh-surface-inset);
+    }
+    .drc-detail-card {
+        background: linear-gradient(
+            145deg,
+            color-mix(in srgb, var(--secondary-background-color) 94%, var(--text-color) 6%),
+            var(--secondary-background-color)
+        );
+        box-shadow:
+            inset 0 1px 0 color-mix(in srgb, var(--text-color) 10%, transparent),
+            var(--rh-shadow-raised);
+    }
+    .drc-detail-card .drc-core-card-head { border-bottom-color: var(--rh-border-subtle); }
+    .drc-detail-card .drc-core-status {
+        background: var(--rh-surface-inset);
+        border-color: var(--rh-border-subtle);
+    }
+    .drc-detail-card .drc-core-detail-grid,
+    .drc-detail-card .drc-core-detail:nth-child(even),
+    .drc-detail-card .drc-core-detail:nth-child(n + 3) {
+        border-color: var(--rh-border-subtle);
+    }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+    .drc-detail-card { transition: transform 180ms ease-out, box-shadow 180ms ease-out, border-color 180ms ease-out; }
+    .drc-detail-card:hover { transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 20px 36px rgba(0, 0, 0, .14); }
+}
+.drc-detail-card .drc-core-card-head {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: .625rem;
+    margin: 0;
+    padding-bottom: .55rem;
+    border-bottom: 1px solid rgba(255, 255, 255, .09);
+}
+.drc-detail-card .drc-core-card-title {
+    min-width: 0;
+    color: var(--rh-text);
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+.drc-detail-card .drc-core-status {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    flex: 0 1 auto;
+    max-width: 100%;
+    padding: .3125rem .625rem;
+    border-radius: var(--rh-radius-small);
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .10);
+    color: var(--rh-text-secondary);
+    font-size: .8125rem;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: left;
+    white-space: normal;
+}
+.drc-detail-card .drc-core-status::before {
+    content: "";
+    flex: 0 0 auto;
+    width: .375rem;
+    height: .375rem;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .72;
+}
+.drc-detail-card--supportive .drc-core-status {
+    background: var(--rh-status-positive-surface);
+    color: var(--rh-status-positive);
+}
+.drc-detail-card--negative .drc-core-status,
+.drc-detail-card--observe .drc-core-status {
+    background: var(--rh-status-caution-surface);
+    color: var(--rh-status-caution);
+}
+.drc-detail-card .drc-core-value {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .35rem;
+    margin-top: .8rem;
+    color: var(--rh-text);
+    font-size: 1.6875rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.012em;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+.drc-detail-current-unit {
+    color: var(--rh-text-secondary);
+    font-size: .9375rem;
+    font-weight: 500;
+    letter-spacing: 0;
+}
+.drc-detail-card .drc-core-unit {
+    margin: .25rem 0 .75rem;
+    color: var(--rh-text-muted);
+    font-size: .8125rem;
+    line-height: 1.4;
+}
+.drc-detail-card .drc-core-detail-grid {
+    gap: 0;
+    margin-top: 0;
+    border-top: 1px solid rgba(255, 255, 255, .09);
+}
+.drc-detail-card .drc-core-detail {
+    min-width: 0;
+    padding: .65rem .9rem .65rem 0;
+    border-top: 0;
+}
+.drc-detail-card .drc-core-detail:nth-child(even) {
+    padding-right: 0;
+    padding-left: .9rem;
+    border-left: 1px solid rgba(255, 255, 255, .09);
+}
+.drc-detail-card .drc-core-detail:nth-child(n + 3) {
+    border-top: 1px solid rgba(255, 255, 255, .09);
+}
+.drc-detail-card .drc-core-detail:nth-child(5) {
+    grid-column: 1 / -1;
+    padding-right: 0;
+}
+.drc-detail-card .drc-core-detail-label {
+    color: var(--rh-text-muted);
+    font-size: .8125rem;
+    font-weight: 500;
+    line-height: 1.4;
+}
+.drc-detail-card .drc-core-detail-value {
+    color: var(--rh-text);
+    font-size: .9375rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    margin-top: .2rem;
+    overflow-wrap: anywhere;
+}
+.drc-detail-card .drc-core-detail:nth-child(5) {
+    padding-top: .75rem;
+    padding-bottom: .75rem;
+    margin: .1rem -.25rem 0;
+    padding-left: .25rem;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--rh-surface-inset) 78%, transparent);
+}
+.drc-detail-card .drc-core-detail:nth-child(5) .drc-core-detail-label {
+    color: var(--rh-text-secondary);
+    font-size: .875rem;
+    font-weight: 600;
+}
+.drc-detail-card .drc-core-detail:nth-child(5) .drc-core-detail-value {
+    color: var(--rh-text-secondary);
+    font-size: .9375rem;
+    font-weight: 400;
+    line-height: 1.6;
+    margin-top: .35rem;
+}
+.drc-detail-card .drc-core-foot {
+    margin-top: .75rem;
+    color: var(--rh-text-muted);
+    font-size: .8125rem;
+    line-height: 1.55;
+}
+.drc-detail-confidence-title { color: inherit; font-weight: 700; }
+.drc-detail-confidence-copy { color: inherit; opacity: .72; margin-top: .3rem; line-height: 1.5; }
 @media (max-width: 720px) {
     .drc-core-detail-grid { grid-template-columns: 1fr; }
-    .drc-detail-meta { grid-template-columns: 1fr; }
+    .drc-detail-card { padding: 1.15rem; }
+    .drc-detail-card .drc-core-detail,
+    .drc-detail-card .drc-core-detail:nth-child(even) {
+        padding: .8rem 0;
+        border-left: 0;
+    }
+    .drc-detail-card .drc-core-detail:nth-child(2) { border-top: 1px solid var(--rh-border-subtle); }
+    .drc-detail-card .drc-core-detail:nth-child(5) {
+        grid-column: auto;
+        padding-top: .7rem;
+        padding-bottom: .7rem;
+    }
+    .drc-detail-overview { padding: .15rem 0 0; }
+    .drc-detail-overview-status { font-size: 1.625rem; }
+    .drc-detail-meta { grid-template-columns: 1fr; margin-top: 1rem; }
+    .drc-detail-meta-item {
+        padding: .7rem 0 0;
+        margin-top: .7rem;
+        border-top: 1px solid var(--rh-border-subtle);
+        border-left: 0;
+    }
+    .drc-detail-meta-item:first-child { margin-top: 0; }
 }
 </style>
 """
 
 
-RECOVERY_EDIT_FORM_CSS = """
-<style>
-/* The Recovery page has one compact edit form.  Center its labels and values
-   as a single visual unit, without changing controls on other pages. */
-div[data-testid="stForm"] label {
-    display: flex !important;
-    justify-content: center !important;
-    width: 100% !important;
-    text-align: center !important;
-}
-div[data-testid="stForm"] div[data-testid="stNumberInput"] input {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-    text-align: center !important;
-    text-indent: 0 !important;
-}
-div[data-testid="stForm"] div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
-    flex: 1 1 auto !important;
-    width: 100% !important;
-    padding-left: 2rem !important;
-    text-align: center !important;
-}
-</style>
-"""
-
-
-def _core_normal_range(item):
-    """Return a robust personal normal range from existing baseline fields."""
-    center = item.get("median_value") if item else None
-    if center is None:
-        return None
-    mad = item.get("mad_value")
-    if mad is not None and float(mad) > 0:
-        spread = 1.4826 * float(mad)
-        return max(0.0, float(center) - spread), float(center) + spread
-    std = item.get("std_value")
-    if std is not None and float(std) > 0:
-        spread = float(std)
-        return max(0.0, float(center) - spread), float(center) + spread
-    minimum, maximum = item.get("min_value"), item.get("max_value")
-    if minimum is not None and maximum is not None:
-        return float(minimum), float(maximum)
-    return float(center), float(center)
-
-
-def _core_metric_card(title, current, unit, baseline, higher_is_better):
-    """Render one RMSSD/resting-HR card without inventing missing values."""
-    baseline = baseline or {}
-    center = baseline.get("median_value")
-    delta = None if current is None or center is None else float(current) - float(center)
-    percent = baseline.get("percent_change")
-    if percent is None and delta is not None and float(center) != 0:
-        percent = delta / abs(float(center)) * 100
-    baseline_status = baseline.get("status")
-    has_baseline_stats = center is not None
-    baseline_ready = baseline_status != "insufficient_data" and has_baseline_stats
-    arrow = "↑" if delta is not None and delta > 0 else "↓" if delta is not None and delta < 0 else "→"
-    if not baseline_ready:
-        status_key, status_class = "status_no_data", ""
-    else:
-        if baseline_status == "within_baseline":
-            status_key, status_class = "status_near", ""
-        elif (higher_is_better and baseline_status == "above_baseline") or (
-            not higher_is_better and baseline_status == "below_baseline"
-        ):
-            status_key, status_class = "status_good", "good"
-        else:
-            status_key, status_class = "status_attention", "attention"
-
-    normal_range = _core_normal_range(baseline) if has_baseline_stats else None
-    valid_days = int(baseline.get("valid_days") or 0)
-    window_days = int(baseline.get("window_days") or 28)
-    maturity_percent = min(100, round(valid_days / window_days * 100)) if window_days else 0
-
-    def number(value, signed=False):
-        if value is None:
-            return TR("common.no_data")
-        text = format_number(value, LANGUAGE)
-        if signed and float(value) > 0:
-            text = "+" + text
-        return f"{text} {unit}"
-
-    def plain_number(value):
-        return TR("common.no_data") if value is None else format_number(value, LANGUAGE)
-
-    current_number = plain_number(current)
-    center_text = number(center) if has_baseline_stats else TR("common.no_data")
-    range_text = (
-        f"{format_number(normal_range[0], LANGUAGE)}–{format_number(normal_range[1], LANGUAGE)} {unit}"
-        if normal_range else TR("common.no_data")
-    )
-    delta_text = number(delta, signed=True) if has_baseline_stats else TR("common.no_data")
-    percent_text = (
-        f"{'+' if float(percent) > 0 else ''}{format_number(percent, LANGUAGE)}%"
-        if has_baseline_stats and percent is not None else TR("common.no_data")
-    )
-    status_text = (
-        TR("baseline.insufficient_data")
-        if baseline_status == "insufficient_data"
-        else TR(f"domain.recovery.{status_key}")
-    )
-    maturity_text = TR(
-        "domain.recovery.maturity_days",
-        valid=valid_days, window=window_days, percent=maturity_percent,
+def _recovery_metrics_table_row(date_value, values):
+    return recovery_metrics_table_row(
+        date_value, values, tr=TR, language=LANGUAGE,
+        format_date=format_date, ui=_ui,
     )
 
-    details = [
-        ("baseline_center", center_text),
-        ("normal_range", range_text),
-        ("absolute_delta", delta_text),
-        ("percent_delta", percent_text),
-        ("direction", arrow),
-        ("status", status_text),
-        ("maturity", maturity_text),
-    ]
-    detail_html = "".join(
-        f'<div class="drc-core-detail"><div class="drc-core-detail-label">'
-        f'{escape(TR(f"domain.recovery.{label}"))}</div><div class="drc-core-detail-value">'
-        f'{escape(str(value))}</div></div>'
-        for label, value in details
-    )
-    card_html = (
-        f'<div class="drc-core-card"><div class="drc-core-card-head">'
-        f'<div class="drc-core-card-title">{escape(str(title))}</div>'
-        f'<div class="drc-core-status {status_class}">{escape(arrow)} {escape(status_text)}</div></div>'
-        f'<div class="drc-core-value">{escape(current_number)}</div>'
-        f'<div class="drc-core-unit">{escape(unit)}</div>'
-        f'<div class="drc-core-detail-grid">{detail_html}</div>'
-        f'<div class="drc-core-foot">{escape(TR("domain.recovery.range_basis"))}</div></div>'
-    )
-    st.markdown(card_html, unsafe_allow_html=True)
+
+def _merge_recovery_evidence(data, kubios_measurement):
+    """Use the selected Kubios record as the single source for today's cards."""
+    resolved = dict(data or {})
+    resolved.setdefault("date", date.today().isoformat())
+    kubios_measurement = kubios_measurement or {}
+    field_map = {
+        "rmssd_ms": "morning_rmssd",
+        "mean_hr_bpm": "morning_mean_hr",
+        "stress_index": "stress_index",
+        "respiratory_rate_bpm": "respiratory_rate",
+        "measurement_quality": "measurement_quality",
+        "pns_index": "pns_index",
+        "sns_index": "sns_index",
+        "physiological_age": "physiological_age",
+        "mean_rr_ms": "mean_rr_ms",
+        "sdnn_ms": "sdnn_ms",
+        "poincare_sd1_ms": "poincare_sd1_ms",
+        "poincare_sd2_ms": "poincare_sd2_ms",
+        "lf_power_ms2": "lf_power_ms2",
+        "hf_power_ms2": "hf_power_ms2",
+        "lf_power_nu": "lf_power_nu",
+        "hf_power_nu": "hf_power_nu",
+        "lf_hf_ratio": "lf_hf_ratio",
+        "mood_code": "mood_code",
+    }
+    for source, destination in field_map.items():
+        value = kubios_measurement.get(source)
+        if value not in (None, ""):
+            resolved[destination] = value
+    return resolved
 
 
 def _recovery_panel(data):
     st.subheader(TR("domain.recovery.today_data"))
-    st.markdown(RECOVERY_EDIT_FORM_CSS, unsafe_allow_html=True)
-    original = {
-        "date": (data or {}).get("date", date.today().isoformat()),
-        "morning_rmssd_ms": (data or {}).get("morning_rmssd"),
-        "morning_resting_hr_bpm": (data or {}).get("morning_mean_hr"),
-        "stress_index": (data or {}).get("stress_index"),
-        "respiratory_rate": (data or {}).get("respiratory_rate"),
-        "measurement_quality": (data or {}).get("measurement_quality"),
-    }
-    centered_dataframe([{
-        TR("reports.date"): original["date"],
-        TR("domain.recovery.morning_rmssd"): original["morning_rmssd_ms"],
-        TR("domain.recovery.morning_resting_hr"): original["morning_resting_hr_bpm"],
-        TR("domain.recovery.stress_index"): original["stress_index"],
-        TR("domain.recovery.respiratory_rate"): original["respiratory_rate"],
-        TR("domain.recovery.measurement_quality"): (
-            TR("domain.recovery.quality_" + original["measurement_quality"].lower())
-            if original["measurement_quality"] in MEASUREMENT_QUALITIES else None
-        ),
-    }])
-    with st.expander(TR("inline_edit.edit_recovery")):
-        st.caption(TR("inline_edit.edit_recovery_hint"))
-        with st.form("recovery_edit_form"):
-            left, right = st.columns(2)
-            with left:
-                edited_rmssd = st.number_input(
-                    TR("domain.recovery.morning_rmssd"), min_value=0.01,
-                    value=None if original["morning_rmssd_ms"] is None else float(original["morning_rmssd_ms"]),
-                    step=0.1, format="%.2f",
-                )
-            with right:
-                edited_hr = st.number_input(
-                    TR("domain.recovery.morning_resting_hr"), min_value=20.0,
-                    max_value=300.0,
-                    value=None if original["morning_resting_hr_bpm"] is None else float(original["morning_resting_hr_bpm"]),
-                    step=0.1, format="%.2f",
-                )
-            left, right = st.columns(2)
-            with left:
-                edited_stress = st.number_input(
-                    TR("domain.recovery.stress_index"), min_value=0.0,
-                    value=None if original["stress_index"] is None else float(original["stress_index"]),
-                    step=0.1, format="%.2f",
-                )
-            with right:
-                edited_respiration = st.number_input(
-                    TR("domain.recovery.respiratory_rate"), min_value=0.01, max_value=80.0,
-                    value=None if original["respiratory_rate"] is None else float(original["respiratory_rate"]),
-                    step=0.1, format="%.2f",
-                )
-            quality_options = [None, *MEASUREMENT_QUALITIES]
-            quality_index = quality_options.index(original["measurement_quality"]) if original["measurement_quality"] in quality_options else 0
-            edited_quality = st.selectbox(
-                TR("domain.recovery.measurement_quality"), quality_options, index=quality_index,
-                format_func=lambda value: TR("common.no_data") if value is None else TR("domain.recovery.quality_" + value.lower()),
-            )
-            submitted = st.form_submit_button(TR("inline_edit.save_changes"), type="primary")
-
-    if submitted:
-        edited = {
-            "morning_rmssd_ms": edited_rmssd,
-            "morning_resting_hr_bpm": edited_hr,
-            "stress_index": edited_stress,
-            "respiratory_rate": edited_respiration,
-            "measurement_quality": edited_quality,
-        }
-        changes = {name: _clean(edited[name]) for name in edited if _clean(edited[name]) != _clean(original[name])}
-        if not changes:
-            st.info(TR("inline_edit.no_changes")); return
-        connection = connect(migrate=False)
-        try:
-            if data and data.get("manual_record_id"):
-                core_changes = {key: value for key, value in changes.items() if key in ("morning_rmssd_ms", "morning_resting_hr_bpm")}
-                if core_changes: update_recovery_log(connection, data["manual_record_id"], core_changes)
-            else:
-                core_changes = {key: value for key, value in changes.items() if key in ("morning_rmssd_ms", "morning_resting_hr_bpm")}
-                if core_changes: create_recovery_log(connection, {"date": original["date"], **core_changes})
-            upsert_manual_morning_measurement(connection, original["date"], {
-                "rmssd": changes.get("morning_rmssd_ms", original["morning_rmssd_ms"]),
-                "mean_hr": changes.get("morning_resting_hr_bpm", original["morning_resting_hr_bpm"]),
-                "stress_index": changes.get("stress_index", original["stress_index"]),
-                "respiratory_rate": changes.get("respiratory_rate", original["respiratory_rate"]),
-                "measurement_quality": changes.get("measurement_quality", original["measurement_quality"]),
-            })
-            final_rmssd = changes.get("morning_rmssd_ms", original["morning_rmssd_ms"])
-            final_hr = changes.get("morning_resting_hr_bpm", original["morning_resting_hr_bpm"])
-            if (
-                not is_demo_mode()
-                and original["date"] == date.today().isoformat()
-                and final_rmssd is not None
-                and final_hr is not None
-            ):
-                try:
-                    start_recovery_post_save_sync()
-                    st.session_state["recovery_save_notice"] = TR("inline_edit.recovery_saved_sync_started")
-                except (OSError, RuntimeError):
-                    st.session_state["recovery_save_notice"] = TR("inline_edit.recovery_saved_sync_failed")
-            else:
-                st.session_state["recovery_save_notice"] = TR("manual_logging.saved")
-            st.rerun()
-        except Exception as exc:
-            st.error(TR("manual_logging.submit_failed", message=str(exc)))
-        finally: connection.close()
+    today_row = _recovery_metrics_table_row(data.get("date", date.today().isoformat()), data)
+    today_row[TR("kubios_screenshot.mood_code")] = data.get("mood_code") or TR("common.no_data")
+    centered_dataframe([today_row], max_height="12rem")
+    # A confirmed screenshot save returns to the compact recovery summary.
+    # It remains closed by default; the one-shot flag is retained so a save
+    # cannot reopen it during the refresh that follows.
+    expanded = st.session_state.pop("recovery_edit_expanded_after_save", False)
+    with st.expander(TR("inline_edit.edit_recovery"), expanded=expanded):
+        screenshot_page = import_module("src.pages.2_Kubios_Screenshot_Import")
+        screenshot_page.render_kubios_screenshot_import(LANGUAGE, TR, embedded=True)
 
 
 def _detail_number(value, unit="", signed=False):
@@ -373,7 +549,8 @@ def _detail_number(value, unit="", signed=False):
     text = format_number(value, LANGUAGE)
     if signed and float(value) > 0:
         text = "+" + text
-    return f"{text}{(' ' + unit) if unit else ''}"
+    separator = "" if unit == "%" else " "
+    return f"{text}{(separator + unit) if unit else ''}"
 
 
 def _detail_status_text(code):
@@ -381,24 +558,35 @@ def _detail_status_text(code):
 
 
 def _render_detail_metric(name, item):
-    label = TR(f"domain.recovery.{name if name != 'morning_mean_hr' else 'morning_resting_hr'}")
+    label = TR(item["label_key"])
     unit = item.get("unit")
-    display_unit = TR("domain.recovery.breaths_per_minute") if unit == "breaths_per_minute" else unit
-    status_text = _detail_status_text(item.get("impact", "unavailable"))
-    current_text = _detail_number(item.get("current_value"), display_unit)
+    display_unit = (
+        TR("domain.recovery.breaths_per_minute") if unit == "breaths_per_minute"
+        else _ui("岁", "years") if unit == "years"
+        else unit
+    )
+    impact = item.get("impact", "unavailable")
+    status_text = _detail_status_text(impact)
+    current_value = item.get("current_value")
+    current_text = _detail_number(current_value, display_unit)
+    current_markup = escape(current_text) if current_value is None or not display_unit else (
+        f'{escape(_detail_number(current_value))}'
+        f'<span class="drc-detail-current-unit">{escape(str(display_unit))}</span>'
+    )
     center_text = _detail_number(item.get("baseline_center"), display_unit)
     normal_range = item.get("normal_range")
     range_text = (
         f"{format_number(normal_range[0], LANGUAGE)}–{format_number(normal_range[1], LANGUAGE)} {display_unit}"
         if normal_range else TR("common.no_data")
     )
+    # The headline already presents today's value, while the per-metric status
+    # is shown beside the title. Keep this grid for distinct baseline evidence
+    # and its interpretation instead of repeating those two facts.
     detail_rows = [
-        ("today_value", current_text),
         ("baseline_center", center_text),
         ("normal_range", range_text),
         ("absolute_delta", _detail_number(item.get("absolute_delta"), display_unit)),
         ("percent_delta", _detail_number(item.get("percent_delta"), "%", signed=True)),
-        ("status", status_text),
         ("detail_explanation", TR(f"domain.recovery.detail_explanation_{item.get('explanation', 'missing')}")),
     ]
     detail_html = "".join(
@@ -407,10 +595,10 @@ def _render_detail_metric(name, item):
         for key, value in detail_rows
     )
     card_html = (
-        f'<div class="drc-core-card drc-detail-card"><div class="drc-core-card-head">'
+        f'<div class="drc-core-card drc-detail-card drc-detail-card--{escape(impact)}"><div class="drc-core-card-head">'
         f'<div class="drc-core-card-title">{escape(label)}</div>'
         f'<div class="drc-core-status">{escape(status_text)}</div></div>'
-        f'<div class="drc-core-value">{escape(current_text)}</div>'
+        f'<div class="drc-core-value">{current_markup}</div>'
         f'<div class="drc-core-unit">{escape(TR("domain.recovery.today_detail_value"))}</div>'
         f'<div class="drc-core-detail-grid">{detail_html}</div>'
         f'<div class="drc-core-foot">{escape(TR("domain.recovery.detail_range_basis"))}</div></div>'
@@ -420,70 +608,114 @@ def _render_detail_metric(name, item):
 
 def _render_today_recovery_details(data, history, *, historical=False):
     details = build_recovery_details(data, history, target_date=(data or {}).get("date"))
-    status = details["status"]
-    quality = details["quality"]
-    maturity = details["maturity"]
-    confidence = details["confidence"]
-    overview_title = TR("domain.recovery.detail_overview") if not historical else _ui(
-        "历史恢复总览", "Historical Recovery Overview"
+    metric_names = (
+        "morning_rmssd", "morning_mean_hr", "pns_index", "sns_index",
+        "physiological_age", "mean_rr_ms", "sdnn_ms", "poincare_sd1_ms",
+        "poincare_sd2_ms", "stress_index", "respiratory_rate", "lf_power_ms2",
+        "hf_power_ms2", "lf_power_nu", "hf_power_nu", "lf_hf_ratio",
     )
-    overview_html = (
-        f'<div class="drc-detail-overview"><div class="drc-detail-overview-head">'
-        f'<div class="drc-detail-overview-title">{escape(overview_title)}</div>'
-        f'<div class="drc-core-status">{escape(TR(f"domain.recovery.detail_status_{status}"))}</div></div>'
-        f'<div class="drc-detail-overview-status">{escape(TR(f"domain.recovery.detail_status_{status}"))}</div>'
-        f'<div class="drc-detail-overview-summary">{escape(TR(f"domain.recovery.detail_summary_{status}"))}</div>'
-        '<div class="drc-detail-meta">'
-        f'<div class="drc-detail-meta-item"><div class="drc-detail-meta-label">{escape(TR("domain.recovery.measurement_quality"))}</div>'
-        f'<div class="drc-detail-meta-value">{escape(TR(f"domain.recovery.detail_quality_{quality}"))}</div></div>'
-        f'<div class="drc-detail-meta-item"><div class="drc-detail-meta-label">{escape(TR("domain.recovery.maturity"))}</div>'
-        f'<div class="drc-detail-meta-value">{escape(TR(f"domain.recovery.detail_maturity_{maturity}", valid=details["maturity_days"], window=details["window_days"]))}</div></div>'
-        f'<div class="drc-detail-meta-item"><div class="drc-detail-meta-label">{escape(TR("domain.recovery.detail_confidence"))}</div>'
-        f'<div class="drc-detail-meta-value">{escape(TR(f"domain.recovery.detail_confidence_{confidence}"))}</div></div>'
-        '</div></div>'
+    # Historical drill-down remains compact; today's view carries every
+    # confirmed measurement from the former wide table as an equal card.
+    if historical:
+        metric_names = ("morning_rmssd", "morning_mean_hr", "stress_index", "respiratory_rate")
+    for index in range(0, len(metric_names), 2):
+        left, right = st.columns(2)
+        with left:
+            name = metric_names[index]
+            _render_detail_metric(name, details["analyses"][name])
+        if index + 1 < len(metric_names):
+            with right:
+                name = metric_names[index + 1]
+                _render_detail_metric(name, details["analyses"][name])
+
+
+def _baseline_context(baselines):
+    """Return compact maturity facts for the merged baseline context."""
+    labels = (
+        ("morning_rmssd", "domain.recovery.morning_rmssd"),
+        ("morning_mean_hr", "domain.recovery.morning_resting_hr"),
     )
-    st.markdown(overview_html, unsafe_allow_html=True)
-
-    left, right = st.columns(2)
-    with left:
-        _render_detail_metric("morning_rmssd", details["analyses"]["morning_rmssd"])
-    with right:
-        _render_detail_metric("morning_mean_hr", details["analyses"]["morning_mean_hr"])
-    left, right = st.columns(2)
-    with left:
-        _render_detail_metric("stress_index", details["analyses"]["stress_index"])
-    with right:
-        _render_detail_metric("respiratory_rate", details["analyses"]["respiratory_rate"])
-
-    if not historical:
-        advice_box = f'<div class="drc-detail-confidence"><div class="drc-detail-confidence-title">{escape(TR("domain.recovery.detail_advice"))}</div><div class="drc-detail-confidence-copy">{escape(TR(f"domain.recovery.detail_advice_{details["advice"]}"))}</div></div>'
-        st.markdown(advice_box, unsafe_allow_html=True)
-        confidence_box = f'<div class="drc-detail-confidence"><div class="drc-detail-confidence-title">{escape(TR("domain.recovery.detail_confidence"))}</div><div class="drc-detail-confidence-copy">{escape(TR(f"domain.recovery.detail_confidence_copy_{confidence}"))}</div></div>'
-        st.markdown(confidence_box, unsafe_allow_html=True)
+    segments = []
+    for metric_name, label_key in labels:
+        baseline = (baselines or {}).get(metric_name) or {}
+        valid_days = int(baseline.get("valid_days") or 0)
+        window_days = int(baseline.get("window_days") or 28)
+        percent = min(100, round(valid_days / window_days * 100)) if window_days else 0
+        maturity = TR(
+            "domain.recovery.maturity_days",
+            valid=valid_days,
+            window=window_days,
+            percent=percent,
+        )
+        segments.append((TR(label_key), maturity))
+    return segments
 
 
-def _recovery_quality_label(value):
-    if value in MEASUREMENT_QUALITIES:
-        return TR("domain.recovery.quality_" + value.lower())
-    return TR("common.no_data")
+def _missing_recovery_evidence(current):
+    """Translate the confidence engine's exact missing groups for the coach banner."""
+    labels = {
+        "activity_load": "local_coach.recovery_advice.missing_activity_load",
+        "training_load": "local_coach.recovery_advice.missing_training_load",
+        "sleep": "local_coach.recovery_advice.missing_sleep",
+        "hrv": "local_coach.recovery_advice.missing_hrv",
+        "resting_heart_rate": "local_coach.recovery_advice.missing_resting_heart_rate",
+        "readiness_support": "local_coach.recovery_advice.missing_readiness_support",
+    }
+    current = current or {}
+    resolved = {
+        "hrv": any(current.get(key) not in (None, "") for key in ("nightly_hrv_rmssd", "morning_rmssd")),
+        "resting_heart_rate": any(current.get(key) not in (None, "") for key in ("nightly_resting_hr", "morning_mean_hr")),
+        "readiness_support": any(current.get(key) not in (None, "") for key in ("respiratory_rate", "kubios_readiness")),
+    }
+    return [
+        TR(labels[group])
+        for group in current.get("missing_groups", [])
+        if group in labels and not resolved.get(group, False)
+    ]
+
+
+def _render_recovery_guidance(coach, current=None):
+    """Show a safe, concrete plan instead of a status-only coach message."""
+    if not coach:
+        st.info(TR("local_coach.missing"))
+        return
+
+    advice = coach.get("recovery_advice") or {}
+    status = advice.get("status", "insufficient_data")
+    if status != "insufficient_data":
+        st.success(TR(f"local_coach.recovery_advice.{status}"))
+        monitoring = advice.get("monitoring")
+        if monitoring:
+            st.caption(monitoring)
+        return
+
+    missing = _missing_recovery_evidence(current)
+    st.warning(TR(
+        "local_coach.recovery_advice.insufficient_data_summary",
+        missing="、".join(missing) if missing else TR("local_coach.recovery_advice.missing_key_metrics"),
+    ))
+    actions = (
+        ("insufficient_data_training_label", "insufficient_data_training"),
+        ("insufficient_data_check_label", "insufficient_data_check"),
+        ("insufficient_data_measure_label", "insufficient_data_measure"),
+    )
+    action_text = "\n".join(
+        f"- **{TR(f'local_coach.recovery_advice.{label_key}')}**：{TR(f'local_coach.recovery_advice.{body_key}')}"
+        for label_key, body_key in actions
+    )
+    st.markdown(action_text)
 
 
 def _recovery_history_row(item):
-    return {
-        TR("reports.date"): format_date(item["date"], LANGUAGE),
-        TR("domain.recovery.morning_rmssd"): item.get("morning_rmssd"),
-        TR("domain.recovery.morning_resting_hr"): item.get("morning_mean_hr"),
-        TR("domain.recovery.stress_index"): item.get("stress_index"),
-        TR("domain.recovery.respiratory_rate"): item.get("respiratory_rate"),
-        TR("domain.recovery.measurement_quality"): _recovery_quality_label(item.get("measurement_quality")),
-    }
+    return _recovery_metrics_table_row(item["date"], item)
 
 
 def _historical_recovery_record_table(history):
-    """Render selectable raw records; the selected row drives historical details."""
-    st.subheader(TR("history.recovery_title"))
+    """Render the selectable history catalogue directly inside its expander."""
+    sections_open = st.session_state.get("recovery_history_sections_open", False)
     if not history:
-        st.info(TR("common.no_data"))
+        with st.expander(TR("history.recovery_browser_title"), expanded=sections_open):
+            st.info(TR("common.no_data"))
         return None
 
     dates = [item["date"] for item in history]
@@ -492,54 +724,63 @@ def _historical_recovery_record_table(history):
         selected_date = dates[0]
         st.session_state["recovery_history_selected"] = selected_date
 
-    rows = [_recovery_history_row(item) for item in history]
-    view_label = _ui("查看", "View")
-    headers = list(rows[0]) + [_ui("操作", "Action")]
-    widths = [1.0, 1.35, 1.55, 1.0, 1.3, 1.0, .7]
-    with st.container(height=430, border=True):
-        header_columns = st.columns(widths)
-        for column, label in zip(header_columns, headers):
-            header_html = f'<div style="text-align:center;font-weight:600;">{escape(str(label))}</div>'
-            column.markdown(header_html, unsafe_allow_html=True)
-        for item, row in zip(history, rows):
-            columns = st.columns(widths, vertical_alignment="center")
-            for column, label in zip(columns[:-1], headers[:-1]):
-                cell_html = f'<div style="text-align:center;">{escape(str(row[label]))}</div>'
-                column.markdown(cell_html, unsafe_allow_html=True)
-            if columns[-1].button(
-                view_label,
-                key=f"recovery_history_view_{item['date']}",
-                use_container_width=True,
-            ):
-                st.session_state["recovery_history_selected"] = item["date"]
-                st.session_state["recovery_history_focus_nonce"] = (
-                    st.session_state.get("recovery_history_focus_nonce", 0) + 1
-                )
-                st.rerun()
+    # The expander itself is the only disclosure control. It starts collapsed;
+    # selecting a row opens all three history sections for the rerun that
+    # follows, without requiring a second "view history" click.
+    with st.expander(TR("history.recovery_browser_title"), expanded=sections_open):
+        centered_dataframe([_recovery_history_row(item) for item in history], max_height="26rem")
+        selected_date = st.selectbox(
+            _ui("查看日期", "View date"),
+            dates,
+            index=dates.index(selected_date),
+            format_func=lambda value: format_date(value, LANGUAGE),
+            key="recovery_history_date_picker",
+        )
+        if st.button(_ui("查看", "View"), key="recovery_history_view_button", use_container_width=False):
+            st.session_state["recovery_history_selected"] = selected_date
+            st.session_state["recovery_history_details_visible"] = True
+            st.session_state["recovery_history_sections_open"] = True
+            st.session_state["recovery_history_focus_nonce"] = (
+                st.session_state.get("recovery_history_focus_nonce", 0) + 1
+            )
+            st.rerun()
     return selected_date
 
 
-def _historical_recovery_situation(history, selected_date, *, auto_expand=False, focus_nonce=0):
+def _historical_recovery_situation(history, *, auto_expand=False, focus_nonce=0):
     """Show the selected raw recovery record and its date-specific interpretation."""
-    selected = next((item for item in history if item["date"] == selected_date), None)
-    situation_title = _ui("历史恢复情况", "Historical Recovery Situation")
     data_title = _ui("历史恢复数据", "Historical Recovery Data")
     details_title = _ui("历史恢复详情", "Historical Recovery Details")
-    focus_target_id = "recovery-history-situation"
-    focus_anchor = f'<div id="{focus_target_id}"></div>'
-    st.markdown(focus_anchor, unsafe_allow_html=True)
-    st.subheader(situation_title)
 
-    with st.expander(data_title, expanded=auto_expand):
-        centered_dataframe([_recovery_history_row(selected)] if selected else [])
-    with st.expander(details_title, expanded=auto_expand):
+    # Historical records are the first child directory of the situation.
+    selected_date = _historical_recovery_record_table(history)
+    if not st.session_state.get("recovery_history_details_visible", False):
+        return
+
+    selected = next((item for item in history if item["date"] == selected_date), None)
+    sections_open = st.session_state.get("recovery_history_sections_open", False)
+    # Keep each evidence layer in its own expander, but show the content
+    # immediately when the section is opened. The old nested action buttons
+    # added an unnecessary second click and collapsed after a selection rerun.
+    with st.expander(data_title, expanded=sections_open):
+        if selected:
+            centered_dataframe([_recovery_history_row(selected)])
+        else:
+            st.info(TR("common.no_data"))
+
+    with st.expander(details_title, expanded=sections_open):
         if selected:
             _render_today_recovery_details(selected, history, historical=True)
         else:
             st.info(TR("common.no_data"))
 
     if auto_expand:
-        render_interaction_focus(components, target_id=focus_target_id, nonce=focus_nonce)
+        render_interaction_focus(
+            components,
+            target_expander_label=data_title,
+            nonce=focus_nonce,
+            top_offset=80,
+        )
 
 
 def main():
@@ -547,53 +788,50 @@ def main():
     intro = intro.replace("确定性恢复建议", "恢复建议").replace("deterministic recovery guidance", "recovery guidance")
     st.title(TR("domain.recovery.title")); st.caption(intro)
     notice = st.session_state.pop("recovery_save_notice", None)
-    data = get_latest_recovery(log_date=date.today().isoformat())
-    if not data: st.info(TR("domain.recovery.empty"))
+    collapse_editor_nonce = st.session_state.pop("recovery_collapse_editor_nonce", None)
+    data, history, baselines, coach, kubios_measurement = _load_recovery_page_inputs(
+        _recovery_database_revision(), date.today().isoformat()
+    )
+    has_measurement = bool(data or kubios_measurement)
+    data = _merge_recovery_evidence(data, kubios_measurement)
+    if not has_measurement: st.info(TR("domain.recovery.empty"))
     _recovery_panel(data)
+    if collapse_editor_nonce is not None:
+        collapse_expander(
+            components,
+            target_expander_label=TR("inline_edit.edit_recovery"),
+            nonce=collapse_editor_nonce,
+        )
     if notice: st.success(notice)
-    history = get_recovery_history(limit=60)
-    st.subheader(TR("domain.recovery.today_details"))
     st.markdown(RECOVERY_CORE_CARD_CSS, unsafe_allow_html=True)
+    baseline_context = _baseline_context(baselines)
+    baseline_chips = "".join(
+        f'<span class="drc-details-context-chip"><strong>{escape(label)}</strong>{escape(value)}</span>'
+        for label, value in baseline_context
+    )
+    baseline_basis = _ui("基于近 28 天个人波动", "Based on 28-day personal variation")
+    st.markdown(
+        f'<div class="drc-details-heading-wrap"><h3 class="drc-details-heading">'
+        f'{escape(TR("domain.recovery.today_details"))}</h3>'
+        f'<div class="drc-details-context">{baseline_chips}'
+        f'<span class="drc-details-context-basis">{escape(baseline_basis)}</span></div></div>',
+        unsafe_allow_html=True,
+    )
     _render_today_recovery_details(data, history)
 
-    selected_history_date = _historical_recovery_record_table(history)
     history_focus_nonce = st.session_state.get("recovery_history_focus_nonce", 0)
     last_history_focus_nonce = st.session_state.get("recovery_history_last_scrolled_nonce", 0)
     should_focus_history = history_focus_nonce > last_history_focus_nonce
     _historical_recovery_situation(
         history,
-        selected_history_date,
         auto_expand=should_focus_history,
         focus_nonce=history_focus_nonce,
     )
     if should_focus_history:
         st.session_state["recovery_history_last_scrolled_nonce"] = history_focus_nonce
 
-    st.subheader("个人恢复基线" if LANGUAGE != "en" else "Personal Recovery Baseline")
-    target_date = (data or {}).get("date", date.today().isoformat())
-    baselines = get_recovery_baselines(target_date=target_date)
-    st.markdown(RECOVERY_CORE_CARD_CSS, unsafe_allow_html=True)
-    left, right = st.columns(2)
-    with left:
-        _core_metric_card(
-            TR("baseline.morning_rmssd"),
-            (data or {}).get("morning_rmssd"),
-            "ms",
-            baselines.get("morning_rmssd"),
-            higher_is_better=True,
-        )
-    with right:
-        _core_metric_card(
-            TR("baseline.resting_hr"),
-            (data or {}).get("morning_mean_hr"),
-            "bpm",
-            baselines.get("morning_mean_hr"),
-            higher_is_better=False,
-        )
-    st.subheader("恢复建议" if LANGUAGE != "en" else "Recovery Guidance")
-    coach = get_latest_local_coach()
-    if not coach: st.info(TR("local_coach.missing"))
-    else: st.success(TR(f"local_coach.recovery_advice.{coach['recovery_advice'].get('status', 'insufficient_data')}"))
+    st.subheader(_ui("恢复建议", "Recovery Guidance"))
+    _render_recovery_guidance(coach, data)
     st.info(TR("domain.recovery.boundary")); st.caption(TR("safety.medical"))
 
 

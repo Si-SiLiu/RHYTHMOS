@@ -94,19 +94,23 @@ def recognize_field(crop, field, field_definition, adapter, config=None):
 
 
 def parse_template_regions(image_path, template, adapter, config=None):
+    config = config or {}
+    capture_fields = set(config.get("capture_fields", ()))
     fields = {}
     warnings = []
     for field, definition in template["field_regions"].items():
+        if capture_fields and field not in capture_fields:
+            continue
         crop = extract_region(image_path, definition)
         parsed = recognize_field(crop, field, definition, adapter, config)
         if parsed:
             fields[field] = parsed
         else:
             warnings.append(f"{field}:region_ocr_failed")
-    required = (config or {}).get("minimum_required_fields", ["date", "rmssd", "mean_hr"])
+    required = config.get("minimum_required_fields", ["rmssd", "mean_hr"])
     missing = [field for field in required if field not in fields]
     required_scores = [fields[field].confidence for field in required if field in fields]
     overall = round(mean(required_scores), 3) if required_scores else 0.0
     if missing:
         overall = max(0.0, round(overall - 0.18 * len(missing), 3))
-    return ParseResult(fields, missing, warnings, (config or {}).get("parser_version", "1.2.0"), overall, True)
+    return ParseResult(fields, missing, warnings, config.get("parser_version", "1.3.0"), overall, True)

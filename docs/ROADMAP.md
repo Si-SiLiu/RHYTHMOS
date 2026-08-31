@@ -85,14 +85,14 @@ Product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现�
 - Phase 12.0.9 Outbound Context Builder 标记 Completed。
 - Phase 12.0.10 Pre-Provider Readiness Gate 标记 Completed。
 - Local Coach 主引擎、前瞻评估链路、Freshness Diagnostics 和 Freshness-Aware Sync 标记 Completed。
-- Phase 12.1 AI Coach Implementation 与 Phase 13 至 Phase 15 标记 Planned。
+- Phase 12.1 AI Coach Implementation 标记 Completed；Phase 13 至 Phase 15 标记 Planned。
 - 当前没有标记 In Progress 的产品功能阶段。
 - One-Click Sync 已完成编排、Dry Run、Selective Sync、Resume、日志和同步历史。
 - Recovery Engine v1.0 是当前稳定评分主路径。
 - 早期数据仍可能使用 v0.1 或 v0.3 fallback。
 - Baseline Engine 已产生真实 baseline_metrics 记录。
 - Dashboard 已展示个人基线与评分解释。
-- AI Coach 的架构、安全和审计契约已完成；运行实现仍位于未来阶段。
+- AI Coach 的架构、安全契约与标准保留 API 运行实现已完成。
 - 路线图状态核验日期为 2026-07-10。
 
 ## Phase 1 — Polar OAuth — Completed
@@ -222,10 +222,10 @@ Product brand: **RHYTHMOS｜律衡** — Personal Performance OS / 个人表现�
 - 主要依赖：Phase 10.2。
 - 验收标准：不计算评分、不越过医疗边界、输出可追溯、失败确定性降级。
 
-## Phase 12.1 — AI Coach Implementation — Planned
+## Phase 12.1 — AI Coach Implementation — Completed
 
-- 目标：在单独批准 provider、隐私和审计 migration 后实现设计契约。
-- 当前状态：Planned；云端方向和数据治理已批准，但 provider、model、endpoint 和 region 尚未批准。
+- 目标：在显式用户批准 provider、隐私和审计 migration 后实现设计契约。
+- 当前状态：Completed；OpenAI Responses API、`gpt-5.4`、标准 API 保留策略与综合反馈展示已接入。
 - 主要依赖：Phase 12.0 与显式用户审批。
 - 验收标准：合成安全评估通过，不能写 Recovery/Baseline/Confidence，运行失败安全降级。
 

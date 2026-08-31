@@ -18,10 +18,15 @@ import streamlit as st
 from src.branding import browser_page_title, load_page_icon
 from src.i18n import format_number, get_translator
 from src.i18n.ui import current_language, render_sidebar
+from src.i18n.traditional import traditionalize
+from src.db import connect
 from src.neural_readiness import (CALIBRATION_PROTOCOL_VERSION, DAILY_SHORT_PROTOCOL_VERSION,
-                                  get_condition_preferences, get_daily_result,
+                                  calculate_work_impact, get_condition_preferences, get_daily_result,
+                                  get_work_phase_results,
                                   save_assessment, save_condition_preferences)
 from src.pvt_component import render_pvt
+from src.post_save_sync import refresh_local_coach_for_date
+from src.input_habits import record_input_habit
 
 
 configure_language = current_language(st.session_state)
@@ -33,7 +38,14 @@ LANGUAGE, TR = render_sidebar(st, "neural")
 
 
 def _ui(zh, en):
-    return zh if LANGUAGE != "en" else en
+    return traditionalize(zh) if LANGUAGE == "zh-TW" else zh if LANGUAGE != "en" else en
+
+
+st.page_link(
+    "pages/8_Performance_Planner.py",
+    label=_ui("← 返回表现计划", "← Back to Performance Planner"),
+    icon="🗓️",
+)
 
 
 def _reset_flow():
@@ -47,6 +59,29 @@ def _start_new_test():
     _reset_flow()
     st.session_state["neural_retake"] = True
     st.session_state["neural_phase"] = "instructions"
+
+
+def _show_work_impact(result_date):
+    phases = get_work_phase_results(result_date)
+    impact = calculate_work_impact(phases)
+    if impact is None:
+        if "before_work" in phases and "after_work" not in phases:
+            st.info(_ui("已记录工作前状态。完成工作后再测一次，即可查看本次工作影响。", "The before-work state is recorded. Test again after work to see its impact."))
+        else:
+            st.caption(_ui("建议在工作前和工作后各测试一次，用于比较本次工作影响。", "For work-impact tracking, complete one check before and one after work."))
+        return
+    st.subheader(_ui("本次工作影响", "Impact of this work session"))
+    metrics = st.columns(4)
+    rt_delta = impact["median_rt_delta_ms"]
+    metrics[0].metric(
+        _ui("中位反应时间变化", "Median RT change"),
+        "—" if rt_delta is None else f"{rt_delta:+.0f} ms",
+    )
+    metrics[1].metric(_ui("脑力疲劳变化", "Mental fatigue change"), f"{impact['mental_fatigue_delta']:+d}")
+    metrics[2].metric(_ui("思维清晰度变化", "Mental clarity change"), f"{impact['mental_clarity_delta']:+d}")
+    levels = {"small": _ui("较小", "Small"), "moderate": _ui("中等", "Moderate"), "large": _ui("较大", "Large")}
+    metrics[3].metric(_ui("工作影响", "Work impact"), levels[impact["level"]])
+    st.caption(_ui("正数表示工作后反应变慢或主观疲劳增加；该指标反映本次工作后的即时变化，不等同于长期神经疲劳。", "Positive values indicate slower responses or higher subjective fatigue after work. This reflects an immediate change, not long-term neural fatigue."))
 
 
 def _show_result(result):
@@ -94,6 +129,7 @@ def _show_result(result):
     available = [f"{label}: {format_number(value, LANGUAGE)}" for label, value in sleep if value is not None]
     st.caption((_ui("已融合当日数据：", "Integrated daily data: ") + " · ".join(available)) if available else _ui("当日尚无可融合的睡眠或 HRV 数据。", "No same-day sleep or HRV data is available to integrate."))
     st.caption(_ui("结果用于个人纵向观察，不构成医疗诊断，也不直接测量中枢神经系统疲劳。", "Results support personal longitudinal observation; they are not medical diagnosis and do not directly measure central nervous system fatigue."))
+    _show_work_impact(result.get("date") or date.today().isoformat())
 
 
 st.title(_ui("Neural Readiness｜神经准备度", "Neural Readiness"))
@@ -107,6 +143,12 @@ today = date.today().isoformat()
 existing = get_daily_result(today)
 if existing and not st.session_state.get("neural_retake"):
     _show_result(existing)
+    work_phases = get_work_phase_results(today)
+    if "before_work" in work_phases and "after_work" not in work_phases:
+        if st.button(_ui("记录工作后状态", "Record after-work state"), type="primary", key="neural_after_work_button"):
+            _start_new_test()
+            st.session_state["neural_work_phase"] = "after_work"
+            st.rerun()
     if st.button(_ui("重新测试", "Retest"), key="neural_retake_button", type="primary"):
         _start_new_test(); st.rerun()
     if st.button(_ui("进行深度校准（约 3 分钟）", "Run deep calibration (about 3 minutes)")):
@@ -121,6 +163,13 @@ if phase == "instructions":
     defaults = st.session_state["neural_condition_defaults"]
     with st.form("neural_conditions"):
         st.caption(_ui("已按你的上次选择预填。", "Pre-filled from your previous choices."))
+        work_phase = st.radio(
+            _ui("本次测试时段", "When are you taking this check?"),
+            options=("before_work", "after_work"),
+            index=0 if st.session_state.get("neural_work_phase", "before_work") == "before_work" else 1,
+            format_func=lambda value: _ui("工作前", "Before work") if value == "before_work" else _ui("工作后", "After work"),
+            horizontal=True,
+        )
         quick_ready = st.form_submit_button(_ui("一键确认以上四项", "Confirm all four"))
         quiet = st.checkbox(_ui("当前环境较安静", "My environment is reasonably quiet"), value=defaults["quiet"])
         dominant = st.checkbox(_ui("我会使用惯用手操作", "I will use my dominant hand"), value=defaults["dominant"])
@@ -140,6 +189,7 @@ if phase == "instructions":
         remembered = {"quiet": quiet, "dominant": dominant, "stay": stay, "device_ok": device_ok}
         save_condition_preferences(remembered)
         st.session_state["neural_condition_defaults"] = remembered
+        st.session_state["neural_work_phase"] = work_phase
         st.session_state["neural_context"] = {"caffeine_last_2h": caffeine, "exercise_last_2h": exercise, "illness_or_discomfort": illness, "interrupted": interrupted}
         st.session_state["neural_test_mode"] = "weekly_calibration" if calibration else "daily_short"
         st.session_state["neural_phase"] = "scales"; st.rerun()
@@ -204,13 +254,14 @@ elif phase == "formal":
     response = render_pvt(run_id=st.session_state["neural_assessment_id"], duration_seconds=duration, protocol_version=protocol)
     if response:
         context = st.session_state["neural_context"]
+        work_phase = st.session_state.get("neural_work_phase", "before_work")
         payload = {
             "id": st.session_state["neural_assessment_id"], "assessment_date": today,
             "timezone": response.get("device_context", {}).get("timezone") or "UTC",
             "protocol_version": protocol, "test_mode": mode, "baseline_group": mode,
             "duration_seconds": duration, "started_at": response["started_at"],
             "completed_at": response["completed_at"], "trials": response.get("trials", []),
-            "device_context": response.get("device_context", {}),
+            "device_context": {**response.get("device_context", {}), "work_phase": work_phase},
             **context, **st.session_state["neural_scale_values"],
             "interrupted": bool(context.get("interrupted")) or bool(response.get("interrupted")),
             "valid_for_baseline": not context.get("interrupted") and not response.get("interrupted"),
@@ -220,6 +271,20 @@ elif phase == "formal":
         except (ValueError, OSError) as exc:
             st.error(_ui(f"保存失败：{exc}", f"Save failed: {exc}"))
         else:
+            with connect() as connection:
+                record_input_habit(
+                    connection,
+                    "neural_readiness.assessment",
+                    fields=[
+                        "caffeine_last_2h" if context.get("caffeine_last_2h") else "",
+                        "exercise_last_2h" if context.get("exercise_last_2h") else "",
+                        "illness_or_discomfort" if context.get("illness_or_discomfort") else "",
+                        "interrupted" if payload.get("interrupted") else "",
+                        "mental_fatigue", "mental_clarity", "task_motivation", "physical_heaviness",
+                    ],
+                    choices={"neural.test_mode": mode},
+                )
+            refresh_local_coach_for_date(today)
             st.session_state["neural_phase"] = "complete"; st.rerun()
 
 else:

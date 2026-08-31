@@ -27,18 +27,18 @@ class AICoachThreatModelTests(unittest.TestCase):
     def test_privacy_and_retention_properties_are_explicit(self):
         for property_name in ("Data minimization", "Purpose limitation", "Unlinkability", "Transparency", "Intervenability", "Retention limitation", "Integrity"):
             self.assertIn(f"**{property_name}:**", self.document)
-        self.assertIn("local content 90 days", self.document)
-        self.assertIn("metadata 365 days", self.document)
+        self.assertIn("standard API retention is disclosed", self.document)
+        self.assertIn("stored per day", self.document)
 
     def test_incident_response_preserves_deterministic_service(self):
         self.assertIn("rotate provider credential", self.document)
         self.assertIn("deterministic features remain available", self.document)
         self.assertIn("hash-identical", self.document)
 
-    def test_design_does_not_claim_runtime_approval(self):
-        self.assertIn("runtime not implemented", self.document)
-        self.assertIn("Threat-model review does not approve", self.document)
-        self.assertIn("`model_version` is", self.document)
+    def test_design_records_the_approved_runtime_boundary(self):
+        self.assertIn("standard-retention runtime enabled", self.document)
+        self.assertIn("`gpt-5.4`", self.document)
+        self.assertIn("minimum-necessary", self.document)
 
 
 if __name__ == "__main__":

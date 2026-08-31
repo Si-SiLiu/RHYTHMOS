@@ -1,4 +1,4 @@
-"""Fail-closed provider approval gate for any future AI Coach cloud call."""
+"""Fail-closed provider approval gate for AI Coach cloud calls."""
 
 import copy
 import hashlib
@@ -25,6 +25,7 @@ REQUIRED_FIELDS = {
     "approval_record_version",
     "status",
     "implementation_authorization",
+    "data_retention_mode",
     "provider_id",
     "model_snapshot",
     "endpoint",
@@ -42,6 +43,7 @@ REQUIRED_FIELDS = {
     "configuration_fingerprint",
     "blocked_reason",
 }
+RETENTION_MODES = {"zero_data_retention", "standard_api_retention"}
 CONTROL_FIELDS = (
     "region_supported",
     "zdr_verified",
@@ -131,6 +133,7 @@ def load_provider_approval(path: Path = APPROVAL_PATH) -> dict[str, Any]:
         or not SEMVER_RE.fullmatch(record["approval_record_version"])
         or record["status"] not in STATUSES
         or not isinstance(record["implementation_authorization"], bool)
+        or record["data_retention_mode"] not in RETENTION_MODES
         or record["product_owner_approval"] not in REVIEW_STATES
         or record["chief_architect_review"] not in REVIEW_STATES
     ):
@@ -144,6 +147,7 @@ def load_provider_approval(path: Path = APPROVAL_PATH) -> dict[str, Any]:
         if (
             record["implementation_authorization"]
             or any(record[field] is not None for field in IDENTITY_FIELDS)
+            or record["data_retention_mode"] != "zero_data_retention"
             or any(record[field] for field in CONTROL_FIELDS)
             or record["product_owner_approval"] != "pending"
             or record["chief_architect_review"] != "pending"
@@ -172,7 +176,15 @@ def require_cloud_call_approval(
     if not all(isinstance(record[field], str) and record[field] for field in IDENTITY_FIELDS):
         raise AIApprovalError("AI cloud call is not authorized")
     _validate_endpoint(record["endpoint"])
-    if not all(record[field] is True for field in CONTROL_FIELDS):
+    if not all(
+        record[field] is True
+        for field in ("no_training_verified", "subprocessors_accepted", "retention_terms_accepted")
+    ):
+        raise AIApprovalError("AI cloud call is not authorized")
+    if record["data_retention_mode"] == "zero_data_retention":
+        if not record["zdr_verified"] or not record["human_review_disabled"]:
+            raise AIApprovalError("AI cloud call is not authorized")
+    elif record["zdr_verified"]:
         raise AIApprovalError("AI cloud call is not authorized")
     if (
         record["product_owner_approval"] != "approved"

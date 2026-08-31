@@ -24,12 +24,35 @@ SANDBOX_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SANDBOX_ID_KEY = "drc_demo_sandbox_id"
 SANDBOX_DB_PATH_KEY = "drc_demo_db_path"
 SANDBOX_SEEDED_KEY = "drc_demo_seeded"
+SANDBOX_QUERY_KEY = "drc_demo_session"
 LAST_ACCESS_FILENAME = ".last_access"
 SANDBOX_TTL_SECONDS = 24 * 60 * 60
 
 
 def _session_state(st):
     return getattr(st, "session_state", st)
+
+
+def _query_sandbox_id(st) -> str | None:
+    query_params = getattr(st, "query_params", None)
+    if query_params is None:
+        return None
+    try:
+        value = query_params.get(SANDBOX_QUERY_KEY)
+    except (AttributeError, KeyError, TypeError):
+        return None
+    return value if _valid_sandbox_id(value) else None
+
+
+def _persist_query_sandbox_id(st, sandbox_id: str) -> None:
+    query_params = getattr(st, "query_params", None)
+    if query_params is None:
+        return
+    try:
+        if query_params.get(SANDBOX_QUERY_KEY) != sandbox_id:
+            query_params[SANDBOX_QUERY_KEY] = sandbox_id
+    except (AttributeError, KeyError, TypeError):
+        return
 
 
 def is_demo_mode() -> bool:
@@ -79,6 +102,16 @@ def ensure_demo_sandbox(st) -> Path:
     state = _session_state(st)
     SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
     sandbox_id = state.get(SANDBOX_ID_KEY)
+    if not _valid_sandbox_id(sandbox_id):
+        sandbox_id = _query_sandbox_id(st)
+        if sandbox_id:
+            state[SANDBOX_ID_KEY] = sandbox_id
+            state[SANDBOX_DB_PATH_KEY] = str(
+                _sandbox_path(sandbox_id) / "demo.db"
+            )
+            state[SANDBOX_SEEDED_KEY] = (
+                _sandbox_path(sandbox_id) / "demo.db"
+            ).exists()
     cleanup_expired_sandboxes(current_sandbox_id=sandbox_id)
     if not _valid_sandbox_id(sandbox_id):
         sandbox_id = uuid4().hex
@@ -89,6 +122,7 @@ def ensure_demo_sandbox(st) -> Path:
     else:
         path = _sandbox_path(sandbox_id)
         state[SANDBOX_DB_PATH_KEY] = str(path / "demo.db")
+    _persist_query_sandbox_id(st, sandbox_id)
     db_path = path / "demo.db"
     if not state.get(SANDBOX_SEEDED_KEY) or not db_path.exists():
         seed_demo_database(db_path)

@@ -5,6 +5,7 @@ import os
 
 from .locale import SUPPORTED_LANGUAGES, normalize_language
 from .storage import load_language_preference, save_language_preference
+from .traditional import traditionalize
 from .translator import get_translator
 from ..branding import BRAND_NAME, POSITIONING_LINES
 from ..demo_sandbox import is_demo_mode, reset_demo_sandbox
@@ -13,6 +14,38 @@ from ..ui_controls import render_app_shell_styles
 
 SESSION_LANGUAGE_KEY = "ui_language"
 LANGUAGE_SELECTOR_KEY = "ui_language_selector"
+
+
+# One coherent outlined icon family keeps navigation recognisable without
+# competing with the analytical content.  ``None`` means the app entrypoint,
+# which can be redirected for the hosted demo through DRC_STREAMLIT_ENTRYPOINT.
+NAVIGATION_GROUPS = (
+    (
+        "navigation.daily_state",
+        (
+            ("exercise", None, ":material/fitness_center:"),
+            ("sleep", "pages/1_Sleep.py", ":material/bedtime:"),
+            ("recovery", "pages/2_Recovery.py", ":material/favorite:"),
+            ("nutrition", "pages/3_Nutrition.py", ":material/eco:"),
+            ("feedback", "pages/7_Overall_Feedback.py", ":material/summarize:"),
+        ),
+    ),
+    (
+        "navigation.performance_system",
+        (
+            ("performance_planner", "pages/8_Performance_Planner.py", ":material/calendar_month:"),
+            ("weekly_plan", "pages/9_Weekly_Plan.py", ":material/view_week:"),
+            ("training_studio", "pages/6_Training_Studio.py", ":material/psychology:"),
+        ),
+    ),
+    (
+        "navigation.account",
+        (
+            ("personal", "pages/5_Personal.py", ":material/person:"),
+            ("system", "pages/4_System.py", ":material/settings:"),
+        ),
+    ),
+)
 
 
 def current_language(session_state: MutableMapping[str, object]) -> str:
@@ -53,8 +86,17 @@ def render_sidebar(st, active_page: str) -> tuple[str, object]:
     language = current_language(st.session_state)
     translator = get_translator(language)
 
-    st.sidebar.markdown(f"### {BRAND_NAME}")
-    st.sidebar.caption("  \n".join(POSITIONING_LINES))
+    brand_chinese = (
+        traditionalize(POSITIONING_LINES[1]) if language == "zh-TW" else POSITIONING_LINES[1]
+    )
+    st.sidebar.markdown(
+        "<div class=\"rh-sidebar-brand\">"
+        f"<div class=\"rh-sidebar-brand-name\">{BRAND_NAME}</div>"
+        f"<div class=\"rh-sidebar-brand-descriptor\">{POSITIONING_LINES[0]}</div>"
+        f"<div class=\"rh-sidebar-brand-chinese\">{brand_chinese}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     # Keep the widget state separate from the global language state. This
     # avoids Streamlit's page-navigation reset of a widget-keyed preference.
@@ -92,58 +134,16 @@ def render_sidebar(st, active_page: str) -> tuple[str, object]:
     language = current_language(st.session_state)
     translator = get_translator(language)
     main_page = os.environ.get("DRC_STREAMLIT_ENTRYPOINT", "dashboard.py")
-    st.sidebar.page_link(
-        main_page,
-        label=translator("navigation.exercise"),
-        icon="🏃",
-        disabled=active_page == "exercise",
-    )
-    st.sidebar.page_link(
-        "pages/1_Sleep.py",
-        label=translator("navigation.sleep"),
-        icon="🌙",
-        disabled=active_page == "sleep",
-    )
-    st.sidebar.page_link(
-        "pages/2_Recovery.py",
-        label=translator("navigation.recovery"),
-        icon="❤️",
-        disabled=active_page == "recovery",
-    )
-    st.sidebar.page_link(
-        "pages/3_Neural_Readiness.py",
-        label=translator("navigation.neural"),
-        icon="⚡",
-        disabled=active_page == "neural",
-    )
-    st.sidebar.page_link(
-        "pages/6_Training_Studio.py",
-        label=translator("navigation.training_studio"),
-        icon="🧠",
-        disabled=active_page == "training_studio",
-    )
-    st.sidebar.page_link(
-        "pages/7_Progress_Lab.py",
-        label=translator("navigation.progress_lab"),
-        icon="📈",
-        disabled=active_page == "progress_lab",
-    )
-    st.sidebar.page_link(
-        "pages/3_Nutrition.py",
-        label=translator("navigation.nutrition"),
-        icon="🥗",
-        disabled=active_page == "nutrition",
-    )
-    st.sidebar.page_link(
-        "pages/5_Personal.py",
-        label=translator("navigation.personal"),
-        icon="👤",
-        disabled=active_page == "personal",
-    )
-    st.sidebar.page_link(
-        "pages/4_System.py",
-        label=translator("navigation.system"),
-        icon="⚙️",
-        disabled=active_page == "system",
-    )
+    for group_key, pages in NAVIGATION_GROUPS:
+        st.sidebar.markdown(
+            f'<div class="rh-sidebar-group-label">{translator(group_key)}</div>',
+            unsafe_allow_html=True,
+        )
+        for page_key, page_path, icon in pages:
+            st.sidebar.page_link(
+                main_page if page_path is None else page_path,
+                label=translator(f"navigation.{page_key}"),
+                icon=icon,
+                disabled=active_page == page_key,
+            )
     return language, translator

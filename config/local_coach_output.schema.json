@@ -3,11 +3,12 @@
   "$id": "daily-recovery-coach/local-coach-output/1.0.0",
   "type": "object",
   "additionalProperties": false,
-  "required": ["date", "morning_training", "evening_training", "sleep_advice", "hydration_advice", "nutrition_advice", "recovery_advice", "data_limitations", "safety_notices", "rationale", "engine_version", "rule_config_version", "generated_without_cloud_ai", "is_historical", "freshness_days"],
+  "required": ["date", "morning_training", "evening_training", "training_summary", "sleep_advice", "hydration_advice", "nutrition_advice", "recovery_advice", "data_limitations", "safety_notices", "rationale", "engine_version", "rule_config_version", "generated_without_cloud_ai", "is_historical", "freshness_days"],
   "properties": {
     "date": {"type": "string", "format": "date"},
     "morning_training": {"$ref": "#/$defs/morningTraining"},
     "evening_training": {"$ref": "#/$defs/eveningTraining"},
+    "training_summary": {"$ref": "#/$defs/trainingSummary"},
     "sleep_advice": {"$ref": "#/$defs/sleepAdvice"},
     "hydration_advice": {"$ref": "#/$defs/hydrationAdvice"},
     "nutrition_advice": {"$ref": "#/$defs/nutritionAdvice"},
@@ -32,6 +33,23 @@
     "freshness_days": {"type": "integer", "minimum": 0}
   },
   "$defs": {
+    "trainingSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "advice", "drivers", "data_coverage"],
+      "properties": {
+        "status": {"type": "string", "enum": ["normal", "adjusted", "conservative"]},
+        "advice": {"type": "string", "minLength": 1, "maxLength": 500},
+        "drivers": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "maxLength": 100}},
+        "data_coverage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["sleep", "training", "neural", "nutrition"],
+          "properties": {
+            "sleep": {"type": "boolean"}, "training": {"type": "boolean"},
+            "neural": {"type": "boolean"}, "nutrition": {"type": "boolean"}
+          }
+        }
+      }
+    },
     "adjustment": {"type": ["integer", "null"], "minimum": -100, "maximum": 0},
     "morningTraining": {
       "type": "object", "additionalProperties": false,

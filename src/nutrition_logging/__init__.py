@@ -23,7 +23,8 @@ from .food_units import (
 )
 from .food_catalog import (
     CUSTOM_FOOD, FOOD_CATALOG_VERSION, allowed_food_units, calculate_food_values,
-    favorite_foods, food_catalog_by_id, food_catalog_by_name, list_food_catalog,
+    favorite_foods, food_catalog_by_id, food_catalog_by_name, food_display_name,
+    ensure_manual_food_option, list_food_catalog,
     recent_foods, search_food_catalog, set_food_favorite,
 )
 from .simple_storage import (
@@ -45,7 +46,8 @@ __all__ = [
     "FoodUnit", "FOOD_UNITS", "FOOD_COUNT_UNITS", "food_unit_label_key",
     "CUSTOM_FOOD", "FOOD_CATALOG_VERSION", "list_food_catalog",
     "food_catalog_by_id", "food_catalog_by_name", "search_food_catalog",
-    "allowed_food_units", "calculate_food_values", "recent_foods",
+    "food_display_name",
+    "allowed_food_units", "calculate_food_values", "ensure_manual_food_option", "recent_foods",
     "favorite_foods", "set_food_favorite", "MEAL_STATUSES", "MEAL_SOURCES",
     "create_meal_record", "save_meal_record", "get_meal_record",
     "list_meal_records", "soft_delete_meal_record", "copy_meal_record",

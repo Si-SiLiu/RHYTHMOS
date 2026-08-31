@@ -16,14 +16,15 @@ def approved_record():
         "approval_record_version": "1.0.0",
         "status": "approved",
         "implementation_authorization": True,
-        "provider_id": "synthetic-provider",
+        "data_retention_mode": "standard_api_retention",
+        "provider_id": "openai",
         "model_snapshot": "synthetic-model-2030-01-01",
         "endpoint": "https://api.synthetic.example/v1/responses",
         "processing_region": "synthetic-region",
-        "region_supported": True,
-        "zdr_verified": True,
+        "region_supported": False,
+        "zdr_verified": False,
         "no_training_verified": True,
-        "human_review_disabled": True,
+        "human_review_disabled": False,
         "subprocessors_accepted": True,
         "retention_terms_accepted": True,
         "product_owner_approval": "approved",
@@ -44,16 +45,17 @@ def write_record(directory, record):
 
 
 class AICoachApprovalTests(unittest.TestCase):
-    def test_committed_record_is_strictly_blocked(self):
+    def test_committed_record_is_approved_for_standard_retention(self):
         record = ai_coach_approval.load_provider_approval()
-        self.assertEqual(record["status"], "blocked")
-        self.assertFalse(record["implementation_authorization"])
-        self.assertIsNone(record["provider_id"])
+        self.assertEqual(record["status"], "approved")
+        self.assertTrue(record["implementation_authorization"])
+        self.assertEqual(record["data_retention_mode"], "standard_api_retention")
+        self.assertFalse(record["zdr_verified"])
         self.assertFalse(ai_coach_approval.cloud_call_allowed(now=NOW))
 
-    def test_partial_blocked_record_is_rejected(self):
+    def test_invalid_retention_mode_is_rejected(self):
         record = ai_coach_approval.load_provider_approval()
-        record["provider_id"] = "partial-provider"
+        record["data_retention_mode"] = "unexpected"
         with tempfile.TemporaryDirectory() as directory:
             path = write_record(directory, record)
             with self.assertRaises(ai_coach_approval.AIApprovalError):
@@ -99,8 +101,8 @@ class AICoachApprovalTests(unittest.TestCase):
             path = write_record(directory, record)
             self.assertFalse(ai_coach_approval.cloud_call_allowed(now=NOW, path=path))
 
-    def test_every_control_and_both_reviews_are_required(self):
-        fields = list(ai_coach_approval.CONTROL_FIELDS) + [
+    def test_standard_required_controls_and_reviews_are_required(self):
+        fields = ["no_training_verified", "subprocessors_accepted", "retention_terms_accepted"] + [
             "product_owner_approval",
             "chief_architect_review",
         ]

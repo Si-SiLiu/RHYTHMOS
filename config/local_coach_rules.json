@@ -16,6 +16,12 @@
   "sleep_insufficient_hours": 6.5,
   "sleep_score_low": 60,
   "high_load_score": 70,
+  "training_high_duration_minutes": 120,
+  "training_high_rpe_load": 60,
+  "neural_fatigue_high": 7,
+  "neural_heaviness_high": 7,
+  "neural_lapse_high": 3,
+  "nutrition_min_completeness": 60,
   "freshness_days": 3,
   "training_adjustments": {
     "normal": {"volume": 0, "intensity": 0},

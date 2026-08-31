@@ -99,7 +99,7 @@ def build_ai_context(connection, analysis_date, range_days=7, questions=None,
     confidence = _row(connection, "SELECT confidence_score,confidence_level,data_completeness_score FROM recovery_confidence WHERE date=?", (analysis_date,)) or {}
     nutrition = _row(connection, "SELECT * FROM daily_nutrition_summary WHERE date=?", (analysis_date,)) or {}
     training = _row(connection, "SELECT * FROM daily_training_summary WHERE date=?", (analysis_date,)) or {}
-    coach = _row(connection, "SELECT morning_training_json,evening_training_json,data_limitations_json FROM local_coach_recommendations WHERE date=? ORDER BY updated_at DESC LIMIT 1", (analysis_date,)) or {}
+    coach = _row(connection, "SELECT morning_training_json,evening_training_json,training_summary_json,data_limitations_json FROM local_coach_recommendations WHERE date=? ORDER BY updated_at DESC LIMIT 1", (analysis_date,)) or {}
     kubios = _row(connection, """SELECT n.date,n.source_type,n.core_data_completeness,
         n.rmssd_ms,n.mean_hr_bpm,n.readiness_percent,n.pns_index,n.sns_index,
         n.measurement_quality,n.sdnn_ms,n.respiratory_rate_bpm,n.stress_index,
@@ -210,6 +210,7 @@ def build_ai_context(connection, analysis_date, range_days=7, questions=None,
         "local_coach_summary": {
             "morning_training": json.loads(coach["morning_training_json"]) if coach.get("morning_training_json") else None,
             "evening_training": json.loads(coach["evening_training_json"]) if coach.get("evening_training_json") else None,
+            "training_summary": json.loads(coach["training_summary_json"]) if coach.get("training_summary_json") else None,
         },
         "kubios_summary": {
             key: observed_resolved({

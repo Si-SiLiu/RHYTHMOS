@@ -79,10 +79,16 @@ def load_runtime_state(state_path: Path) -> dict[str, object] | None:
 
 
 def runtime_fingerprint(project_root: Path = BASE_DIR) -> str:
-    """Fingerprint code, translations, and version metadata used by Streamlit."""
+    """Fingerprint every local asset Streamlit needs to serve the dashboard."""
     root = project_root.resolve()
     paths = [root / "config" / "versions.json"]
     paths.extend(sorted((root / "src").rglob("*.py")))
+    # Streamlit's custom component files are served as static frontend assets.
+    # Include them so a rebuilt app never reuses a process that still serves an
+    # older training component after an HTML, JavaScript, or CSS-only fix.
+    component_root = root / "src" / "cognitive_component_frontend"
+    for pattern in ("*.html", "*.js", "*.css"):
+        paths.extend(sorted(component_root.rglob(pattern)))
     paths.extend(sorted((root / "locales").glob("*.json")))
     digest = hashlib.sha256()
     try:

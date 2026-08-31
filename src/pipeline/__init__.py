@@ -11,6 +11,7 @@ STEP_NAMES = (
     "recovery",
     "confidence",
     "local-coach",
+    "ai-feedback",
     "report",
     "governance",
 )

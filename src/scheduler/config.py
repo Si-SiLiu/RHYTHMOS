@@ -13,6 +13,7 @@ import tomllib
 BASE_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = BASE_DIR / "config" / "scheduler.toml"
 SYNC_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+SCHEDULED_SYNC_TIMES = ("12:00", "18:00", "23:00")
 EXPECTED_KEYS = {
     "enabled",
     "sync_time",
@@ -33,7 +34,7 @@ class SchedulerConfig:
     sync_time: str = "23:00"
     timezone_mode: str = "system"
     catch_up_on_app_start: bool = True
-    prompt_before_catch_up: bool = True
+    prompt_before_catch_up: bool = False
     max_catch_up_runs_per_day: int = 1
 
     @property
@@ -43,6 +44,11 @@ class SchedulerConfig:
     @property
     def minute(self) -> int:
         return int(self.sync_time[3:])
+
+    @property
+    def scheduled_times(self) -> tuple[str, ...]:
+        """Fixed local refresh times; ``sync_time`` is retained for compatibility."""
+        return SCHEDULED_SYNC_TIMES
 
 
 @dataclass(frozen=True)

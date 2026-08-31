@@ -14,6 +14,7 @@ REQUIRED_SOURCE_FIELDS = {
     "recovery",
     "confidence",
     "daily_metrics",
+    "nutrition",
     "baseline_context",
     "presentation",
 }
@@ -39,6 +40,7 @@ def build_context(source: Mapping[str, Any]) -> dict[str, Any]:
             "recovery": copy.deepcopy(source["recovery"]),
             "confidence": copy.deepcopy(source["confidence"]),
             "daily_metrics": copy.deepcopy(source["daily_metrics"]),
+            "nutrition": copy.deepcopy(source["nutrition"]),
             "baseline_context": copy.deepcopy(source["baseline_context"]),
             "presentation": copy.deepcopy(source["presentation"]),
             "contract_versions": {

@@ -79,3 +79,53 @@ def upsert_manual_morning_measurement(connection, date_value, values):
     )
     connection.commit()
     return get_manual_morning_measurement(connection, date_value)
+
+
+def sync_manual_morning_measurements(connection, dates=None):
+    """Mirror reviewed manual morning fields into the typed Kubios pipeline.
+
+    The legacy recovery table remains the source of record for the form.  This
+    projection gives its already-reviewed RMSSD, heart-rate, stress, and
+    respiratory-rate fields a typed, provenance-labelled representation for
+    trend and baseline calculations.  It deliberately does not infer any
+    absent Kubios-only fields such as readiness, PNS/SNS, or SDNN.
+    """
+    query = """
+        SELECT * FROM kubios_morning_hrv_raw
+        WHERE source=? AND reviewed=1
+    """
+    params = [MANUAL_SOURCE]
+    if dates:
+        placeholders = ",".join("?" for _ in dates)
+        query += f" AND date IN ({placeholders})"
+        params.extend(sorted(set(dates)))
+    rows = [dict(row) for row in connection.execute(query, params).fetchall()]
+    if not rows:
+        return 0
+
+    try:
+        from .kubios_metrics.normalizer import import_raw
+    except ImportError:
+        from kubios_metrics.normalizer import import_raw
+
+    for row in rows:
+        import_raw(
+            connection,
+            {
+                "date": row["date"],
+                "measurement_time": row["measurement_time"],
+                "rmssd": row["rmssd"],
+                "mean_hr": row["mean_hr"],
+                "stress_index": row["stress_index"],
+                "respiratory_rate_bpm": row["respiratory_rate"],
+                "measurement_quality": row["measurement_quality"],
+                "reviewed": True,
+                "is_daily_preferred": bool(row["is_daily_preferred"]),
+                "raw_json": {"input_method": "dashboard_manual"},
+            },
+            "manual",
+            "manual",
+            True,
+        )
+    connection.commit()
+    return len(rows)

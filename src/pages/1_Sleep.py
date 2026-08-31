@@ -22,13 +22,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from src.branding import browser_page_title, load_page_icon
-from src.dashboard_data import get_latest_local_coach
 from src.db import get_current_db_path
 from src.demo_sandbox import configure_demo_runtime
 from src.domain_dashboard_data import get_domain_baselines, get_latest_sleep, get_sleep_history
 from src.exercise_format import hours_to_hms, minutes_to_hms, time_to_hms
 from src.i18n import format_date, format_number, get_translator
 from src.i18n.ui import current_language, render_sidebar
+from src.i18n.traditional import traditionalize
 from src.sleep_regularity import SleepRegularityService
 from src.sleep_baseline_view import build_sleep_baseline_summary, build_sleep_regularity_points
 from src.ui_tables import centered_dataframe
@@ -44,6 +44,14 @@ st.set_page_config(
 )
 LANGUAGE, TR = render_sidebar(st, "sleep")
 render_manual_input_styles(st)
+
+# A selection is only meant to expand the historical evidence for the current
+# visit. Returning from another page should always start with every history
+# section collapsed.
+if st.session_state.get("drc_previous_page") != "sleep":
+    st.session_state.pop("sleep_history_details_focus_nonce", None)
+    st.session_state.pop("sleep_history_details_last_scrolled_nonce", None)
+    st.session_state.pop("sleep_history_details_visible", None)
 
 
 def _sleep_database_revision():
@@ -73,18 +81,32 @@ def _load_sleep_page_inputs(database_revision, today_value):
         )),
     )
 
+
+def _sleep_regularity_artifacts(history, target_date):
+    """Build regularity inputs without hashing the full raw sleep history."""
+    # Streamlit's cache key serialization was slower than this calculation:
+    # every call hashed nested hypnogram and source metadata for all 60 nights.
+    return (
+        build_sleep_regularity_points(history, target_date),
+        SleepRegularityService.calculate_regularity(history).score,
+    )
+
+
 SLEEP_CSS = """
 <style>
-.drc-sleep-card{border:1px solid #d8dee9;border-radius:16px;padding:12px 14px;min-height:148px;background:#fff;box-shadow:0 2px 8px rgba(34,52,84,.06)}
-.drc-sleep-card.primary{min-height:250px;height:250px;box-sizing:border-box}.drc-sleep-card h3{margin:0;color:#273248;font-size:.96rem}.drc-sleep-card .drc-sleep-card-value{font-size:2rem;margin:8px 0 2px}.drc-sleep-card.primary .drc-sleep-card-value{font-size:3.45rem}.drc-sleep-card-meta{color:#697386;font-size:.8rem;line-height:1.45;margin-top:6px}.drc-sleep-card-problem{margin-top:10px;font-size:.9rem;font-weight:650;color:#4b5565}.drc-sleep-card.good:before,.drc-sleep-card.warn:before,.drc-sleep-card.bad:before,.drc-sleep-card.neutral:before,.drc-sleep-card.info:before{content:"";display:block;height:4px;border-radius:4px;margin:-12px -14px 10px}
-@media (max-width: 900px){.drc-sleep-card.primary{height:auto;min-height:250px}}
-.drc-sleep-card.good{border-top:4px solid #3aa675}.drc-sleep-card.warn{border-top:4px solid #e0a02b}.drc-sleep-card.bad{border-top:4px solid #d95c5c}.drc-sleep-card.neutral{border-top:4px solid #8290a5}
-.drc-sleep-card-label{font-size:.92rem;color:#697386;font-weight:650}.drc-sleep-card-value{font-size:1.75rem;font-weight:750;color:#273248;margin-top:7px}.drc-sleep-card-delta{font-size:.95rem;font-weight:650;margin-top:5px}.drc-sleep-card-status{font-size:.9rem;color:#697386;margin-top:8px}
-.drc-sleep-card.metric{height:250px;box-sizing:border-box}.drc-sleep-card.good .drc-sleep-card-delta{color:#24865c}.drc-sleep-card.warn .drc-sleep-card-delta{color:#aa7415}.drc-sleep-card.bad .drc-sleep-card-delta{color:#b13f3f}.drc-sleep-card.neutral .drc-sleep-card-delta{color:#697386}
-.drc-sleep-sparkline{display:block;width:100%;height:48px;margin:4px 0 0}.drc-sleep-baseline-chart{display:block;width:100%;height:180px;margin-top:8px}.drc-sleep-baseline-legend{display:flex;gap:12px;flex-wrap:wrap;color:#697386;font-size:.72rem;margin-top:2px}.drc-sleep-baseline-legend span:before{content:"";display:inline-block;width:9px;height:3px;margin:0 4px 2px 0;vertical-align:middle;background:#3979bd}.drc-sleep-baseline-legend .range:before{height:8px;background:rgba(79,127,191,.25)}.drc-sleep-baseline-legend .median:before{background:#60718a}.drc-sleep-baseline-legend .current:before{background:#2f9d63}
+.drc-sleep-card,.drc-baseline-card{border:1px solid rgba(117,130,148,.18);border-radius:var(--rh-radius-standard);padding:1.25rem 1.35rem;background:rgba(117,130,148,.065);box-shadow:none;color:var(--rh-text)}
+.drc-sleep-card{position:relative;overflow:hidden;box-sizing:border-box;min-height:12.75rem;padding:1.1rem 1.15rem;border:1px solid rgba(255,255,255,.12);border-radius:20px;background:rgba(255,255,255,.035);box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 16px 32px rgba(0,0,0,.18);backdrop-filter:blur(20px) saturate(115%);-webkit-backdrop-filter:blur(20px) saturate(115%)}.drc-sleep-card.primary,.drc-sleep-card.metric{height:auto;min-height:12.75rem}.drc-sleep-card-head{display:flex;align-items:flex-start;justify-content:flex-start;flex-wrap:wrap;gap:.625rem;margin:0;padding-bottom:.55rem;border-bottom:1px solid rgba(255,255,255,.09)}.drc-baseline-card-head{display:flex;align-items:flex-start;padding-bottom:.55rem;border-bottom:1px solid var(--rh-border-subtle)}
+.drc-sleep-card h3,.drc-baseline-card h3{margin:0;min-width:0;color:var(--rh-text);font-size:1rem;font-weight:600;letter-spacing:-.006em;line-height:1.4}.drc-sleep-card-value{color:var(--rh-text);font-size:1.6875rem;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.012em;line-height:1.25;margin:.8rem 0 0;white-space:nowrap}.drc-sleep-card.primary .drc-sleep-card-value{font-size:2.15rem;letter-spacing:-.022em}.drc-sleep-card-meta{border-top:1px solid rgba(255,255,255,.09);color:var(--rh-text-muted);font-size:.8125rem;line-height:1.6;margin-top:.75rem;padding-top:.7rem}.drc-sleep-card-explanation{margin:.15rem -.25rem 0;padding:.7rem .75rem;border-radius:12px;background:color-mix(in srgb,var(--rh-surface-inset) 78%,transparent);color:var(--rh-text-secondary);font-size:.8125rem;line-height:1.55}.drc-sleep-card-explanation-label{color:var(--rh-text-secondary);font-size:.75rem;font-weight:600;line-height:1.35;margin-bottom:.2rem}.drc-sleep-card-problem{border-top:1px solid var(--rh-border-subtle);color:var(--rh-text-secondary);font-size:.875rem;font-weight:550;line-height:1.55;margin-top:.8rem;padding-top:.75rem}
+.drc-sleep-card-label{color:var(--rh-text-secondary);font-size:.875rem;font-weight:600}.drc-sleep-card-delta{font-size:.9375rem;font-weight:600;margin-top:.5rem}.drc-sleep-card-status{display:inline-flex;align-items:center;gap:.35rem;flex:0 1 auto;max-width:100%;justify-self:auto;white-space:normal;border:1px solid rgba(255,255,255,.10);border-radius:var(--rh-radius-small);background:rgba(255,255,255,.06);color:var(--rh-text-secondary);font-size:.8125rem;font-weight:600;line-height:1.3;padding:.3125rem .625rem;text-align:left}.drc-sleep-card-status:before{content:"";flex:0 0 auto;width:.375rem;height:.375rem;border-radius:50%;background:currentColor;opacity:.72}.drc-sleep-card.good .drc-sleep-card-status{background:var(--rh-status-positive-surface);color:var(--rh-status-positive)}.drc-sleep-card.warn .drc-sleep-card-status{background:var(--rh-status-caution-surface);color:var(--rh-status-caution)}.drc-sleep-card.bad .drc-sleep-card-status{background:var(--rh-status-negative-surface);color:var(--rh-status-negative)}.drc-sleep-card.good .drc-sleep-card-delta{color:var(--rh-status-positive)}.drc-sleep-card.warn .drc-sleep-card-delta{color:var(--rh-status-caution)}.drc-sleep-card.bad .drc-sleep-card-delta{color:var(--rh-status-negative)}.drc-sleep-card.neutral .drc-sleep-card-delta{color:var(--rh-text-secondary)}
+.drc-sleep-sparkline{display:block;width:100%;height:38px;margin:.625rem 0 .75rem;padding:0 .25rem}.drc-sleep-baseline-plot{position:relative;height:6.75rem;margin:.5rem 0 0}.drc-sleep-baseline-chart{display:block;width:100%;height:100%;margin:0}.drc-baseline-point{position:absolute;width:4px;height:4px;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%)}.drc-baseline-point--previous{background:#a7b0bf}.drc-baseline-point--recent{background:#3979bd}.drc-baseline-anomaly{position:absolute;width:9px;height:9px;border:2px solid #d95c5c;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%)}.drc-baseline-current{position:absolute;width:8px;height:8px;border:1px solid #fff;background:#2f9d63;pointer-events:none;transform:translate(-50%,-50%) rotate(45deg)}.drc-sleep-baseline-legend{display:flex;gap:.5rem;flex-wrap:wrap;color:var(--rh-text-muted);font-size:.625rem;line-height:1.35;margin-top:.25rem}.drc-sleep-baseline-legend span:before{content:"";display:inline-block;width:8px;height:3px;margin:0 3px 2px 0;vertical-align:middle;background:#3979bd}.drc-sleep-baseline-legend .range:before{height:6px;background:rgba(79,127,191,.20)}.drc-sleep-baseline-legend .median:before{background:#60718a}.drc-sleep-baseline-legend .current:before{background:#2f9d63}
 .drc-sleep-problem{border-radius:10px;padding:10px 14px;margin:5px 0;font-weight:600}.drc-sleep-problem.good{background:#eaf7f0;color:#24704f}.drc-sleep-problem.bad{background:#fff0f0;color:#a43c3c}.drc-sleep-problem.neutral{background:#f3f5f8;color:#697386}
-.drc-baseline-range-label{font-size:.82rem;color:#697386;margin-top:8px}.drc-baseline-range{font-size:1.28rem;line-height:1.2;font-weight:650;color:#273248;margin:4px 0 10px;overflow-wrap:anywhere;word-break:break-word}.drc-baseline-range.compact{font-size:1.08rem;letter-spacing:-.02em}
-.drc-baseline-summary{min-height:220px}.drc-baseline-kicker{font-size:.84rem;color:#697386;font-weight:650}.drc-baseline-main{font-size:1.8rem;font-weight:760;color:#273248;margin:4px 0 12px}.drc-baseline-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px}.drc-baseline-item{border-top:1px solid #e2e7ef;padding-top:8px}.drc-baseline-item-label{font-size:.78rem;color:#7a8699}.drc-baseline-item-value{font-size:.94rem;color:#273248;font-weight:650;margin-top:3px}
+.drc-sleep-guidance{margin:.2rem 0 1.25rem}.drc-sleep-guidance-card{position:relative;overflow:hidden;min-width:0;border:1px solid rgba(117,130,148,.22);border-radius:1.25rem;padding:1.15rem 1.2rem 1.2rem;background:linear-gradient(135deg,rgba(255,255,255,.66),rgba(117,130,148,.07));box-shadow:0 1px 1px rgba(15,23,42,.04),0 10px 24px rgba(15,23,42,.05);backdrop-filter:blur(18px) saturate(135%);-webkit-backdrop-filter:blur(18px) saturate(135%)}.drc-sleep-guidance-card:before{content:"";position:absolute;inset:0 0 auto;height:1px;background:rgba(255,255,255,.52);pointer-events:none}.drc-sleep-guidance-top{display:flex;align-items:center;gap:.55rem;margin-bottom:.75rem}.drc-sleep-guidance-icon{display:grid;place-items:center;width:1.75rem;height:1.75rem;border-radius:50%;background:rgba(64,111,181,.14);color:#3979bd;font-size:1rem;line-height:1}.drc-sleep-guidance-kicker{color:var(--rh-text-muted);font-size:.6875rem;font-weight:650;letter-spacing:.055em;line-height:1.2;text-transform:uppercase}.drc-sleep-guidance-card h3{color:var(--rh-text);font-size:1.0625rem;font-weight:650;letter-spacing:-.008em;line-height:1.35;margin:0}.drc-sleep-guidance-copy{color:var(--rh-text-secondary);font-size:.875rem;line-height:1.65;margin:.5rem 0 0}.drc-sleep-guidance-card.good{border-color:rgba(58,166,117,.28)}.drc-sleep-guidance-card.warn{border-color:rgba(224,160,43,.34)}.drc-sleep-guidance-card.neutral{border-color:rgba(117,130,148,.24)}
+.drc-baseline-card{margin-bottom:.625rem;padding:.95rem 1rem}.drc-baseline-card-head{padding-bottom:.55rem}.drc-baseline-summary{min-height:0;padding-top:.6rem}.drc-baseline-kicker{color:var(--rh-text-secondary);font-size:.6875rem;font-weight:500;line-height:1.35}.drc-baseline-main{color:var(--rh-text);font-size:1.625rem;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.016em;line-height:1.2;margin:.25rem 0 .6rem}.drc-baseline-grid{border-top:1px solid var(--rh-border-subtle);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0}.drc-baseline-item{min-width:0;padding:.5rem .75rem .5rem 0}.drc-baseline-item:nth-child(even){border-left:1px solid var(--rh-border-subtle);padding-left:.75rem;padding-right:0}.drc-baseline-item:nth-child(n+3){border-top:1px solid var(--rh-border-subtle)}.drc-baseline-item-label{color:var(--rh-text-muted);font-size:.6875rem;font-weight:500;line-height:1.3}.drc-baseline-item-value{color:var(--rh-text);font-size:.8125rem;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.4;margin-top:.1rem;overflow-wrap:anywhere}.drc-baseline-chart-wrap{border-top:1px solid var(--rh-border-subtle);margin-top:.05rem;padding-top:.1rem}
+@supports (background:color-mix(in srgb,white 50%,black)){.drc-sleep-card{background:linear-gradient(145deg,color-mix(in srgb,var(--secondary-background-color) 94%,var(--text-color) 6%),var(--secondary-background-color));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text-color) 10%,transparent),var(--rh-shadow-raised)}.drc-sleep-card-head,.drc-sleep-card-meta{border-color:var(--rh-border-subtle)}.drc-sleep-card-status{background:var(--rh-surface-inset);border-color:var(--rh-border-subtle)}}
+@media (hover:hover) and (prefers-reduced-motion:no-preference){.drc-sleep-card{transition:transform 180ms ease-out,box-shadow 180ms ease-out,border-color 180ms ease-out}.drc-sleep-card:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 20px 36px rgba(0,0,0,.14)}}
+@media (prefers-color-scheme: dark){.drc-sleep-guidance-card{background:linear-gradient(135deg,rgba(73,91,157,.26),rgba(117,130,148,.09));border-color:rgba(172,188,231,.20);box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 12px 28px rgba(0,0,0,.15)}.drc-sleep-guidance-card:before{background:rgba(255,255,255,.14)}.drc-sleep-guidance-icon{background:rgba(127,145,229,.20);color:#aebcff}}
+@media (max-width: 720px){.drc-sleep-card,.drc-baseline-card{padding:1.1rem}.drc-sleep-card.primary .drc-sleep-card-value{font-size:2.375rem}.drc-baseline-grid{grid-template-columns:1fr}.drc-baseline-item,.drc-baseline-item:nth-child(even){border-left:0;padding:.8rem 0}.drc-baseline-item:nth-child(2){border-top:1px solid var(--rh-border-subtle)}}
+@media (prefers-reduced-transparency: reduce){.drc-sleep-guidance-card{background:var(--rh-surface-inset);backdrop-filter:none;-webkit-backdrop-filter:none}}
 </style>
 """
 st.markdown(SLEEP_CSS, unsafe_allow_html=True)
@@ -97,7 +119,7 @@ def _number(value, suffix=""):
 
 
 def _ui(zh, en):
-    return zh if LANGUAGE != "en" else en
+    return traditionalize(zh) if LANGUAGE == "zh-TW" else zh if LANGUAGE != "en" else en
 
 
 def _field(data, name):
@@ -414,71 +436,375 @@ def _sparkline_svg(values, color, css_class="drc-sleep-sparkline"):
     spread = max(high - low, 1.0)
     low -= spread * 0.08
     high += spread * 0.08
-    points = []
-    for index, value in enumerate(numeric_values):
-        x = padding + index * (width - padding * 2) / max(1, len(numeric_values) - 1)
-        y = height - padding - (value - low) / (high - low) * (height - padding * 2)
-        points.append((x, y))
-    point_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    segments, active_segment, points = [], [], []
+    for index, value in enumerate(values):
+        if value is None:
+            if active_segment:
+                segments.append(active_segment)
+                active_segment = []
+            continue
+        x = padding + index * (width - padding * 2) / max(1, len(values) - 1)
+        y = height - padding - (float(value) - low) / (high - low) * (height - padding * 2)
+        point = (x, y)
+        active_segment.append(point)
+        points.append(point)
+    if active_segment:
+        segments.append(active_segment)
+    polylines = "".join(
+        f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in segment)}" '
+        f'fill="none" stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />'
+        for segment in segments if len(segment) >= 2
+    )
     circles = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="{color}" />' for x, y in points)
     return (
         f'<svg class="{css_class}" viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
         f'role="img" aria-label="{escape(_ui("睡眠趋势", "Sleep trend"))}">'
-        f'<polyline points="{point_text}" fill="none" stroke="{color}" stroke-width="2.2" '
-        f'stroke-linecap="round" stroke-linejoin="round" />{circles}</svg>'
+        f'{polylines}{circles}</svg>'
     )
 
 
-def _trend(values, tone, key):
-    del key
+def _trend_svg(values, tone):
     color = {"good": "#3aa675", "warn": "#e0a02b", "bad": "#d95c5c", "neutral": "#8290a5"}[tone]
-    chart = _sparkline_svg(values, color)
-    if chart:
-        st.markdown(chart, unsafe_allow_html=True)
+    return _sparkline_svg(values, color)
 
 
-def _card_html(title, value, meta, status, tone, problem=None, primary=False, metric=False):
-    extra = f'<div class="drc-sleep-card-problem">{escape(problem)}</div>' if problem else ""
+def _card_html(title, value, meta, status, tone, trend_svg="", explanation=None, primary=False, metric=False):
+    explanation_markup = ""
+    if explanation:
+        explanation_markup = (
+            '<div class="drc-sleep-card-explanation">'
+            f'<div class="drc-sleep-card-explanation-label">{escape(_ui("简短解释", "Brief explanation"))}</div>'
+            f'{escape(explanation)}</div>'
+        )
     card_class = f"drc-sleep-card {tone}{' primary' if primary else ''}{' metric' if metric else ''}"
-    return f'<div class="{card_class}"><h3>{escape(title)}</h3><div class="drc-sleep-card-value">{escape(value)}</div><div class="drc-sleep-card-status">{escape(status)}</div><div class="drc-sleep-card-meta">{meta}</div>{extra}</div>'
+    return (
+        f'<div class="{card_class}">'
+        f'<div class="drc-sleep-card-head"><h3>{escape(title)}</h3>'
+        f'<div class="drc-sleep-card-status">{escape(status)}</div></div>'
+        f'<div class="drc-sleep-card-value">{escape(value)}</div>'
+        f'<div class="drc-sleep-card-meta">{meta}</div>{trend_svg}{explanation_markup}</div>'
+    )
 
 
-def _core_cards(data, history, baselines, key_prefix="sleep"):
+def _today_detail_baselines(data, history):
+    """Return compact, current-cycle-excluded baseline summaries for detail cards."""
+    target_date = (data or {}).get("date") or date.today().isoformat()
+    regularity_points, current_regularity_score = _sleep_regularity_artifacts(history, target_date)
+    summaries = {}
+    for key in (
+        "actual_sleep_duration",
+        "sleep_score",
+        "nightly_hrv_rmssd",
+        "nightly_resting_hr",
+        "respiration_rate",
+    ):
+        points = []
+        for item in history:
+            value = _sleep_history_metric(item, key)
+            if value in (None, "") or (key == "respiration_rate" and float(value) <= 0):
+                continue
+            points.append((item["date"], float(value)))
+        summaries[key] = build_sleep_baseline_summary(points, target_date)
+    summaries["sleep_regularity"] = build_sleep_baseline_summary(regularity_points, target_date)
+    return summaries, current_regularity_score
+
+
+def _card_trend_values(summary, current_value):
+    """Use only recorded trailing values and the current real measurement."""
+    return [*summary["series"][-6:], current_value]
+
+
+def _sleep_card_explanation(key, current_value, summary, context):
+    """Summarize the night's situation rather than restating a metric's value."""
+    if current_value is None:
+        return _ui("这项睡眠情况暂未同步，无法纳入本晚判断。", "This sleep signal has not synced yet, so it is not included in tonight’s interpretation.")
+    if int(summary["valid_nights"] or 0) < 7 or summary["lower"] is None or summary["upper"] is None:
+        return _ui("个人基线仍在建立中，先连续观察这项睡眠情况。", "Your personal baseline is still being established; continue observing this sleep signal.")
+    position = "low" if current_value < summary["lower"] else "high" if current_value > summary["upper"] else "within"
+    actual = context["actual"]
+    hrv_low = _outside_personal_range(
+        context["hrv"], context["summaries"]["nightly_hrv_rmssd"], direction="low"
+    )
+    hr_high = _outside_personal_range(
+        context["resting"], context["summaries"]["nightly_resting_hr"], direction="high"
+    )
+    regularity_low = _outside_personal_range(
+        context["regularity"], context["summaries"]["sleep_regularity"], direction="low"
+    )
+
+    if key == "sleep_score":
+        problems = []
+        if actual is not None and actual < 7 * 60:
+            problems.append(_ui("睡眠机会不足", "insufficient sleep opportunity"))
+        if hrv_low:
+            problems.append(_ui("恢复信号偏弱", "weaker recovery signal"))
+        if hr_high:
+            problems.append(_ui("夜间心率负荷偏高", "higher overnight heart-rate load"))
+        if regularity_low:
+            problems.append(_ui("作息节律不稳", "irregular sleep timing"))
+        if problems:
+            return _ui(f"本晚主要问题：{_ui('、', '; ').join(problems[:2])}。", f"Main issues tonight: {'; '.join(problems[:2])}.")
+        return _ui(
+            "本晚未见突出睡眠问题，整体表现与近期节律相近。",
+            "No prominent sleep issue is evident tonight; overall pattern is close to your recent rhythm.",
+        )
+
+    explanations = {
+        "actual_sleep_duration": {
+            "low": _ui("这晚可恢复的睡眠机会不足，时长被压缩。", "This night offered insufficient recovery opportunity; sleep time was compressed."),
+            "high": _ui("这晚获得的睡眠机会多于近期常态。", "This night provided more sleep opportunity than your recent norm."),
+            "within": _ui("这晚的睡眠机会与近期节律基本一致。", "This night’s sleep opportunity is broadly consistent with your recent rhythm."),
+        },
+        "nightly_hrv_rmssd": {
+            "low": _ui("这晚的恢复信号偏弱，可优先补足睡眠机会。", "Recovery signal was weaker tonight; prioritize adequate sleep opportunity."),
+            "high": _ui("这晚的恢复信号优于近期常态。", "Recovery signal was stronger than your recent norm tonight."),
+            "within": _ui("这晚的恢复信号与近期常态相近。", "Recovery signal is close to your recent norm tonight."),
+        },
+        "nightly_resting_hr": {
+            "low": _ui("这晚的夜间心率负荷低于近期常态。", "Overnight heart-rate load was lower than your recent norm."),
+            "high": _ui("这晚的夜间心率负荷偏高，结合其他睡眠指标继续观察。", "Overnight heart-rate load was higher; continue observing it with the other sleep signals."),
+            "within": _ui("这晚的夜间心率负荷与近期常态相近。", "Overnight heart-rate load is close to your recent norm."),
+        },
+        "respiration_rate": {
+            "low": _ui("这晚的呼吸节律与近期不同，先连续观察变化。", "Respiratory rhythm differed from recent nights; continue observing the change."),
+            "high": _ui("这晚的呼吸节律与近期不同，先连续观察变化。", "Respiratory rhythm differed from recent nights; continue observing the change."),
+            "within": _ui("这晚的呼吸节律与近期常态相近。", "Respiratory rhythm is close to your recent norm tonight."),
+        },
+        "sleep_regularity": {
+            "low": _ui("近期入睡或起床时点更分散，作息节律需要收拢。", "Bedtime or wake time has become more dispersed recently; the sleep rhythm needs tightening."),
+            "high": _ui("近期入睡和起床时点比平时更稳定。", "Bedtime and wake time have been more stable than usual recently."),
+            "within": _ui("近期作息节律保持稳定。", "Recent sleep timing remains stable."),
+        },
+    }
+    return explanations[key][position]
+
+
+def _outside_personal_range(value, summary, *, direction):
+    """Return whether a real value is outside a mature personal range."""
+    if value is None or int(summary["valid_nights"] or 0) < 7:
+        return False
+    lower, upper = summary["lower"], summary["upper"]
+    if lower is None or upper is None:
+        return False
+    return value < lower if direction == "low" else value > upper
+
+
+def _sleep_guidance(data, detail_baseline_data):
+    """Create data-bound night and daytime actions from current sleep deviations."""
+    def plan(tone, context, night_title, night_action, day_title, day_action):
+        return tone, {
+            "context": context,
+            "night": (night_title, night_action),
+            "day": (day_title, day_action),
+        }
+
+    if not data or not detail_baseline_data:
+        return plan(
+            "neutral",
+            _ui("尚无足够记录判断个人波动。先建立连续、可信的睡眠记录。", "There is not yet enough data to assess personal variation. First establish a consistent, reliable sleep record."),
+            _ui("为睡眠腾出时间", "Make room for sleep"),
+            _ui("今晚预留至少 8 小时睡眠机会；睡前 60 分钟停止高刺激屏幕和工作。", "Allow at least 8 hours for sleep tonight; stop stimulating screen use and work 60 minutes before bed."),
+            _ui("完成连续记录", "Complete a continuous record"),
+            _ui("起床时间尽量与平时相差不超过 30 分钟，并连续佩戴设备记录至少 7 晚。", "Keep wake time within 30 minutes of usual and wear the device for at least 7 consecutive nights."),
+        )
+
+    summaries, regularity = detail_baseline_data
+    values = _today_sleep_values(data)
+    actual = values["actual_duration_minutes"]
+    hrv = values["hrv"]
+    resting = values["resting_hr"]
+    score = values["score"]
+
+    if actual is not None and (
+        actual < 7 * 60
+        or _outside_personal_range(actual, summaries["actual_sleep_duration"], direction="low")
+    ):
+        return plan(
+            "warn",
+            _ui(f"实际睡眠 {_duration_hms(actual)}；个人常见范围 {_sleep_baseline_range('actual_sleep_duration', summaries['actual_sleep_duration'])}。", f"Actual sleep was {_duration_hms(actual)}; your personal range is {_sleep_baseline_range('actual_sleep_duration', summaries['actual_sleep_duration'])}."),
+            _ui("补回睡眠机会", "Restore sleep opportunity"),
+            _ui("把入睡时间比平时提前 30–60 分钟，并预留至少 8 小时的睡眠窗口。", "Start your sleep window 30–60 minutes earlier than usual and allow at least 8 hours for sleep."),
+            _ui("保护今晚的节律", "Protect tonight’s rhythm"),
+            _ui("白天保持日常活动；午后避免延长小睡，起床时间仍保持在平时±30分钟内。", "Keep normal daytime activity; avoid an extended late-day nap and keep wake time within 30 minutes of usual."),
+        )
+
+    hrv_low = _outside_personal_range(hrv, summaries["nightly_hrv_rmssd"], direction="low")
+    hr_high = _outside_personal_range(resting, summaries["nightly_resting_hr"], direction="high")
+    if hrv_low or hr_high:
+        evidence = []
+        if hrv_low:
+            evidence.append(_ui(
+                f"睡眠期间 HRV {_sleep_baseline_text('nightly_hrv_rmssd', hrv)} 低于个人常见范围 {_sleep_baseline_range('nightly_hrv_rmssd', summaries['nightly_hrv_rmssd'])}",
+                f"Sleep HRV {_sleep_baseline_text('nightly_hrv_rmssd', hrv)} is below your personal range {_sleep_baseline_range('nightly_hrv_rmssd', summaries['nightly_hrv_rmssd'])}",
+            ))
+        if hr_high:
+            evidence.append(_ui(
+                f"夜间静息心率 {_sleep_baseline_text('nightly_resting_hr', resting)} 高于个人常见范围 {_sleep_baseline_range('nightly_resting_hr', summaries['nightly_resting_hr'])}",
+                f"Nightly resting heart rate {_sleep_baseline_text('nightly_resting_hr', resting)} is above your personal range {_sleep_baseline_range('nightly_resting_hr', summaries['nightly_resting_hr'])}",
+            ))
+        return plan(
+            "warn",
+            _ui("；".join(evidence), "; ".join(evidence)),
+            _ui("降低睡前负荷", "Lower the pre-sleep load"),
+            _ui("优先安排至少 8 小时睡眠机会；睡前 60 分钟停止高刺激屏幕和工作。", "Prioritize at least 8 hours for sleep; stop stimulating screen use and work 60 minutes before bed."),
+            _ui("让白天不过度加码", "Keep daytime load measured"),
+            _ui("把训练调整为轻松活动或中低强度，并避免把高强度训练安排在临睡前。", "Choose easy activity or low-to-moderate intensity, and avoid scheduling high-intensity training close to bedtime."),
+        )
+
+    if _outside_personal_range(regularity, summaries["sleep_regularity"], direction="low"):
+        return plan(
+            "warn",
+            _ui(f"睡眠规律性 {_sleep_baseline_text('sleep_regularity', regularity)}；个人常见范围 {_sleep_baseline_range('sleep_regularity', summaries['sleep_regularity'])}。", f"Sleep regularity is {_sleep_baseline_text('sleep_regularity', regularity)}; your personal range is {_sleep_baseline_range('sleep_regularity', summaries['sleep_regularity'])}."),
+            _ui("守住就寝锚点", "Keep a bedtime anchor"),
+            _ui("未来 3 晚尽量在相近时间上床；睡前 60 分钟进入低刺激的固定流程。", "For the next 3 nights, go to bed at a similar time and begin the same low-stimulation wind-down 60 minutes beforehand."),
+            _ui("固定起床锚点", "Keep a wake-time anchor"),
+            _ui("未来 3 天把起床时间控制在平时±30分钟内；起床后尽早接受自然光并保持日常活动。", "For the next 3 days, keep wake time within 30 minutes of usual; get daylight soon after waking and maintain normal activity."),
+        )
+
+    if _outside_personal_range(score, summaries["sleep_score"], direction="low"):
+        return plan(
+            "warn",
+            _ui(f"睡眠评分 {_sleep_baseline_text('sleep_score', score)}；个人常见范围 {_sleep_baseline_range('sleep_score', summaries['sleep_score'])}。", f"Sleep score is {_sleep_baseline_text('sleep_score', score)}; your personal range is {_sleep_baseline_range('sleep_score', summaries['sleep_score'])}."),
+            _ui("精简睡前安排", "Simplify the pre-sleep routine"),
+            _ui("预留至少 8 小时睡眠机会，并在睡前 60 分钟只安排低刺激的放松活动。", "Allow at least 8 hours for sleep and use only low-stimulation wind-down activities during the final 60 minutes before bed."),
+            _ui("减少日间干扰", "Reduce daytime disruption"),
+            _ui("白天保持规律进餐和活动，避免把重要工作或高强度训练堆到临睡前。", "Keep meals and activity regular during the day; avoid moving major work or high-intensity training close to bedtime."),
+        )
+
+    return plan(
+        "good",
+        _ui("今日可用睡眠指标均处于个人常见范围。", "Today’s available sleep indicators are within your personal range."),
+        _ui("延续既有节律", "Continue the established rhythm"),
+        _ui("保持平时的就寝与起床时间，继续预留 7.5–8 小时睡眠机会，并在睡前 60 分钟降低刺激。", "Keep your usual bedtime and wake time, allow 7.5–8 hours for sleep, and reduce stimulation during the final 60 minutes before bed."),
+        _ui("用白天巩固节律", "Reinforce the rhythm by day"),
+        _ui("起床后尽早接受自然光，白天保持日常活动；避免把小睡或高强度训练安排得过晚。", "Get daylight soon after waking and maintain normal activity; avoid scheduling naps or high-intensity training too late."),
+    )
+
+
+def _render_sleep_guidance(data, detail_baseline_data):
+    tone, guidance = _sleep_guidance(data, detail_baseline_data)
+    night_title, night_action = guidance["night"]
+    html = (
+        f'<section class="drc-sleep-guidance" aria-label="{escape(_ui("睡眠建议", "Sleep guidance"))}">'
+        f'<article class="drc-sleep-guidance-card {tone}"><div class="drc-sleep-guidance-top"><span class="drc-sleep-guidance-icon" aria-hidden="true">✦</span><span class="drc-sleep-guidance-kicker">{escape(_ui("个性化建议", "Personalized guidance"))}</span></div><h3>{escape(night_title)}</h3><p class="drc-sleep-guidance-copy">{escape(night_action)}</p></article>'
+        '</section>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _baseline_card_meta(key, summary, current_value, *, baseline_label=None, difference_suffix="", duration=False):
+    """Keep each card self-contained without recreating the full baseline panel."""
+    center = summary["center"]
+    label = baseline_label or _ui("个人基线", "Personal baseline")
+    difference = _difference_with_percent(current_value, center, difference_suffix, duration=duration)
+    display_summary = _summary_with_current_period(summary, current_value)
+    return _ui(
+        f"{label}：{_sleep_baseline_text(key, center)} · 差值：{difference}"
+        f"<br>个人常见范围：{_sleep_baseline_range(key, summary)} · {_comparison_text(key, display_summary)}",
+        f"{label}: {_sleep_baseline_text(key, center)} · Difference: {difference}"
+        f"<br>Personal range: {_sleep_baseline_range(key, summary)} · {_comparison_text(key, display_summary)}",
+    )
+
+
+def _range_state(current, summary, *, higher_is_better=None):
+    """Classify a current value against its robust personal range."""
+    if current is None:
+        return "neutral", _ui("当前数据待同步", "Current data is pending sync")
+    lower, upper = summary["lower"], summary["upper"]
+    if lower is None or upper is None:
+        return "neutral", _ui("基线建立中", "Baseline is being established")
+    if lower <= current <= upper:
+        return "good", _ui("处于个人正常范围", "Within your normal range")
+    if higher_is_better is None:
+        return "warn", _ui("超出个人常见范围", "Outside your personal range")
+    adverse = current < lower if higher_is_better else current > upper
+    return ("bad" if adverse else "warn"), _ui("明显偏离", "Material deviation")
+
+
+def _sleep_baseline_context(detail_baselines):
+    """Summarize the baseline coverage supporting every sleep detail card."""
+    labels = (
+        ("sleep_score", "domain.sleep.score"),
+        ("actual_sleep_duration", "domain.sleep.actual_duration"),
+        ("nightly_hrv_rmssd", "domain.sleep.hrv"),
+        ("nightly_resting_hr", "domain.sleep.nightly_resting_hr"),
+        ("respiration_rate", "domain.sleep.respiration"),
+        ("sleep_regularity", None),
+    )
+    segments = []
+    windows = []
+    for metric_name, label_key in labels:
+        summary = detail_baselines[metric_name]
+        valid_days = int(summary["valid_nights"] or 0)
+        window_days = len(summary["dates"])
+        percent = min(100, round(valid_days / window_days * 100)) if window_days else 0
+        maturity = TR(
+            "domain.sleep.maturity_days",
+            valid=valid_days,
+            window=window_days,
+            percent=percent,
+        )
+        label = TR(label_key) if label_key else _ui("睡眠规律性", "Sleep Regularity")
+        segments.append(f"{label}：{maturity}")
+        windows.append(window_days)
+    window_days = max(windows, default=28)
+    return " · ".join((*segments, TR("domain.sleep.range_basis", window=window_days)))
+
+
+def _core_cards(data, history, baselines, key_prefix="sleep", detail_baseline_data=None):
     values = _today_sleep_values(data)
     score = values["score"]
     score_tone, score_status = _status(score)
     actual = values["actual_duration_minutes"]
     hrv = values["hrv"]
     resting = values["resting_hr"]
-    duration_base = _actual_sleep_baseline_minutes(history, exclude_date=values["date"])
-    score_base = (baselines.get("sleep_score") or {}).get("median_value")
-    hrv_base = (baselines.get("nightly_hrv_rmssd") or {}).get("median_value")
-    hr_base = (baselines.get("nightly_resting_hr") or {}).get("median_value")
+    respiration = values["respiration"]
+    detail_baselines, regularity = detail_baseline_data or _today_detail_baselines(data, history)
+    duration_base = detail_baselines["actual_sleep_duration"]["center"]
+    hrv_base = detail_baselines["nightly_hrv_rmssd"]["center"]
+    hr_base = detail_baselines["nightly_resting_hr"]["center"]
     duration_tone, duration_status = _metric_state(actual, duration_base, True, 4)
     hrv_tone, hrv_status = _metric_state(hrv, hrv_base, True, 5)
     hr_tone, hr_status = _metric_state(resting, hr_base, False, 5)
-    issues = []
-    if actual is not None and actual < 7 * 60: issues.append(_ui("睡眠时间不足", "Insufficient sleep duration"))
-    if hrv is not None and hrv_base and hrv < hrv_base * .95: issues.append(_ui("HRV略低", "HRV is slightly low"))
-    problem = (_ui("、", "; ")).join(issues[:2]) or _ui("暂无主要问题", "No major issue detected")
-    score_summary = _ui(f"主要问题：{problem}", f"Main observation: {problem}")
-    score_meta = _ui(
-        f"个人基线：{_number(score_base)} · 差值：{_difference_with_percent(score, score_base)}",
-        f"Personal baseline: {_number(score_base)} · Difference: {_difference_with_percent(score, score_base)}",
+    respiration_tone, respiration_status = _range_state(
+        respiration, detail_baselines["respiration_rate"], higher_is_better=None,
     )
+    regularity_tone, regularity_status = _range_state(
+        regularity, detail_baselines["sleep_regularity"], higher_is_better=True,
+    )
+    explanation_context = {
+        "actual": actual,
+        "hrv": hrv,
+        "resting": resting,
+        "regularity": regularity,
+        "summaries": detail_baselines,
+    }
+    score_meta = _baseline_card_meta("sleep_score", detail_baselines["sleep_score"], score)
     cards = [
-        (_ui("睡眠综合评分", "Sleep Composite Score"), _number(score), score_meta, score_status, score_tone, [_today_sleep_values(item)["score"] for item in history[:7]], score_summary, True),
-        (_ui("实际睡眠时长", "Actual Sleep Duration"), _duration_hms(actual), _ui(f"个人基线：{_duration_hms(duration_base)} · 差值：{_difference_with_percent(actual, duration_base, duration=True)}", f"Personal baseline: {_duration_hms(duration_base)} · Difference: {_difference_with_percent(actual, duration_base, duration=True)}"), duration_status, duration_tone, [_field(x,"actual_sleep_duration_minutes") for x in history[:7]], None, False),
-        (_ui("睡眠期间 HRV", "Sleep HRV"), _number(hrv," ms"), _ui(f"基线中心：{_number(hrv_base,' ms')} · 差值：{_difference_with_percent(hrv, hrv_base, ' ms')}", f"Baseline center: {_number(hrv_base,' ms')} · Difference: {_difference_with_percent(hrv, hrv_base, ' ms')}"), hrv_status, hrv_tone, [_field(x,"nightly_hrv_rmssd") for x in history[:7]], None, False),
-        (_ui("夜间静息心率", "Nightly Resting Heart Rate"), _number(resting," bpm"), _ui(f"个人基线：{_number(hr_base,' bpm')} · 差值：{_difference_with_percent(resting, hr_base, ' bpm')}", f"Personal baseline: {_number(hr_base,' bpm')} · Difference: {_difference_with_percent(resting, hr_base, ' bpm')}"), hr_status, hr_tone, [_field(x,"nightly_resting_hr") for x in history[:7]], None, False),
+        (_ui("睡眠综合评分", "Sleep Composite Score"), _number(score), score_meta, score_status, score_tone, _card_trend_values(detail_baselines["sleep_score"], score), _sleep_card_explanation("sleep_score", score, detail_baselines["sleep_score"], explanation_context), True),
+        (_ui("实际睡眠时长", "Actual Sleep Duration"), _duration_hms(actual), _baseline_card_meta("actual_sleep_duration", detail_baselines["actual_sleep_duration"], actual, duration=True), duration_status, duration_tone, _card_trend_values(detail_baselines["actual_sleep_duration"], actual), _sleep_card_explanation("actual_sleep_duration", actual, detail_baselines["actual_sleep_duration"], explanation_context), False),
+        (_ui("睡眠期间 HRV", "Sleep HRV"), _number(hrv," ms"), _baseline_card_meta("nightly_hrv_rmssd", detail_baselines["nightly_hrv_rmssd"], hrv, difference_suffix=" ms", baseline_label=_ui("基线中心", "Baseline center")), hrv_status, hrv_tone, _card_trend_values(detail_baselines["nightly_hrv_rmssd"], hrv), _sleep_card_explanation("nightly_hrv_rmssd", hrv, detail_baselines["nightly_hrv_rmssd"], explanation_context), False),
+        (_ui("夜间静息心率", "Nightly Resting Heart Rate"), _number(resting," bpm"), _baseline_card_meta("nightly_resting_hr", detail_baselines["nightly_resting_hr"], resting, difference_suffix=" bpm"), hr_status, hr_tone, _card_trend_values(detail_baselines["nightly_resting_hr"], resting), _sleep_card_explanation("nightly_resting_hr", resting, detail_baselines["nightly_resting_hr"], explanation_context), False),
+        (_ui("睡眠期间呼吸速率", "Sleep Respiratory Rate"), _number(respiration, _ui(" 次/分", " breaths/min")), _baseline_card_meta("respiration_rate", detail_baselines["respiration_rate"], respiration), respiration_status, respiration_tone, _card_trend_values(detail_baselines["respiration_rate"], respiration), _sleep_card_explanation("respiration_rate", respiration, detail_baselines["respiration_rate"], explanation_context), False),
+        (_ui("睡眠规律性", "Sleep Regularity"), _sleep_baseline_text("sleep_regularity", regularity), _baseline_card_meta("sleep_regularity", detail_baselines["sleep_regularity"], regularity), regularity_status, regularity_tone, _card_trend_values(detail_baselines["sleep_regularity"], regularity), _sleep_card_explanation("sleep_regularity", regularity, detail_baselines["sleep_regularity"], explanation_context), False),
     ]
     cols = st.columns(2)
-    for index, (col, card) in enumerate(zip(cols * 2, cards)):
+    for index, (col, card) in enumerate(zip(cols * 3, cards)):
         with col:
-            st.markdown(_card_html(*card[:5], problem=card[6], primary=card[7], metric=True), unsafe_allow_html=True)
-            _trend(card[5], card[4], key=f"{key_prefix}_trend_{index}")
-    baseline_records = [v for v in baselines.values() if v]
-    valid = max([int(v.get("valid_days") or 0) for v in baseline_records], default=0)
+            st.markdown(
+                _card_html(
+                    *card[:5],
+                    trend_svg=_trend_svg(card[5], card[4]),
+                    explanation=card[6],
+                    primary=card[7],
+                    metric=True,
+                ),
+                unsafe_allow_html=True,
+            )
+    valid = max(
+        (int(summary["valid_nights"] or 0) for summary in detail_baselines.values()),
+        default=0,
+    )
     target = 28
     if valid < target:
         maturity_caption = _ui(f"基线建立中：当前有效数据 {valid} / {target} 天，距离形成可靠基线还需 {target - valid} 天。", f"Baseline is being established: {valid} / {target} valid days; {target - valid} more days are needed.")
@@ -736,63 +1062,68 @@ def _historical_sleep_row(item):
 
 def _historical_sleep_record_table(history):
     """Keep the historical record table separate and make its rows selectable."""
-    title = "历史睡眠数据" if LANGUAGE != "en" else "Historical Sleep Data"
-    st.subheader(title)
-    if not history:
-        st.info(TR("common.no_data"))
-        return None
-    history_dates = [item["date"] for item in history]
-    selected_date = st.session_state.get("sleep_history_selected")
-    if selected_date not in history_dates:
-        selected_date = history_dates[0]
-        st.session_state["sleep_history_selected"] = selected_date
-    rows = [_historical_sleep_row(item) for item in history]
-    headers = list(rows[0].keys()) + ["操作" if LANGUAGE != "en" else "Action"]
-    widths = [1.0, .75, .95, .95, 1.05, 1.05, 1.05, 1.05, 1.05, 1.0, 1.0, 1.0, 1.0, 1.05]
-    with st.container(height=430, border=True):
-        header_columns = st.columns(widths)
-        for column, label in zip(header_columns, headers):
-            header_html = f'<div style="text-align:center;font-weight:600;">{escape(str(label))}</div>'
-            column.markdown(header_html, unsafe_allow_html=True)
-        for item, row in zip(history, rows):
-            columns = st.columns(widths, vertical_alignment="center")
-            for column, label in zip(columns[:-1], headers[:-1]):
-                cell_html = f'<div style="text-align:center;">{escape(str(row[label]))}</div>'
-                column.markdown(cell_html, unsafe_allow_html=True)
-            if columns[-1].button(
-                "查看" if LANGUAGE != "en" else "View",
-                key=f"sleep_history_view_{item['date']}",
-                use_container_width=True,
-            ):
-                st.session_state["sleep_history_selected"] = item["date"]
-                st.session_state["sleep_history_details_focus_nonce"] = (
-                    st.session_state.get("sleep_history_details_focus_nonce", 0) + 1
-                )
-                selected_date = item["date"]
+    title = _ui("历史睡眠记录", "Historical Sleep Records")
+    with st.expander(title, expanded=False):
+        if not history:
+            st.info(TR("common.no_data"))
+            return None
+        history_dates = [item["date"] for item in history]
+        selected_date = st.session_state.get("sleep_history_selected")
+        if selected_date not in history_dates:
+            selected_date = history_dates[0]
+            st.session_state["sleep_history_selected"] = selected_date
+        rows = [_historical_sleep_row(item) for item in history]
+        headers = list(rows[0].keys()) + [_ui("操作", "Action")]
+        widths = [1.0, .75, .95, .95, 1.05, 1.05, 1.05, 1.05, 1.05, 1.0, 1.0, 1.0, 1.0, 1.05]
+        with st.container(height=430, border=True):
+            header_columns = st.columns(widths)
+            for column, label in zip(header_columns, headers):
+                header_html = f'<div style="text-align:center;font-weight:600;">{escape(str(label))}</div>'
+                column.markdown(header_html, unsafe_allow_html=True)
+            for item, row in zip(history, rows):
+                columns = st.columns(widths, vertical_alignment="center")
+                for column, label in zip(columns[:-1], headers[:-1]):
+                    cell_html = f'<div style="text-align:center;">{escape(str(row[label]))}</div>'
+                    column.markdown(cell_html, unsafe_allow_html=True)
+                if columns[-1].button(
+                    _ui("查看", "View"),
+                    key=f"sleep_history_view_{item['date']}",
+                    use_container_width=True,
+                ):
+                    st.session_state["sleep_history_selected"] = item["date"]
+                    st.session_state["sleep_history_details_visible"] = True
+                    st.session_state["sleep_history_details_focus_nonce"] = (
+                        st.session_state.get("sleep_history_details_focus_nonce", 0) + 1
+                    )
+                    selected_date = item["date"]
     return selected_date
 
 
 @st.fragment
 def _render_historical_sleep_interaction(history, persisted_baselines):
     """Rerun only the selected-history area after a table interaction."""
-    selected_history_date = _historical_sleep_record_table(history)
     history_focus_nonce = st.session_state.get("sleep_history_details_focus_nonce", 0)
     last_history_focus_nonce = st.session_state.get("sleep_history_details_last_scrolled_nonce", 0)
     should_focus_history = history_focus_nonce > last_history_focus_nonce
-    _historical_sleep_situation(history, selected_history_date, persisted_baselines, auto_expand=should_focus_history, focus_nonce=history_focus_nonce)
+    _historical_sleep_situation(
+        history,
+        persisted_baselines,
+        auto_expand=should_focus_history,
+        focus_nonce=history_focus_nonce,
+    )
     if should_focus_history:
         st.session_state["sleep_history_details_last_scrolled_nonce"] = history_focus_nonce
 
 
-def _historical_sleep_situation(history, selected_date, persisted_baselines, *, auto_expand=False, focus_nonce=0):
+def _historical_sleep_situation(history, persisted_baselines, *, auto_expand=False, focus_nonce=0):
     """Show only the selected historical night's data and details."""
-    situation_title = "历史睡眠情况" if LANGUAGE != "en" else "Historical Sleep Situation"
-    data_title = "历史睡眠数据" if LANGUAGE != "en" else "Historical Sleep Data"
-    details_title = "历史睡眠详情" if LANGUAGE != "en" else "Historical Sleep Details"
-    focus_target_id = "sleep-history-details-focus-target"
-    focus_anchor = f'<div id="{focus_target_id}"></div>'
-    st.markdown(focus_anchor, unsafe_allow_html=True)
-    st.subheader(situation_title)
+    data_title = _ui("历史睡眠数据", "Historical Sleep Data")
+    details_title = _ui("历史睡眠详情", "Historical Sleep Details")
+
+    # Historical records are the first child directory of the situation.
+    selected_date = _historical_sleep_record_table(history)
+    if not st.session_state.get("sleep_history_details_visible", False):
+        return
 
     with st.expander(data_title, expanded=auto_expand):
         selected = next((item for item in history if item["date"] == selected_date), None)
@@ -814,7 +1145,15 @@ def _historical_sleep_situation(history, selected_date, persisted_baselines, *, 
             _core_cards(selected, valid_history, historical_baselines, key_prefix=f"history_{selected['date']}")
 
     if auto_expand:
-        render_interaction_focus(components, target_id=focus_target_id, nonce=focus_nonce)
+        # Use the data expander itself as the scroll target. A separate empty
+        # anchor would create a visible blank row between the two sections.
+        render_interaction_focus(
+            components,
+            target_expander_label=data_title,
+            nonce=focus_nonce,
+            # Keep the section header just below Streamlit's fixed toolbar.
+            top_offset=80,
+        )
 
 
 def _sleep_baseline_text(key, value):
@@ -881,8 +1220,7 @@ def _baseline_chart(summary, key, current_date=None, current_value=None):
     numeric_values = [float(value) for value in values if value is not None]
     scale_values = numeric_values + [value for value in (lower, upper, center, current_value) if value is not None]
     if not dates or not scale_values:
-        st.caption(TR("common.no_data"))
-        return
+        return f'<div class="drc-baseline-chart-wrap"><div class="drc-sleep-card-meta">{escape(TR("common.no_data"))}</div></div>'
     width, height, left, right, top, bottom = 520, 180, 8, 8, 12, 12
     low, high = min(scale_values), max(scale_values)
     spread = max(high - low, 1.0)
@@ -908,6 +1246,14 @@ def _baseline_chart(summary, key, current_date=None, current_value=None):
         return " ".join(commands)
 
     svg = []
+    markers = []
+
+    def marker(css_class, index, value):
+        return (
+            f'<span class="{css_class}" style="left:{x_at(index) / width * 100:.3f}%;'
+            f'top:{y_at(value) / height * 100:.3f}%"></span>'
+        )
+
     if lower is not None and upper is not None:
         svg.append(
             f'<path d="M{x_at(0):.1f},{y_at(upper):.1f} L{x_at(len(dates)-1):.1f},{y_at(upper):.1f} '
@@ -922,21 +1268,27 @@ def _baseline_chart(summary, key, current_date=None, current_value=None):
         path = path_for(indices)
         if path:
             svg.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="{width_value}" stroke-linecap="round" stroke-linejoin="round" />')
-            svg.extend(f'<circle cx="{x_at(index):.1f}" cy="{y_at(values[index]):.1f}" r="2.2" fill="{color}" />' for index in indices)
+            point_class = "drc-baseline-point--previous" if color == "#a7b0bf" else "drc-baseline-point--recent"
+            markers.extend(
+                marker(f"drc-baseline-point {point_class}", index, values[index])
+                for index in indices
+            )
     anomalies = set(summary["anomaly_dates"])
     for index, (day, value) in enumerate(zip(dates, values)):
         if value is not None and day in anomalies:
-            svg.append(f'<circle cx="{x_at(index):.1f}" cy="{y_at(value):.1f}" r="4" fill="none" stroke="#d95c5c" stroke-width="1.8" />')
+            markers.append(marker("drc-baseline-anomaly", index, value))
     if current_value is not None:
-        current_x = x_at(len(dates) - 1)
-        current_y = y_at(current_value)
-        svg.append(f'<path d="M{current_x:.1f},{current_y-5:.1f} L{current_x+5:.1f},{current_y:.1f} L{current_x:.1f},{current_y+5:.1f} L{current_x-5:.1f},{current_y:.1f} Z" fill="#2f9d63" stroke="#fff" stroke-width="1" />')
-    chart = f'<svg class="drc-sleep-baseline-chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="{escape(_ui("近28天个人睡眠基线趋势", "28-day personal sleep baseline trend"))}">{"".join(svg)}</svg>'
+        markers.append(marker("drc-baseline-current", len(dates) - 1, current_value))
+    chart = (
+        '<div class="drc-sleep-baseline-plot">'
+        f'<svg class="drc-sleep-baseline-chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="{escape(_ui("近28天个人睡眠基线趋势", "28-day personal sleep baseline trend"))}">{"".join(svg)}</svg>'
+        f'{"".join(markers)}</div>'
+    )
     legend = _ui(
         '<span class="range">个人范围</span><span class="median">基线中位线</span><span>近7天</span><span class="current">当前周期</span>',
         '<span class="range">Personal range</span><span class="median">Baseline median</span><span>Last 7 days</span><span class="current">Current cycle</span>',
     )
-    st.markdown(f"{chart}{BASELINE_LEGEND_OPEN}{legend}{BASELINE_LEGEND_CLOSE}", unsafe_allow_html=True)
+    return f'<div class="drc-baseline-chart-wrap">{chart}{BASELINE_LEGEND_OPEN}{legend}{BASELINE_LEGEND_CLOSE}</div>'
 
 
 def _summary_with_current_period(summary, current_value):
@@ -966,6 +1318,7 @@ def _summary_with_current_period(summary, current_value):
 
 def _personal_baseline(data, history):
     target_date = (data or {}).get("date") or date.today().isoformat()
+    regularity_points, current_regularity_score = _sleep_regularity_artifacts(history, target_date)
     fields = (
         (_ui("实际睡眠长度", "Actual Sleep Length"), _ui("近28天典型睡眠时长", "Typical sleep duration, last 28 days"), "actual_sleep_duration"),
         (_ui("睡眠评分", "Sleep Score"), _ui("近28天典型睡眠评分", "Typical sleep score, last 28 days"), "sleep_score"),
@@ -977,7 +1330,7 @@ def _personal_baseline(data, history):
     summaries = []
     for title, kicker, key in fields:
         if key == "sleep_regularity":
-            points = build_sleep_regularity_points(history, target_date)
+            points = regularity_points
         else:
             points = []
             for item in history:
@@ -995,7 +1348,7 @@ def _personal_baseline(data, history):
         columns = st.columns(2)
         for column, (title, kicker, key, summary) in zip(columns, summaries[row_start:row_start + 2]):
             if key == "sleep_regularity":
-                current_value = SleepRegularityService.calculate_regularity(history).score
+                current_value = current_regularity_score
             else:
                 current_value = _sleep_history_metric(data, key)
             display_summary = _summary_with_current_period(summary, current_value)
@@ -1036,22 +1389,21 @@ def _personal_baseline(data, history):
                 ) if summary["lower"] is not None else 0
             trend_text = _comparison_text(key, display_summary)
             with column:
-                with st.container(border=True):
-                    st.markdown(f"#### {escape(title)}")
-                    baseline_card_html = (
-                        '<div class="drc-baseline-summary">'
-                        f'<div class="drc-baseline-kicker">{escape(kicker)}</div>'
-                        f'<div class="drc-baseline-main">{escape(_sleep_baseline_text(key, summary["center"]))}</div>'
-                        '<div class="drc-baseline-grid">'
-                        f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("个人常见范围", "Personal range"))}</div><div class="drc-baseline-item-value">{escape(_sleep_baseline_range(key, summary))}</div></div>'
-                        f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(secondary_label)}</div><div class="drc-baseline-item-value">{escape(secondary_value)}</div></div>'
-                        f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("趋势", "Trend"))}</div><div class="drc-baseline-item-value">{escape(trend_text)}</div></div>'
-                        f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(exception_label)}</div><div class="drc-baseline-item-value">{exception_count} / {summary["valid_nights"]}{escape(_ui("晚", " nights"))}</div></div>'
-                        f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("当前周期", "Current cycle"))}</div><div class="drc-baseline-item-value">{escape(_sleep_baseline_text(key, current_value))}</div></div>'
-                        '</div></div>'
-                    )
-                    st.markdown(baseline_card_html, unsafe_allow_html=True)
-                    _baseline_chart(summary, key, target_date, current_value)
+                baseline_card_html = (
+                    '<section class="drc-baseline-card">'
+                    f'<div class="drc-baseline-card-head"><h3>{escape(title)}</h3></div>'
+                    '<div class="drc-baseline-summary">'
+                    f'<div class="drc-baseline-kicker">{escape(kicker)}</div>'
+                    f'<div class="drc-baseline-main">{escape(_sleep_baseline_text(key, summary["center"]))}</div>'
+                    '<div class="drc-baseline-grid">'
+                    f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("个人常见范围", "Personal range"))}</div><div class="drc-baseline-item-value">{escape(_sleep_baseline_range(key, summary))}</div></div>'
+                    f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(secondary_label)}</div><div class="drc-baseline-item-value">{escape(secondary_value)}</div></div>'
+                    f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("趋势", "Trend"))}</div><div class="drc-baseline-item-value">{escape(trend_text)}</div></div>'
+                    f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(exception_label)}</div><div class="drc-baseline-item-value">{exception_count} / {summary["valid_nights"]}{escape(_ui("晚", " nights"))}</div></div>'
+                    f'<div class="drc-baseline-item"><div class="drc-baseline-item-label">{escape(_ui("当前周期", "Current cycle"))}</div><div class="drc-baseline-item-value">{escape(_sleep_baseline_text(key, current_value))}</div></div>'
+                    f'</div></div>{_baseline_chart(summary, key, target_date, current_value)}</section>'
+                )
+                st.markdown(baseline_card_html, unsafe_allow_html=True)
 
 
 def main():
@@ -1074,13 +1426,21 @@ def main():
         exclude_date=(detail_data or {}).get("date"),
     )
 
-    today_section = "今日睡眠数据" if LANGUAGE != "en" else "Today's Sleep Data"
+    today_section = _ui("今日睡眠数据", "Today's Sleep Data")
     st.subheader(today_section)
     _today_sleep_data(data)
 
     st.subheader(TR("domain.sleep.today_details"))
     if detail_data:
-        _core_cards(detail_data, valid_history, baselines, key_prefix="today")
+        today_detail_baseline_data = _today_detail_baselines(detail_data, valid_history)
+        st.caption(_sleep_baseline_context(today_detail_baseline_data[0]))
+        _core_cards(
+            detail_data,
+            valid_history,
+            baselines,
+            key_prefix="today",
+            detail_baseline_data=today_detail_baseline_data,
+        )
     elif latest:
         st.info(_ui(
             f"{format_date(latest['date'], LANGUAGE)} 的睡眠数据暂不可用。",
@@ -1091,18 +1451,12 @@ def main():
 
     _render_historical_sleep_interaction(history, persisted_baselines)
 
-    st.subheader("个人睡眠基线" if LANGUAGE != "en" else "Personal Sleep Baseline")
-    _personal_baseline(detail_data, history)
-
     st.info(TR("domain.sleep.missing_notice"))
-    st.subheader("睡眠建议" if LANGUAGE != "en" else "Sleep Guidance")
-    coach = get_latest_local_coach()
-    if not coach:
-        st.info(TR("local_coach.missing"))
-    else:
-        priority = coach["sleep_advice"].get("sleep_priority")
-        code = {"high": "prioritize_sleep", "elevated": "insufficient_data", "normal": "maintain_schedule"}.get(priority, "insufficient_data")
-        st.success(TR(f"local_coach.sleep_advice.{code}"))
+    st.subheader(_ui("睡眠建议", "Sleep Guidance"))
+    _render_sleep_guidance(
+        detail_data,
+        today_detail_baseline_data if detail_data else None,
+    )
     st.caption(TR("safety.medical"))
 
 

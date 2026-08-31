@@ -261,7 +261,7 @@ class StructuredTrainingLoggingTests(unittest.TestCase):
     def test_localization_contract(self):
         zh = json.loads((ROOT / "locales" / "zh-CN.json").read_text(encoding="utf-8"))
         en = json.loads((ROOT / "locales" / "en.json").read_text(encoding="utf-8"))
-        self.assertEqual(zh["training_logging"]["title"], "训练详情")
+        self.assertEqual(zh["training_logging"]["title"], "训练数据")
         self.assertEqual(en["training_logging"]["title"], "Training Details")
         self.assertEqual(set(zh["training_logging"]), set(en["training_logging"]))
 
@@ -274,6 +274,11 @@ class StructuredTrainingLegacyMigrationTests(unittest.TestCase):
             connection.execute("PRAGMA foreign_keys=ON")
             connection.executescript(db.SCHEMA)
             for table_name, columns in db.MIGRATIONS.items():
+                if not connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,),
+                ).fetchone():
+                    continue
                 existing = {
                     row["name"] for row in connection.execute(
                         f"PRAGMA table_info({table_name})"
@@ -285,7 +290,11 @@ class StructuredTrainingLegacyMigrationTests(unittest.TestCase):
                             f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
                         )
             db.ensure_migration_ledger(connection)
-            for migration in db.SCHEMA_MIGRATIONS[:-2]:
+            # Stop before the structured-training migration so the fixture
+            # exercises the legacy workout/sets conversion path.
+            for migration in db.SCHEMA_MIGRATIONS:
+                if migration.sequence >= 14:
+                    break
                 if migration.sql:
                     connection.executescript(migration.sql)
                 db.record_schema_migration(connection, migration)

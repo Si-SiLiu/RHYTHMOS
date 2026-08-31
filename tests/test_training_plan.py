@@ -1,7 +1,9 @@
 import sqlite3
 import unittest
+from pathlib import Path
 
 from src import db
+from src.dashboard import _create_week_plan
 from src.training_plan import (
     analyze_plan_actual,
     build_hprs_snapshot,
@@ -14,6 +16,7 @@ from src.training_plan import (
     get_weekly_training_plan,
     plan_day_for_date,
     prescription_snapshot,
+    update_training_day_planned_date,
     update_training_day_sport_type,
 )
 
@@ -43,6 +46,43 @@ class TrainingPlanTests(unittest.TestCase):
         } <= columns)
         day_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(training_day_templates)")}
         self.assertIn("sport_type", day_columns)
+
+    def test_weekly_plan_is_rendered_before_personal_training_baseline(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "dashboard.py").read_text(encoding="utf-8")
+        main_source = source.split("def main():", 1)[1]
+        self.assertLess(
+            main_source.index("_render_weekly_training_plan(connection)"),
+            main_source.index("_render_training_baseline()"),
+        )
+
+    def test_daily_plan_does_not_repeat_the_section_sport_type_selector(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "dashboard.py").read_text(encoding="utf-8")
+        plan_inputs = source.split("def _render_daily_plan_inputs", 1)[1].split(
+            "def _render_day_action_editor", 1
+        )[0]
+        self.assertNotIn("training_plan_day_type_", plan_inputs)
+        self.assertNotIn("update_training_day_sport_type", plan_inputs)
+        self.assertIn("training_plan_day_date_{sport_type}_{day['id']}", plan_inputs)
+
+    def test_new_week_plan_has_only_empty_manual_days(self):
+        _create_week_plan(self.connection)
+        plan = get_weekly_training_plan(self.connection)
+        self.assertEqual(len(plan["days"]), 7)
+        self.assertTrue(all(day["prescription_count"] == 0 for day in plan["days"]))
+        self.assertTrue(all(day["planned_date"] for day in plan["days"]))
+
+    def test_manual_planned_date_selects_the_matching_plan_day(self):
+        program = create_training_program(self.connection, "手动日期计划")
+        first = create_training_day_template(
+            self.connection, program, "mon", "周一", planned_date="2026-08-10",
+        )
+        create_training_day_template(
+            self.connection, program, "tue", "周二", planned_date="2026-08-11",
+        )
+        update_training_day_planned_date(self.connection, first, "2026-08-12")
+        plan = get_weekly_training_plan(self.connection)
+        self.assertEqual(plan_day_for_date(plan, __import__("datetime").date(2026, 8, 12))["id"], first)
+        self.assertIsNone(plan_day_for_date(plan, __import__("datetime").date(2026, 8, 10)))
 
     def test_plan_hierarchy_and_weekday_lookup(self):
         program = create_training_program(self.connection, "基础周计划")

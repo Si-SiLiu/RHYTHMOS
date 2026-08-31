@@ -20,7 +20,7 @@ import streamlit as st
 from src.ai_context.exporter import export_ai_context
 from src.branding import browser_page_title, load_page_icon
 from src.db import connect
-from src.demo_sandbox import configure_demo_runtime
+from src.demo_sandbox import configure_demo_runtime, is_demo_mode
 from src.i18n import format_date, get_translator
 from src.i18n.ui import current_language, render_sidebar
 from src.personal_logging.body import calculate_bmi, weight_trend
@@ -32,6 +32,11 @@ from src.personal_logging.storage import (
     list_workout_sessions,
 )
 from src.personal_logging.summaries import rebuild_daily_summaries
+from src.post_save_sync import refresh_local_coach_for_date, start_priority_data_sync
+from src.input_habits import (
+    bootstrap_input_habits, clear_input_habits, format_input_habit_summary, get_input_habits,
+    get_input_habit_defaults, record_input_habit, set_input_habits_enabled,
+)
 from src.ui_tables import centered_dataframe
 from src.ui_controls import render_manual_input_styles
 
@@ -46,6 +51,44 @@ st.set_page_config(
 LANGUAGE, TR = render_sidebar(st, "daily_log")
 render_manual_input_styles(st)
 st.title(TR("personal_logging.title"))
+
+
+def _queue_priority_data_sync():
+    if is_demo_mode():
+        return
+    try:
+        start_priority_data_sync()
+    except RuntimeError:
+        # The manual record is durable even if its optional background sync
+        # runner is unavailable; the fixed scheduler will reconcile it later.
+        return
+
+
+with connect() as connection:
+    bootstrap_input_habits(connection)
+    input_habit_defaults = get_input_habit_defaults(connection)
+    input_habit_summary = format_input_habit_summary(connection)
+if input_habit_summary:
+    st.caption(TR("input_habits.summary", summary=input_habit_summary))
+with st.expander(TR("input_habits.title"), expanded=False):
+    with connect() as connection:
+        habit_profile = get_input_habits(connection)
+    st.caption(TR("input_habits.description"))
+    st.write(TR("input_habits.learned_count", count=habit_profile["event_count"]))
+    if habit_profile["enabled"]:
+        if st.button(TR("input_habits.disable"), key="disable_input_habits"):
+            with connect() as connection:
+                set_input_habits_enabled(connection, False)
+            st.rerun()
+    else:
+        if st.button(TR("input_habits.enable"), key="enable_input_habits"):
+            with connect() as connection:
+                set_input_habits_enabled(connection, True)
+            st.rerun()
+    if st.button(TR("input_habits.clear"), key="clear_input_habits"):
+        with connect() as connection:
+            clear_input_habits(connection)
+        st.rerun()
 selected_date = st.date_input(
     TR("personal_logging.record_date"), date.today(), key="log_date"
 ).isoformat()
@@ -105,6 +148,14 @@ with tabs[0]:
             try:
                 with connect() as connection:
                     create_body_measurement(connection, {"date": selected_date, "height_cm": optional_number(height), "weight_kg": optional_number(weight), "waist_cm": optional_number(waist), "body_fat_percent": optional_number(fat), "is_primary": primary, "notes": notes or None})
+                    record_input_habit(
+                        connection,
+                        "daily_log.body",
+                        fields=[field for field, value in (
+                            ("height_cm", height), ("weight_kg", weight),
+                            ("waist_cm", waist), ("body_fat_percent", fat),
+                        ) if value not in (None, 0.0)],
+                    )
                 st.success(TR("personal_logging.body_saved"))
             except (ValueError, RuntimeError) as exc:
                 st.error(error_text(exc))
@@ -127,7 +178,8 @@ with tabs[0]:
 with tabs[1]:
     with st.form("nutrition_form", clear_on_submit=False):
         c1, c2, c3 = st.columns(3)
-        meal_type = c1.selectbox(TR("personal_logging.meal_type"), MEAL_TYPES, format_func=meal_name, key="nutrition_meal_type")
+        meal_index = MEAL_TYPES.index(input_habit_defaults["meal_type"]) if input_habit_defaults.get("meal_type") in MEAL_TYPES else 0
+        meal_type = c1.selectbox(TR("personal_logging.meal_type"), MEAL_TYPES, index=meal_index, format_func=meal_name, key="nutrition_meal_type")
         food_name = c2.text_input(TR("personal_logging.food"), key="nutrition_food")
         amount = c3.number_input(TR("personal_logging.amount"), min_value=0.0, key="nutrition_amount")
         unit = st.text_input(TR("personal_logging.unit"), key="nutrition_unit")
@@ -140,6 +192,14 @@ with tabs[1]:
             try:
                 with connect() as connection:
                     create_nutrition_log(connection, {"date": selected_date, "meal_type": meal_type, "food_name": food_name, "amount": optional_number(amount), "unit": unit or None, "notes": notes or None, "data_source": "manual", **{key: optional_number(value) for key, value in zip(keys, nutrient_values)}})
+                    record_input_habit(
+                        connection,
+                        "daily_log.nutrition",
+                        fields=[key for key, value in zip(keys, nutrient_values) if value not in (None, 0.0)],
+                        choices={"nutrition.meal_type": meal_type, "nutrition.unit": unit},
+                        numeric={"nutrition.amount": amount},
+                    )
+                refresh_local_coach_for_date(selected_date)
                 st.success(TR("personal_logging.food_saved"))
             except ValueError as exc:
                 st.error(error_text(exc))
@@ -151,14 +211,15 @@ with tabs[1]:
             confirm = st.checkbox(TR("personal_logging.confirm_delete_food"), key="delete_nutrition_confirm")
             if st.form_submit_button(TR("common.delete")) and confirm:
                 with connect() as connection: delete_nutrition_log(connection, item_id)
+                refresh_local_coach_for_date(selected_date)
                 st.success(TR("common.saved"))
     else: st.info(TR("personal_logging.nutrition_empty"))
 
 with tabs[2]:
     with st.form("strength_form", clear_on_submit=False):
         c1, c2, c3, c4 = st.columns(4)
-        duration = c1.number_input(TR("personal_logging.duration"), min_value=0.0, key="strength_duration")
-        session_rpe = c2.number_input(TR("personal_logging.session_rpe"), min_value=0.0, max_value=10.0, key="strength_rpe")
+        duration = c1.number_input(TR("personal_logging.duration"), min_value=0.0, value=float(input_habit_defaults.get("training_duration_minutes") or 0.0), key="strength_duration")
+        session_rpe = c2.number_input(TR("personal_logging.session_rpe"), min_value=0.0, max_value=10.0, value=float(input_habit_defaults.get("training_session_rpe") or 0.0), key="strength_rpe")
         exercise_name = c3.text_input(TR("personal_logging.exercise"), key="strength_exercise")
         category = c4.text_input(TR("personal_logging.category"), key="strength_category")
         s1, s2, s3 = st.columns(3)
@@ -170,15 +231,31 @@ with tabs[2]:
                 with connect() as connection:
                     session_id = create_workout_session(connection, {"date": selected_date, "session_type": "strength", "duration_minutes": optional_number(duration), "session_rpe": optional_number(session_rpe)})
                     create_batch_sets(connection, session_id, exercise_name, int(set_count), int(reps), optional_number(weight), exercise_category=category or None)
+                    record_input_habit(
+                        connection,
+                        "daily_log.training",
+                        fields=[field for field, value in (
+                            ("duration_minutes", duration), ("session_rpe", session_rpe),
+                            ("exercise_name", exercise_name), ("weight_kg", weight),
+                            ("reps", reps), ("set_count", set_count),
+                        ) if value not in (None, "", 0, 0.0)],
+                        choices={"training.session_type": "strength"},
+                        numeric={"training.duration_minutes": duration, "training.session_rpe": session_rpe},
+                    )
+                refresh_local_coach_for_date(selected_date)
+                _queue_priority_data_sync()
                 st.success(TR("personal_logging.strength_saved", sets=set_count))
             except ValueError as exc: st.error(error_text(exc))
 
 with tabs[3]:
     with st.form("other_training_form", clear_on_submit=False):
-        session_type = st.selectbox(TR("personal_logging.session_type"), [kind for kind in SESSION_TYPES if kind != "strength"], format_func=session_name, key="other_session_type")
+        other_types = [kind for kind in SESSION_TYPES if kind != "strength"]
+        preferred_type = input_habit_defaults.get("training_type")
+        type_index = other_types.index(preferred_type) if preferred_type in other_types else 0
+        session_type = st.selectbox(TR("personal_logging.session_type"), other_types, index=type_index, format_func=session_name, key="other_session_type")
         c1, c2 = st.columns(2)
-        duration = c1.number_input(TR("personal_logging.other_duration"), min_value=0.0, key="other_duration")
-        rpe = c2.number_input(TR("personal_logging.session_rpe"), min_value=0.0, max_value=10.0, key="other_rpe")
+        duration = c1.number_input(TR("personal_logging.other_duration"), min_value=0.0, value=float(input_habit_defaults.get("training_duration_minutes") or 0.0), key="other_duration")
+        rpe = c2.number_input(TR("personal_logging.session_rpe"), min_value=0.0, max_value=10.0, value=float(input_habit_defaults.get("training_session_rpe") or 0.0), key="other_rpe")
         metadata_text = st.text_area(TR("personal_logging.metadata"), value="{}", key="other_metadata")
         notes = st.text_area(TR("personal_logging.training_notes"), key="other_notes")
         if st.form_submit_button(TR("personal_logging.save_training")):
@@ -186,6 +263,18 @@ with tabs[3]:
                 metadata = json.loads(metadata_text)
                 with connect() as connection:
                     create_workout_session(connection, {"date": selected_date, "session_type": session_type, "duration_minutes": optional_number(duration), "session_rpe": optional_number(rpe), "metadata": metadata, "notes": notes or None})
+                    record_input_habit(
+                        connection,
+                        "daily_log.training",
+                        fields=[field for field, value in (
+                            ("duration_minutes", duration), ("session_rpe", rpe),
+                            ("metadata", metadata_text), ("notes", notes),
+                        ) if value not in (None, "", 0, 0.0, "{}")],
+                        choices={"training.session_type": session_type},
+                        numeric={"training.duration_minutes": duration, "training.session_rpe": rpe},
+                    )
+                refresh_local_coach_for_date(selected_date)
+                _queue_priority_data_sync()
                 st.success(TR("personal_logging.training_saved"))
             except (ValueError, json.JSONDecodeError) as exc: st.error(error_text(exc))
     with connect() as connection: workout_rows = list_workout_sessions(connection, selected_date)
@@ -196,6 +285,8 @@ with tabs[3]:
             confirm = st.checkbox(TR("personal_logging.confirm_delete_training"), key="delete_workout_confirm")
             if st.form_submit_button(TR("common.delete")) and confirm:
                 with connect() as connection: delete_workout_session(connection, workout_id)
+                refresh_local_coach_for_date(selected_date)
+                _queue_priority_data_sync()
                 st.success(TR("personal_logging.training_deleted"))
     else: st.info(TR("personal_logging.training_empty"))
 

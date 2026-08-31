@@ -1,7 +1,7 @@
 import re
 import sqlite3
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 try:
@@ -292,13 +292,12 @@ def get_latest_kubios_core(db_path=None, today=None, stale_after_days=3):
         connection.close()
 
 
-def get_kubios_advanced_metrics(db_path=None, limit=28):
-    """Read full selected metrics for the dedicated advanced page only."""
+def get_kubios_advanced_metrics(db_path=None, limit=28, date_value=None):
+    """Read full selected Kubios metrics, optionally for one measurement date."""
     connection = connect_readonly(db_path)
     try:
         try:
-            rows = connection.execute(
-                """SELECT n.*,r.mean_rr_ms,r.poincare_sd1_ms,r.poincare_sd2_ms,
+            query = """SELECT n.*,r.mean_rr_ms,r.poincare_sd1_ms,r.poincare_sd2_ms,
                           r.lf_power_ms2,r.hf_power_ms2,r.lf_power_nu,r.hf_power_nu,
                           r.lf_hf_ratio,r.mood_code,d.rmssd_7d_trend,d.mean_hr_7d_trend,
                           d.readiness_7d_trend,d.pns_7d_trend,d.sns_7d_trend,
@@ -308,9 +307,13 @@ def get_kubios_advanced_metrics(db_path=None, limit=28):
                    FROM kubios_hrv_normalized n
                    JOIN kubios_hrv_measurements_raw r ON r.id=n.source_raw_id
                    LEFT JOIN kubios_hrv_derived d ON d.date=n.date
-                   WHERE n.selected_as_primary=1 ORDER BY n.date DESC,n.measurement_time DESC LIMIT ?""",
-                (limit,),
-            ).fetchall()
+                   WHERE n.selected_as_primary=1"""
+            params = []
+            if date_value:
+                query += " AND n.date=?"
+                params.append(date_value)
+            query += " ORDER BY n.date DESC,n.measurement_time DESC LIMIT ?"
+            rows = connection.execute(query, (*params, limit)).fetchall()
         except sqlite3.OperationalError:
             return []
         results = [dict(row) for row in rows]
@@ -337,23 +340,31 @@ def get_kubios_advanced_metrics(db_path=None, limit=28):
         connection.close()
 
 
-def get_latest_local_coach(db_path=None, today=None, stale_after_days=3):
-    """Load the latest local recommendation read-only and fail softly if absent."""
+def get_latest_local_coach(db_path=None, today=None, stale_after_days=3, coach_date=None):
+    """Load a scored local recommendation read-only and fail softly if absent."""
     connection = connect_readonly(db_path)
     try:
         try:
-            row = connection.execute(
-                "SELECT * FROM local_coach_recommendations ORDER BY date DESC, updated_at DESC LIMIT 1"
-            ).fetchone()
+            query = """SELECT c.*
+                       FROM local_coach_recommendations c
+                       JOIN recovery_scores s ON s.date=c.date
+                       WHERE s.recovery_score IS NOT NULL"""
+            params = []
+            if coach_date:
+                query += " AND c.date=?"
+                params.append(coach_date)
+            query += " ORDER BY c.date DESC, c.updated_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
         except sqlite3.OperationalError:
             return None
         if not row:
             return None
         result = dict(row)
-        for key in ("morning_training", "evening_training", "sleep_advice", "hydration_advice",
+        for key in ("morning_training", "evening_training", "training_summary", "sleep_advice", "hydration_advice",
                     "nutrition_advice", "recovery_advice", "rationale", "data_limitations", "safety_notices"):
             try:
-                result[key] = json.loads(result.pop(f"{key}_json"))
+                raw = result.pop(f"{key}_json", "{}")
+                result[key] = json.loads(raw) if raw else {}
             except (KeyError, TypeError, json.JSONDecodeError):
                 return None
         current = today or date.today()
@@ -364,6 +375,86 @@ def get_latest_local_coach(db_path=None, today=None, stale_after_days=3):
         return result
     finally:
         connection.close()
+
+
+def get_latest_ai_feedback(db_path=None, analysis_date=None):
+    """Load the latest validated Codex feedback without exposing request data."""
+
+    connection = connect_readonly(db_path)
+    try:
+        try:
+            if analysis_date:
+                row = connection.execute(
+                    "SELECT * FROM ai_feedback_outputs WHERE date=?", (analysis_date,)
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM ai_feedback_outputs ORDER BY date DESC, generated_at DESC LIMIT 1"
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not row:
+            return None
+        value = dict(row)
+        try:
+            output = json.loads(value.pop("output_json"))
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(output, dict):
+            return None
+        result = {**value, **output}
+        result["is_stale"] = _ai_feedback_is_stale(connection, result)
+        return result
+    finally:
+        connection.close()
+
+
+def _parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _ai_feedback_is_stale(connection, feedback):
+    """Do not present an AI explanation after its deterministic inputs changed."""
+    generated_at = _parse_timestamp(feedback.get("generated_at"))
+    feedback_date = feedback.get("date")
+    if generated_at is None or not feedback_date:
+        return True
+    try:
+        from src.ai_coach_contract import load_contract
+
+        audit = feedback.get("audit") or {}
+        contract = load_contract()
+        if (
+            audit.get("prompt_version") != contract["prompt_version"]
+            or audit.get("output_schema_version") != contract["output_schema_version"]
+            or audit.get("safety_policy_version") != contract["safety_policy_version"]
+        ):
+            return True
+    except (ImportError, ValueError, TypeError):
+        return True
+    try:
+        source_rows = connection.execute(
+            """
+            SELECT MAX(updated_at) FROM daily_recovery_metrics WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM baseline_metrics WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM recovery_scores WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM recovery_confidence WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM daily_nutrition_summary WHERE date=?
+            """,
+            (feedback_date, feedback_date, feedback_date, feedback_date, feedback_date),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return True
+    return any(
+        updated_at is not None and (_parse_timestamp(updated_at) is None or _parse_timestamp(updated_at) > generated_at)
+        for (updated_at,) in source_rows
+    )
 
 
 def get_prospective_progress(db_path=None, today=None):

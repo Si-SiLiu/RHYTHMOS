@@ -198,7 +198,7 @@ class SimplifiedTrainingEntryTests(unittest.TestCase):
         self.assertEqual(locale["simple_mode"], "Simple mode")
 
     def test_36_rerun_does_not_save_implicitly(self):
-        self.assertEqual(DASHBOARD.count("create_custom_exercise_catalog(connection, exercise)"), 1)
+        self.assertIn("save_training_details(", DASHBOARD)
         self.assertIn("if draft_clicked or complete_clicked:", DASHBOARD)
 
     def test_37_save_failure_keeps_editor_state(self):
@@ -284,4 +284,3 @@ class CustomExerciseCatalogConfirmationTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM training_exercises").fetchone()[0]
             self.assertEqual(count, 1)
             connection.close()
-

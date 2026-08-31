@@ -89,8 +89,16 @@ def _polar_values(row):
 
 
 def ensure_polar_session_index(connection: sqlite3.Connection):
+    # Page navigation calls this guard frequently. Only project raw sessions
+    # that are not indexed yet; rescanning every historical Polar payload made
+    # each Training-page visit progressively slower as the database grew.
     rows = connection.execute(
-        "SELECT * FROM polar_training_sessions_raw ORDER BY date,start_time,id"
+        """SELECT raw.* FROM polar_training_sessions_raw raw
+           WHERE NOT EXISTS (
+               SELECT 1 FROM training_sessions session
+               WHERE session.polar_external_id=raw.external_id
+           )
+           ORDER BY raw.date,raw.start_time,raw.id"""
     ).fetchall()
     inserted = 0
     with connection:
@@ -112,6 +120,24 @@ def ensure_polar_session_index(connection: sqlite3.Connection):
                 ),
             )
             inserted += cursor.rowcount
+    # Match only still-unlinked sessions that now have exactly one viable
+    # same-day plan. Existing links are already authoritative and no longer
+    # need a comparison rebuild during every page switch.
+    from src.training_plan_actual import auto_match_actual_session
+    matchable = connection.execute(
+        """SELECT session.id FROM training_sessions session
+           LEFT JOIN plan_actual_session_links link
+             ON link.actual_training_session_id=session.id
+           WHERE session.source='polar' AND session.deleted_at IS NULL
+             AND link.id IS NULL
+             AND 1=(
+                 SELECT COUNT(*) FROM planned_training_sessions planned
+                 WHERE planned.planned_date=session.date
+                   AND planned.status!='archived'
+             )"""
+    ).fetchall()
+    for actual in matchable:
+        auto_match_actual_session(connection, actual["id"])
     return inserted
 
 
@@ -194,6 +220,8 @@ def create_manual_training_session(connection: sqlite3.Connection, data):
                ) VALUES(?,?,?,?,?,?,'manual','manual',?,?,?,?,?,?)""",
             (_uuid(), *values.values()),
         ).lastrowid
+    from src.training_plan_actual import auto_match_actual_session
+    auto_match_actual_session(connection, int(record_id))
     return int(record_id)
 
 
@@ -373,6 +401,8 @@ def save_training_details(connection: sqlite3.Connection, session_id, details, e
                     item["completed"], item["notes"],
                 ) for item in exercise["sets"]],
             )
+    from src.training_plan_actual import auto_match_actual_session
+    auto_match_actual_session(connection, session_id)
     return session_id
 
 

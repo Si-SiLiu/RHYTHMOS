@@ -1,4 +1,5 @@
 import re
+from datetime import date, timedelta
 
 try:
     from .db import DB_PATH, connect
@@ -157,12 +158,63 @@ def load_nightly_rows(connection):
     }
 
 
+def load_morning_recovery_rows(connection):
+    """Load the canonical morning measurement for every recorded date.
+
+    Morning measurements can originate from a reviewed Kubios import or from
+    a manual recovery record.  The Recovery page already resolves those
+    inputs using the configured source priority; daily metrics must use the
+    same resolved values so that scoring and baseline calculations see the
+    exact data shown in the page.
+    """
+    try:
+        from .data_resolution import resolve_recovery_date
+    except ImportError:
+        from data_resolution import resolve_recovery_date
+
+    rows = connection.execute(
+        """
+        SELECT date FROM kubios_morning_hrv_raw
+        UNION
+        SELECT date FROM manual_recovery_logs
+        """
+    ).fetchall()
+    by_date = {}
+    for row in rows:
+        date_value = row["date"]
+        resolved = resolve_recovery_date(connection, date_value)
+        by_date[date_value] = {
+            "morning_rmssd": resolved["morning_rmssd"]["value"],
+            "morning_mean_hr": resolved["morning_mean_hr"]["value"],
+            "kubios_readiness": resolved["kubios_readiness"]["value"],
+        }
+    return by_date
+
+
+def _latest_completed_sleep_for_today(sleeps, nightly, date_value):
+    """Use last night's completed Polar record for this morning's assessment.
+
+    Polar sleeps are stored under the date on which the session ended. During
+    the current day, Recovery can already have a morning measurement while
+    that day's new sleep record has not been imported. In that narrow gap,
+    attach the immediately preceding night's data to today's derived record.
+    Historical gaps remain empty rather than receiving stale sleep data.
+    """
+    if date_value != date.today().isoformat():
+        return {}, {}
+    previous_date = (date.fromisoformat(date_value) - timedelta(days=1)).isoformat()
+    return sleeps.get(previous_date, {}), nightly.get(previous_date, {})
+
+
 def build_daily_metrics(connection):
     activities = load_activity_rows(connection)
     training = load_training_summary(connection)
     sleeps = load_sleep_rows(connection)
     nightly = load_nightly_rows(connection)
-    dates = sorted(set(activities) | set(training) | set(sleeps) | set(nightly))
+    morning_recovery = load_morning_recovery_rows(connection)
+    dates = sorted(
+        set(activities) | set(training) | set(sleeps) | set(nightly) | set(morning_recovery)
+    )
 
     metrics = []
     for date_value in dates:
@@ -177,6 +229,13 @@ def build_daily_metrics(connection):
         )
         sleep = sleeps.get(date_value, {})
         nightly_recharge = nightly.get(date_value, {})
+        morning = morning_recovery.get(date_value, {})
+        if not sleep and not nightly_recharge:
+            prior_sleep, prior_nightly = _latest_completed_sleep_for_today(
+                sleeps, nightly, date_value,
+            )
+            sleep = prior_sleep or sleep
+            nightly_recharge = prior_nightly or nightly_recharge
         metrics.append(
             {
                 "date": date_value,
@@ -194,6 +253,9 @@ def build_daily_metrics(connection):
                 "nightly_hrv_rmssd": nightly_recharge.get("nightly_hrv_rmssd"),
                 "nightly_resting_hr": nightly_recharge.get("nightly_resting_hr"),
                 "respiration_rate": nightly_recharge.get("respiration_rate"),
+                "morning_rmssd": morning.get("morning_rmssd"),
+                "morning_mean_hr": morning.get("morning_mean_hr"),
+                "kubios_readiness": morning.get("kubios_readiness"),
             }
         )
     return metrics
@@ -214,9 +276,12 @@ def upsert_daily_metrics(connection, metrics):
         sleep_score,
         nightly_hrv_rmssd,
         nightly_resting_hr,
-        respiration_rate
+        respiration_rate,
+        morning_rmssd,
+        morning_mean_hr,
+        kubios_readiness
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(date) DO UPDATE SET
         steps = excluded.steps,
         calories = excluded.calories,
@@ -230,6 +295,9 @@ def upsert_daily_metrics(connection, metrics):
         nightly_hrv_rmssd = excluded.nightly_hrv_rmssd,
         nightly_resting_hr = excluded.nightly_resting_hr,
         respiration_rate = excluded.respiration_rate,
+        morning_rmssd = excluded.morning_rmssd,
+        morning_mean_hr = excluded.morning_mean_hr,
+        kubios_readiness = excluded.kubios_readiness,
         updated_at = CURRENT_TIMESTAMP
     """
     for metric in metrics:
@@ -249,6 +317,9 @@ def upsert_daily_metrics(connection, metrics):
                 metric["nightly_hrv_rmssd"],
                 metric["nightly_resting_hr"],
                 metric["respiration_rate"],
+                metric["morning_rmssd"],
+                metric["morning_mean_hr"],
+                metric["kubios_readiness"],
             ),
         )
     connection.commit()

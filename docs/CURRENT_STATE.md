@@ -34,7 +34,7 @@ new unvalidated 0–100 score. No database schema change was made.
 - Confidence Engine Version: 1.0.0
 - Local Coach Engine Version: 1.0.0
 - Personal Logging Version: 1.1.0
-- Nutrition Logging Engine Version: 5.0.0
+- Nutrition Logging Engine Version: 5.2.0
 - Food Catalog Version: 1.0.0
 - Training Logging Version: 2.0.0
 - Exercise Catalog Version: 1.0.0
@@ -43,55 +43,55 @@ new unvalidated 0–100 score. No database schema change was made.
 - Conditional Training Fields Ready: true
 - RPE RIR Preference Supported: true
 - Simplified Training Entry Ready: true
-- Structured Training Ready: true
-- Training Session Count: 60
-- Training Exercise Count: 0
-- Training Set Count: 0
-- Latest Training Detail Date: none
+- Structured Training Ready: false
+- Training Session Count: 73
+- Training Exercise Count: 96
+- Training Set Count: 138
+- Latest Training Detail Date: 2026-08-08
 - Supplement Unit System Version: 1.0.0
 - Supplement Catalog Version: 2.0.0
 - Supplement Product Enrichment Version: 1.0.0
 - Brand Based Supplement Logging Ready: false
-- Supplement Product Count: 20
+- Supplement Product Count: 22
 - Verified Supplement Product Count: 0
-- Unverified Supplement Product Count: 19
+- Unverified Supplement Product Count: 21
 - Supplement Ingredient Count: 0
-- Latest Supplement Product Update: 2026-07-22 14:24:21
+- Latest Supplement Product Update: 2026-08-01 09:23:03
 - Supplement Enrichment Runtime Status: provider_blocked
 - Supplement Dynamic Units Ready: true
 - Supplement Catalog Count: 10
-- Simple Nutrition Input Ready: true
-- Food Catalog Count: 18
-- Meal Record Count: 38
-- Meal Item Count: 98
+- Simple Nutrition Input Ready: false
+- Food Catalog Count: 19
+- Meal Record Count: 103
+- Meal Item Count: 274
 - Meal Template Count: 4
-- Latest Meal Date: 2026-07-26
+- Latest Meal Date: 2026-08-09
 - Manual Logging Engine Version: 1.1.0
 - Data Resolution Version: 1.1.0
 - Scheduler Version: 1.1.0
 - Scheduled Sync Enabled: true
 - Scheduled Sync Time: 23:00
 - LaunchAgent Installed: true
-- Latest Scheduled Sync At: 2026-07-26T14:02:02+08:00
+- Latest Scheduled Sync At: 2026-08-09T08:02:04+08:00
 - Latest Scheduled Sync Success: false
 - Manual Activity Count: 15
 - Manual Sleep Count: 1
-- Manual Recovery Count: 10
-- Resolved Field Count: 2623
+- Manual Recovery Count: 24
+- Resolved Field Count: 3228
 - Manual Logging Ready: true
 - Data Resolution Ready: true
 - AI Context Export Version: 1.4.0
 - i18n Engine Version: 1.0.0
 - Kubios Screenshot Import Version: 1.2.0
 - Kubios Data Model Version: 1.1.0
-- Database Schema Version: 0.28.0
-- Schema Migration Count: 28
-- Latest Schema Migration: 0.28.0
+- Database Schema Version: 0.47.0
+- Schema Migration Count: 47
+- Latest Schema Migration: 0.47.0
 - Dashboard Version: 2.0.1
 - Supported Languages: zh-CN, zh-TW, en
 - Default Language: zh-CN
 - Current Language: zh-CN
-- Translation Key Count: 1355
+- Translation Key Count: 1663
 - Translation Coverage: 100%
 - Language Setting Ready: true
 - Kubios Screenshot Count: 1
@@ -106,46 +106,46 @@ new unvalidated 0–100 score. No database schema change was made.
 - Latest Kubios Measurement Date: none
 - Kubios Core Metrics Ready: false
 - Kubios Advanced Metrics Ready: false
-- Test Total: 801
-- Test Passed: 801
+- Test Total: 989
+- Test Passed: 989
 - Test Failed: 0
 - Test Success: true
-- Baseline Record Count: 760
-- Scored Day Count: 38
-- Recovery v1 Day Count: 31
-- Confidence Record Count: 38
-- Local Coach Record Count: 38
-- Latest Local Coach Date: 2026-07-26
+- Baseline Record Count: 1040
+- Scored Day Count: 52
+- Recovery v1 Day Count: 45
+- Confidence Record Count: 52
+- Local Coach Record Count: 52
+- Latest Local Coach Date: 2026-08-09
 - Local Coach Ready: true
 - Cloud AI Runtime Ready: false
-- Body Measurement Count: 18
+- Body Measurement Count: 30
 - Nutrition Log Count: 0
 - Workout Session Count: 0
 - Exercise Set Count: 0
 - AI Context Export Count: 0
-- Latest Body Measurement Date: 2026-07-26
+- Latest Body Measurement Date: 2026-08-07
 - Latest Nutrition Log Date: none
 - Latest Manual Workout Date: none
 - Manual ChatGPT Sync Ready: true
 - Automatic Cloud Sync Ready: false
-- Prospective Eligible Days: 9
+- Prospective Eligible Days: 20
 - Prospective Target Days: 14
-- Prospective Remaining Days: 5
+- Prospective Remaining Days: 0
 - Prospective Evaluation Status: collecting
 - Prospective Evaluation Ready: false
 - Daily Collection Status: attention_required
 - Daily Collection On Track: false
 - Today Collection Completed: true
-- Current Collection Streak Days: 1
-- Overdue Collection Days: 6
-- Latest Source Data Date: 2026-07-26
+- Current Collection Streak Days: 3
+- Overdue Collection Days: 9
+- Latest Source Data Date: 2026-08-09
 - Source Data Lag Days: 0
 - Database Aligned With Source: true
 - Today Source Data Available: true
 - Prospective Collection Blocker: none
-- Latest Data Date: 2026-07-26
+- Latest Data Date: 2026-08-09
 - Next Goal: Observe real training-entry use and refine catalog metadata without changing training or recovery algorithms.
-- Updated At: 2026-07-26T15:44:00+08:00
+- Updated At: 2026-08-09T09:09:20+08:00
 
 ### Prioritized Issues
 

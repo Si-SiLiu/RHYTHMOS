@@ -12,6 +12,7 @@ from src.pages._bootstrap import ensure_project_root
 ensure_project_root()
 
 import hashlib
+from datetime import date
 
 import streamlit as st
 
@@ -27,38 +28,33 @@ from src.kubios_screenshot.calibration import save_calibration
 from src.kubios_screenshot.confidence import confidence_band
 from src.kubios_screenshot.config import load_config
 from src.kubios_screenshot.downstream import run_downstream
-from src.kubios_screenshot.importer import detect_conflicts, import_reviewed_result
-from src.kubios_screenshot.ocr_adapter import VisionOCRAdapter
+from src.kubios_screenshot.importer import import_reviewed_result
+from src.kubios_screenshot.cloud_ocr import PreferredVisionOCRAdapter
 from src.kubios_screenshot.region_extractor import render_region_overlay
+from src.region_calibrator import render_region_calibrator
 from src.kubios_screenshot.service import batch_summary, process_batch, recognize_prepared
 from src.kubios_screenshot.storage import BASE_DIR, delete_import
 from src.kubios_screenshot.templates import get_template, list_templates
 from src.kubios_metrics.selector import create_measurement_group
+from src.post_save_sync import start_priority_data_sync
 from src.ui_controls import render_manual_input_styles
 
 
-configure_demo_runtime(st)
-PAGE_LANGUAGE = current_language(st.session_state)
-st.set_page_config(
-    page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("kubios_screenshot.title")),
-    page_icon=load_page_icon(), layout="wide",
-)
-LANGUAGE, TR = render_sidebar(st, "kubios_screenshot")
-render_manual_input_styles(st)
+LANGUAGE = "zh-CN"
+TR = get_translator(LANGUAGE)
 
 FIELD_ORDER = (
-    "date", "measurement_time", "rmssd", "mean_hr", "readiness", "sdnn",
-    "pns_index", "sns_index", "stress_index", "recovery_status",
-    "mean_rr_ms", "poincare_sd1_ms", "poincare_sd2_ms",
-    "respiratory_rate_bpm", "lf_power_ms2", "hf_power_ms2",
-    "lf_power_nu", "hf_power_nu", "lf_hf_ratio", "physiological_age",
-    "measurement_quality", "mood_code", "artefact_correction", "measurement_duration",
+    "mean_hr", "rmssd", "pns_index", "sns_index", "physiological_age",
+    "mean_rr_ms", "sdnn", "poincare_sd1_ms", "poincare_sd2_ms",
+    "stress_index", "respiratory_rate_bpm", "lf_power_ms2", "hf_power_ms2",
+    "lf_power_nu", "hf_power_nu", "lf_hf_ratio",
+    "measurement_quality", "mood_code",
 )
 
 
 def _empty_review():
     return {
-        "fields": {}, "missing_required_fields": ["date", "rmssd", "mean_hr"],
+        "fields": {}, "missing_required_fields": ["rmssd", "mean_hr"],
         "warnings": [], "overall_confidence": 0.0,
         "overall_confidence_band": "reject", "review_required": True,
         "user_confirmed": False, "parser_version": load_config()["parser_version"],
@@ -122,6 +118,19 @@ def _calibration_editor(result, active_field):
         current = template["field_regions"][active_field]
         keys = (("x", "region_x"), ("y", "region_y"), ("width", "region_width"), ("height", "region_height"))
         edited = dict(current)
+        stored = result.get("stored")
+        if stored:
+            preview_key = f"kubios_roi_drag_{audit_id}_{active_field}"
+            moved = render_region_calibrator(
+                image_path=BASE_DIR / stored.original_relative_path,
+                region=edited,
+                key=preview_key,
+            )
+            if isinstance(moved, dict) and all(name in moved for name, _ in keys):
+                for name, _ in keys:
+                    value = float(moved[name])
+                    edited[name] = value
+                    st.session_state[f"kubios_roi_{audit_id}_{active_field}_{name}"] = value
         for key, label in keys:
             edited[key] = st.number_input(
                 TR(f"kubios_screenshot.{label}"), min_value=0.0, max_value=1.0,
@@ -130,9 +139,6 @@ def _calibration_editor(result, active_field):
             )
         regions = {field: {name: value for name, value in region.items() if name in {"x", "y", "width", "height"}} for field, region in template["field_regions"].items()}
         regions[active_field] = edited
-        stored = result.get("stored")
-        if stored:
-            st.image(render_region_overlay(BASE_DIR / stored.original_relative_path, regions, active_field), width="stretch")
         confirmed = st.checkbox(TR("kubios_screenshot.save_calibration_confirm"), key=f"kubios_calibration_confirm_{audit_id}")
         if st.button(TR("kubios_screenshot.save_calibration"), disabled=not confirmed, key=f"kubios_calibration_save_{audit_id}"):
             try:
@@ -143,7 +149,7 @@ def _calibration_editor(result, active_field):
                 st.success(TR("kubios_screenshot.calibration_saved"))
 
 
-def _show_review(result):
+def _show_review(result, *, embedded=False):
     review = result["review"]
     audit_id = result["audit_id"]
     active_key = f"kubios_active_field_{audit_id}"
@@ -160,53 +166,26 @@ def _show_review(result):
         _show_image(result, active_field)
         _calibration_editor(result, active_field)
     with right:
-        if st.button(TR("kubios_screenshot.accept_high"), key=f"kubios_accept_high_{audit_id}"):
-            count = 0
-            for name, field in review.get("fields", {}).items():
-                if field.get("confidence", 0) >= 0.9:
-                    st.session_state[f"kubios_accepted_{audit_id}_{name}"] = True
-                    count += 1
-            st.success(TR("kubios_screenshot.accepted_high", count=count))
-        manual_mode = st.checkbox(TR("kubios_screenshot.quick_manual"), key=f"kubios_manual_mode_{audit_id}")
-        if st.button(TR("kubios_screenshot.clear_prefill"), key=f"kubios_clear_prefill_{audit_id}"):
-            for name in FIELD_ORDER:
-                st.session_state[f"kubios_field_{audit_id}_{name}"] = ""
-            st.rerun()
-        if manual_mode:
-            st.info(TR("kubios_screenshot.manual_ready"))
-
-        values = {}
+        # Screenshot import belongs to today's Recovery entry. The date is
+        # assigned internally so it is never an OCR target or a form field.
+        values = {"date": date.today().isoformat()}
+        # Keep every supported recovery metric editable. Recognition simply
+        # pre-fills the values; users can fill gaps or correct any value in
+        # the same confirmation step.
         for name in FIELD_ORDER:
             field = review.get("fields", {}).get(name, {})
             if st.button(TR("kubios_screenshot.focus_field", field=TR(f"kubios_screenshot.{name}")), key=f"kubios_focus_{audit_id}_{name}"):
                 st.session_state[active_key] = name
                 st.rerun()
             values[name] = st.text_input(
-                TR(f"kubios_screenshot.{name}"), value=str(field.get("value", "")),
+                TR(f"kubios_screenshot.{name}"),
+                value=str(field.get("value", "")),
                 key=f"kubios_field_{audit_id}_{name}",
             )
             if field:
                 consistency = "candidate_consistent" if field.get("candidates_consistent") else "candidate_inconsistent"
                 st.caption(TR("kubios_screenshot.field_confidence", value=f"{field['confidence']:.0%}") + " · " + TR(f"kubios_screenshot.{consistency}"))
 
-        conflicts = []
-        if values.get("date"):
-            with connect(migrate=False) as connection:
-                conflicts = detect_conflicts(connection, values["date"])
-        if conflicts:
-            st.warning(TR("kubios_screenshot.conflict_notice"))
-        resolution = st.selectbox(
-            TR("kubios_screenshot.conflict_resolution"),
-            ("keep_existing", "use_screenshot", "keep_both", "cancel"),
-            format_func=lambda value: TR(f"kubios_screenshot.{value}"),
-            key=f"kubios_resolution_{audit_id}",
-        )
-        action = st.radio(
-            TR("kubios_screenshot.post_import_action"),
-            ("import_only", "import_and_update"),
-            format_func=lambda value: TR(f"kubios_screenshot.{value}"),
-            key=f"kubios_action_{audit_id}",
-        )
         confirmed = st.checkbox(TR("kubios_screenshot.confirm_checkbox"), value=False, key=f"kubios_confirm_{audit_id}")
         if st.button(TR("kubios_screenshot.confirm_import"), key=f"kubios_import_{audit_id}"):
             if not confirmed:
@@ -215,19 +194,44 @@ def _show_review(result):
             with connect(migrate=False) as connection:
                 imported = import_reviewed_result(
                     connection, audit_id, values, user_confirmed=True,
-                    conflict_resolution=resolution,
-                    run_analysis=action == "import_and_update",
+                    # Confirming the reviewed screenshot is the one save
+                    # action: persist it and immediately refresh Recovery.
+                    run_analysis=True,
                     downstream_runner=run_downstream,
                 )
             if imported.success:
-                st.success(TR("kubios_screenshot.import_success"))
-                if action == "import_and_update" and imported.status == "imported":
-                    (st.success if imported.downstream.get("success") else st.warning)(TR("kubios_screenshot.downstream_success" if imported.downstream.get("success") else "kubios_screenshot.downstream_failed"))
+                try:
+                    start_priority_data_sync()
+                except RuntimeError:
+                    # The reviewed measurement is already stored and analysed
+                    # locally; a missing background runtime must not undo it.
+                    pass
+                downstream_ok = imported.status != "imported" or imported.downstream.get("success")
+                message = TR(
+                    "kubios_screenshot.downstream_success"
+                    if downstream_ok else "kubios_screenshot.downstream_failed"
+                )
+                if embedded:
+                    # Keep the already-selected upload from reopening the
+                    # review after the Recovery page refreshes.
+                    result.clear()
+                    result["status"] = "saved"
+                    st.session_state["recovery_edit_expanded_after_save"] = False
+                    st.session_state["recovery_collapse_editor_nonce"] = (
+                        st.session_state.get("recovery_collapse_editor_nonce", 0) + 1
+                    )
+                    st.session_state["recovery_save_notice"] = (
+                        f"{TR('kubios_screenshot.import_success')} · {message}"
+                    )
+                    st.rerun()
+                else:
+                    st.success(TR("kubios_screenshot.import_success"))
+                    (st.success if downstream_ok else st.warning)(message)
             else:
                 st.error(TR("kubios_screenshot.validation_failed"))
 
 
-def _show_result(result, adapter):
+def _show_result(result, adapter, *, embedded=False):
     status = result.get("status")
     if status == "duplicate":
         st.warning(TR("kubios_screenshot.duplicate")); return
@@ -242,7 +246,7 @@ def _show_result(result, adapter):
     if status in {"parsing_failed", "unsupported"}:
         st.error(TR(f"kubios_screenshot.{status}")); _manual_fallback(result); return
     if result.get("review"):
-        _show_review(result)
+        _show_review(result, embedded=embedded)
 
 
 def _show_recent_and_delete():
@@ -305,13 +309,24 @@ def _show_recent_and_delete():
                 if outcome.get("formal_record_preserved"): st.info(TR("kubios_screenshot.delete_preserved"))
 
 
-def main():
-    st.title(TR("kubios_screenshot.title")); st.write(TR("kubios_screenshot.intro"))
-    st.success(TR("kubios_screenshot.local_only")); st.warning(TR("kubios_screenshot.review_notice"))
-    st.caption(TR("kubios_screenshot.supported_templates_only"))
-    adapter = VisionOCRAdapter()
+def render_kubios_screenshot_import(language, translator, *, embedded=False):
+    """Render the local screenshot workflow, standalone or inside Recovery."""
+    global LANGUAGE, TR
+    LANGUAGE, TR = language, translator
+    (st.subheader if embedded else st.title)(TR("kubios_screenshot.title"))
+    adapter = PreferredVisionOCRAdapter()
     if not adapter.readiness()["ready"]: st.error(TR("kubios_screenshot.ocr_unavailable"))
-    uploads = st.file_uploader(TR("kubios_screenshot.upload"), type=("png", "jpg", "jpeg", "heic", "webp"), accept_multiple_files=True, help=TR("kubios_screenshot.upload_help"))
+    # Streamlit versions differ in how faithfully they apply
+    # ``label_visibility`` to file uploaders. Keep the drop zone clean in all
+    # supported builds rather than leaving a duplicate "Upload screenshot"
+    # line above it.
+    st.html("<style>div[data-testid='stFileUploader'] > label { display: none !important; }</style>")
+    uploads = st.file_uploader(
+        "\u200b",
+        type=("png", "jpg", "jpeg", "heic", "webp"),
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+    )
     cache = st.session_state.setdefault("kubios_upload_results", {})
     new_uploads = [(upload.name, upload.getvalue()) for upload in uploads or [] if hashlib.sha256(upload.getvalue()).hexdigest() not in cache]
     if new_uploads and adapter.readiness()["ready"]:
@@ -323,8 +338,21 @@ def main():
         summary = batch_summary(visible)
         manual = summary["needs_manual_input"] + summary["template_selection_required"] + summary["quality_rejected"]
         st.info(TR("kubios_screenshot.batch_summary", recognized=summary["recognized"], manual=manual, duplicate=summary["duplicate"], failed=summary["parsing_failed"]))
-        for result in visible: _show_result(result, adapter)
-    _show_recent_and_delete(); st.caption(TR("kubios_screenshot.privacy_footer"))
+        for result in visible:
+            _show_result(result, adapter, embedded=embedded)
+
+
+def main():
+    global LANGUAGE, TR
+    configure_demo_runtime(st)
+    page_language = current_language(st.session_state)
+    st.set_page_config(
+        page_title=browser_page_title(get_translator(page_language)("kubios_screenshot.title")),
+        page_icon=load_page_icon(), layout="wide",
+    )
+    LANGUAGE, TR = render_sidebar(st, "kubios_screenshot")
+    render_manual_input_styles(st)
+    render_kubios_screenshot_import(LANGUAGE, TR)
 
 
 if __name__ == "__main__": main()

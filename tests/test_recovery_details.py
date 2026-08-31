@@ -75,6 +75,28 @@ class RecoveryDetailsTests(unittest.TestCase):
         self.assertLessEqual(len(result["support_factors"]), 3)
         self.assertLessEqual(len(result["watch_factors"]), 3)
 
+    def test_extended_kubios_metrics_get_baseline_cards_without_changing_recovery_signal(self):
+        extended = {
+            "pns_index": 0.13, "sns_index": -0.07, "physiological_age": 45,
+            "mean_rr_ms": 979.38, "sdnn_ms": 38.57, "poincare_sd1_ms": 25.97,
+            "poincare_sd2_ms": 47.87, "lf_power_ms2": 837.58,
+            "hf_power_ms2": 395.03, "lf_power_nu": 67.94,
+            "hf_power_nu": 32.04, "lf_hf_ratio": 2.12,
+        }
+        history = self.history(14)
+        for item in history:
+            item.update(extended)
+        current = record("2026-07-23")
+        current.update(extended)
+
+        result = build_recovery_details(current, history)
+
+        for metric in extended:
+            self.assertIn(metric, result["analyses"])
+            self.assertEqual(result["analyses"][metric]["impact"], "neutral")
+            self.assertIsNotNone(result["analyses"][metric]["baseline_center"])
+        self.assertNotIn("pns_index_support", result["support_factors"])
+
     def test_history_page_has_selectable_record_and_situation_sections(self):
         page = Path(__file__).resolve().parents[1] / "src" / "pages" / "2_Recovery.py"
         source = page.read_text(encoding="utf-8")
@@ -82,6 +104,14 @@ class RecoveryDetailsTests(unittest.TestCase):
         self.assertIn("def _historical_recovery_situation", source)
         self.assertIn("recovery_history_view_", source)
         self.assertIn("recovery_history_selected", source)
+
+    def test_recovery_page_caches_stable_inputs_with_database_revision(self):
+        page = Path(__file__).resolve().parents[1] / "src" / "pages" / "2_Recovery.py"
+        source = page.read_text(encoding="utf-8")
+        self.assertIn("def _recovery_database_revision", source)
+        self.assertIn("@st.cache_data(show_spinner=False, max_entries=4)", source)
+        self.assertIn("def _load_recovery_page_inputs", source)
+        self.assertIn("_load_recovery_page_inputs(\n        _recovery_database_revision()", source)
 
 
 if __name__ == "__main__":

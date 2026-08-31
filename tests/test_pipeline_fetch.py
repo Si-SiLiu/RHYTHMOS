@@ -47,19 +47,19 @@ class PipelineFetchTests(unittest.TestCase):
         utc = timezone.utc
         self.assertEqual(
             fetch.scheduled_dataset_names(datetime(2026, 7, 22, 10, 0, tzinfo=utc)),
-            ("daily_activity",),
+            (),
         )
         self.assertEqual(
             fetch.scheduled_dataset_names(datetime(2026, 7, 22, 12, 0, tzinfo=utc)),
-            ("daily_activity", "training"),
+            fetch.SCHEDULED_DATASETS,
         )
         self.assertEqual(
             fetch.scheduled_dataset_names(datetime(2026, 7, 22, 22, 0, tzinfo=utc)),
-            ("daily_activity",),
+            (),
         )
         self.assertEqual(
             fetch.scheduled_dataset_names(datetime(2026, 7, 22, 23, 0, tzinfo=utc)),
-            (),
+            fetch.SCHEDULED_DATASETS,
         )
 
     def test_scheduled_refresh_filters_to_allowed_polar_datasets(self):

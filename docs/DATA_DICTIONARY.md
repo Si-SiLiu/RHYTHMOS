@@ -627,7 +627,7 @@ measured zero remains 0.
 - `input_snapshot_digest`：closed outbound object 的不可逆摘要。
 - `provider_id` / `model_version`：获批 provider 与精确模型标识。
 - `prompt_version` / `output_schema_version` / `safety_policy_version`：独立契约版本。
-- `provider_mode`：首版固定为 `cloud_zdr`。
+- `provider_mode`：当前为 `cloud_standard_retention`；如未来获批 ZDR，可切换为 `cloud_zdr`。
 - `status`：allowlisted request lifecycle 状态。
 - `safety_outcome`：allowlisted 安全分类，不含原始 prompt。
 - `response_json`：nullable，仅保存验证后的输出 schema，90 天过期。

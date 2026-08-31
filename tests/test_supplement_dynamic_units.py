@@ -152,7 +152,7 @@ class SupplementDynamicUnitTests(unittest.TestCase):
         editor = page[page.index("def _supplement_editor"):page.index("def _quick_actions")]
         self.assertIn('"supplement_products.quantity"', editor)
         self.assertIn('"supplement_products.unit"', editor)
-        self.assertIn('"supplement_products.brand"', editor)
+        self.assertNotIn('headers = ("brand",', editor)
         self.assertIn('"supplement_products.product_name"', editor)
         self.assertIn(".selectbox(", editor)
         self.assertIn(".number_input(", editor)
@@ -195,7 +195,9 @@ class SupplementDynamicUnitTests(unittest.TestCase):
             "SELECT item_name,quantity,unit FROM meal_event_items WHERE category='supplement'"
         ).fetchone()
         self.assertEqual(tuple(row), ("creatine_monohydrate", 5, "g"))
-        self.assertEqual(db.current_schema_version(self.connection), "0.24.0")
+        self.assertEqual(
+            db.current_schema_version(self.connection), db.SCHEMA_MIGRATIONS[-1].version
+        )
         self.assertEqual(self.connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
 

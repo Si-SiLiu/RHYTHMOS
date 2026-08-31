@@ -30,8 +30,8 @@ def model_evaluation(model_version):
     return {
         "suite_version": "1.0.0",
         "model_version": model_version,
-        "prompt_version": "1.0.0",
-        "output_schema_version": "1.0.0",
+        "prompt_version": "1.3.0",
+        "output_schema_version": "1.3.0",
         "safety_policy_version": "1.0.0",
         "cases_per_run": 200,
         "runs": 3,
@@ -65,7 +65,6 @@ class AICoachReadinessTests(unittest.TestCase):
             "provider_approval_not_granted",
             "model_version_unreleased",
             "audit_migration_not_applied",
-            "provider_adapter_not_implemented",
             "exact_model_evaluation_missing",
         ])
         serialized = json.dumps(result).lower()
@@ -132,8 +131,8 @@ class AICoachReadinessTests(unittest.TestCase):
                 path,
                 model_version="synthetic-model",
                 contract={
-                    "prompt_version": "1.0.0",
-                    "output_schema_version": "1.0.0",
+                    "prompt_version": "1.3.0",
+                    "output_schema_version": "1.3.0",
                     "safety_policy_version": "1.0.0",
                 },
                 evaluation={

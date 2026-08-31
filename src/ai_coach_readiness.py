@@ -144,7 +144,7 @@ def evaluate_readiness(
         raise AIReadinessError("AI readiness authorities are invalid") from exc
 
     contract_ready = (
-        contract["provider_mode"] == "cloud_zdr"
+        contract["provider_mode"] in {"cloud_zdr", "cloud_standard_retention"}
         and safety["safety_policy_version"] == contract["safety_policy_version"]
     )
     local_preflight_ready = (

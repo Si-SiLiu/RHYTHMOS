@@ -1,11 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "daily-recovery-coach/ai-coach-output/1.0.0",
+  "$id": "daily-recovery-coach/ai-coach-output/1.3.0",
   "type": "object",
   "additionalProperties": false,
-  "required": ["summary", "evidence", "limitations", "suggested_actions", "questions_for_user", "safety_notice", "audit"],
+  "required": ["summary", "domain_feedback", "evidence", "limitations", "suggested_actions", "questions_for_user", "safety_notice", "audit"],
   "properties": {
     "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "domain_feedback": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["domain", "status", "commentary", "suggestion"],
+        "properties": {
+          "domain": {"type": "string", "enum": ["sleep", "recovery", "training", "nutrition"]},
+          "status": {"type": "string", "enum": ["positive", "caution", "neutral", "insufficient"]},
+          "commentary": {"type": "string", "minLength": 1, "maxLength": 400},
+          "suggestion": {"type": "string", "minLength": 1, "maxLength": 300}
+        }
+      }
+    },
     "evidence": {
       "type": "array",
       "maxItems": 12,
@@ -42,12 +58,12 @@
       "required": ["model_version", "prompt_version", "output_schema_version", "safety_policy_version", "input_snapshot_digest", "generated_at", "provider_mode"],
       "properties": {
         "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
-        "prompt_version": {"const": "1.0.0"},
-        "output_schema_version": {"const": "1.0.0"},
-        "safety_policy_version": {"const": "1.0.0"},
+        "prompt_version": {"type": "string", "const": "1.3.0"},
+        "output_schema_version": {"type": "string", "const": "1.3.0"},
+        "safety_policy_version": {"type": "string", "const": "1.0.0"},
         "input_snapshot_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "generated_at": {"type": "string", "format": "date-time"},
-        "provider_mode": {"const": "cloud_zdr"}
+        "provider_mode": {"type": "string", "const": "cloud_standard_retention"}
       }
     }
   }

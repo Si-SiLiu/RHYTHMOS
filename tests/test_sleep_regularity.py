@@ -4,10 +4,12 @@ from datetime import date, datetime, timedelta, timezone
 from src.sleep_regularity import (
     CONFIG,
     CanonicalSleepRecord,
+    SleepRegularityService,
     SleepSegment,
     calculate_circular_center,
     calculate_circular_mad,
     calculate_last_night_deviation,
+    calculate_rolling_regularity_scores,
     calculate_summary_score,
     calculate_sri,
     determine_maturity,
@@ -95,6 +97,24 @@ class SleepRegularityTests(unittest.TestCase):
         self.assertEqual(result.score, 100)
         self.assertGreater(result.details["coverage_ratio"], 0.9)
         self.assertGreater(result.details["valid_day_pairs"], 1)
+
+    def test_rolling_scores_match_individual_overlapping_windows(self):
+        records = []
+        for index in range(16):
+            day = date(2026, 7, 1) + timedelta(days=index)
+            start = datetime.combine(day, datetime.min.time(), TZ)
+            segments = (
+                SleepSegment(start, start + timedelta(hours=8), "awake"),
+                SleepSegment(start + timedelta(hours=8), start + timedelta(hours=16), "asleep"),
+            )
+            records.append(CanonicalSleepRecord(
+                day, start, start + timedelta(hours=16), 600,
+                "test", str(day), "UTC+08:00", segments,
+            ))
+        rolling_scores = calculate_rolling_regularity_scores(records)
+        for index, item in enumerate(records):
+            expected = SleepRegularityService.calculate_regularity(records[:index + 1]).score
+            self.assertEqual(rolling_scores[item.sleep_date], expected)
 
     def test_duplicate_dates_are_counted_once(self):
         day = date(2026, 7, 1)

@@ -2,7 +2,8 @@
 
 Confirmed screenshot data can feed the existing daily metrics before a local
 rebuild. OCR text and confidence never enter Local Coach, and OCR failures do
-not produce advice. Local Coach formulas and safety rules remain unchanged.
+not produce advice. Local Coach now combines sleep, physical training, Neural
+Readiness, and recorded nutrition when deciding the day's training adjustment.
 
 ## Boundary
 
@@ -11,7 +12,8 @@ version, persisted recommendations, or its cloud boundary.
 
 Local Coach Engine `1.0.0` is an on-device deterministic interpretation
 sidecar. Its dependency direction is `Daily Metrics → Baseline → Recovery →
-Confidence → Deterministic Explanation → Local Coach → Report / Dashboard`.
+Confidence + Sleep/Training/Neural/Nutrition Context → Local Coach → Report /
+Dashboard`.
 It reads existing results and never recalculates Recovery Score, Recovery
 Confidence, or Personal Baseline. It has no provider, network, credential,
 API-key, or cloud-model dependency. Cloud AI remains a separate blocked path and
@@ -24,9 +26,10 @@ Rules are centralized in `config/local_coach_rules.json`; the output contract is
 define score/confidence bands, completeness, sleep/load thresholds, fixed
 training schedules, and adjustment percentages. They are not clinically validated.
 
-Every output contains morning strength, evening Hip-Hop, sleep, hydration,
-nutrition, recovery, limitations, safety notices, sanitized rationale, versions,
-historical freshness, and `generated_without_cloud_ai=true`.
+Every output contains morning strength, evening Hip-Hop, a combined training
+summary, sleep, hydration, nutrition, recovery, limitations, safety notices,
+sanitized rationale, versions, historical freshness, and
+`generated_without_cloud_ai=true`.
 
 ## Safety
 
@@ -73,7 +76,14 @@ transition results without emitting health values or advice JSON.
 Fresh-data collection follows
 [`LOCAL_COACH_PROSPECTIVE_EVALUATION.md`](LOCAL_COACH_PROSPECTIVE_EVALUATION.md).
 
-Manual subjective recovery values and manual measured-field fallbacks do not
-enter Local Coach Engine 1.0.0. The new pipeline steps only prepare summaries,
-provenance, Dashboard, Report, and AI Context presentation. Local Coach rules,
-input values, persisted recommendations, and engine version remain unchanged.
+Recorded nutrition and manual training summaries are read as context; missing
+or incomplete records are reported as limitations and do not silently become
+zero. A Neural Readiness result can reduce the next session when fatigue,
+heaviness, slower-than-baseline responses, or repeated lapses cross the local
+rules. Nutrition deficits influence fueling guidance and only contribute to
+training reduction when combined with other recovery pressure.
+
+After a local nutrition, physical-training, or Neural Readiness save/delete,
+the affected date's recommendation is rebuilt synchronously when a recovery
+score exists. Polar and sleep changes continue to rebuild through the normal
+sync pipeline.

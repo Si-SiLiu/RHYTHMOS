@@ -5,7 +5,8 @@ from pathlib import Path
 
 from src import db
 from src.neural_readiness import (CALIBRATION_PROTOCOL_VERSION, DAILY_SHORT_PROTOCOL_VERSION,
-                                  calculate_pvt_metrics, get_condition_preferences, get_daily_result,
+                                  calculate_pvt_metrics, calculate_work_impact,
+                                  get_condition_preferences, get_daily_result, get_work_phase_results,
                                   save_assessment, save_condition_preferences)
 
 
@@ -161,6 +162,23 @@ class NeuralReadinessTests(unittest.TestCase):
         self.assertEqual(get_condition_preferences(self.path), {
             "quiet": False, "dominant": True, "stay": False, "device_ok": True,
         })
+
+    def test_work_phase_pair_is_compared_without_double_counting_baseline_days(self):
+        before = _payload("before", "2026-03-01", 240)
+        before["device_context"]["work_phase"] = "before_work"
+        before["mental_fatigue"] = 2
+        save_assessment(before, self.path)
+        after = _payload("after", "2026-03-01", 300)
+        after["device_context"]["work_phase"] = "after_work"
+        after["mental_fatigue"] = 6
+        after["mental_clarity"] = 4
+        save_assessment(after, self.path)
+        phases = get_work_phase_results("2026-03-01", self.path)
+        impact = calculate_work_impact(phases)
+        self.assertEqual(set(phases), {"before_work", "after_work"})
+        self.assertEqual(impact["median_rt_delta_ms"], 60)
+        self.assertEqual(impact["mental_fatigue_delta"], 4)
+        self.assertEqual(impact["level"], "large")
 
 
 if __name__ == "__main__":

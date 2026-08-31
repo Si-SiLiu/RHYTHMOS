@@ -38,6 +38,14 @@ DATASETS = (
     "continuous_heart_rate",
     "cardio_load",
 )
+SCHEDULED_DATASETS = (
+    "daily_activity",
+    "training",
+    "sleep",
+    "nightly_recharge",
+    "continuous_heart_rate",
+)
+SCHEDULED_HOURS = (12, 18, 23)
 
 SNAPSHOT_FILES = tuple(
     f"polar_{name}.json"
@@ -49,14 +57,11 @@ SNAPSHOT_FILES = tuple(
 
 
 def scheduled_dataset_names(now: datetime | None = None) -> tuple[str, ...]:
-    """Return only the Polar datasets allowed for a scheduled refresh."""
+    """Return the complete health refresh set at each fixed daily slot."""
     current = now or datetime.now().astimezone()
-    if current.hour > 22:
+    if current.hour not in SCHEDULED_HOURS:
         return ()
-    datasets = ["daily_activity"]
-    if current.hour % 4 == 0:
-        datasets.append("training")
-    return tuple(datasets)
+    return SCHEDULED_DATASETS
 
 
 def source_snapshot(raw_dir=RAW_DIR):

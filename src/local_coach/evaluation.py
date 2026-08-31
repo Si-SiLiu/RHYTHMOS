@@ -16,7 +16,7 @@ from .storage import load_input, load_recommendation
 BASE_DIR = Path(__file__).resolve().parents[2]
 EVALUATION_PATH = BASE_DIR / "config" / "local_coach_evaluation.json"
 PERSISTED_OUTPUT_KEYS = (
-    "date", "morning_training", "evening_training", "sleep_advice",
+    "date", "morning_training", "evening_training", "training_summary", "sleep_advice",
     "hydration_advice", "nutrition_advice", "recovery_advice", "rationale",
     "data_limitations", "safety_notices", "engine_version",
     "rule_config_version", "generated_without_cloud_ai",

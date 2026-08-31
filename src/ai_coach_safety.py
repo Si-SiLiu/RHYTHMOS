@@ -98,6 +98,8 @@ def _narrative_strings(output_payload: Mapping[str, Any]) -> list[str]:
     result.extend(output_payload["questions_for_user"])
     for action in output_payload["suggested_actions"]:
         result.extend((action["title"], action["rationale"]))
+    for item in output_payload["domain_feedback"]:
+        result.extend((item["commentary"], item["suggestion"]))
     return result
 
 
@@ -128,6 +130,9 @@ def validate_semantic_safety(
     unknown = evidence_ids - allowed
     if unknown:
         raise AISafetyError(f"Evidence references are not allowlisted: {sorted(unknown)}")
+    domains = [item["domain"] for item in validated_output["domain_feedback"]]
+    if set(domains) != {"sleep", "recovery", "training", "nutrition"} or len(set(domains)) != 4:
+        raise AISafetyError("Domain feedback must cover each required domain once")
 
     narrative = "\n".join(_narrative_strings(validated_output))
     if NUMBER_RE.search(narrative):
@@ -179,6 +184,15 @@ def build_deterministic_fallback(
         safety_notice = "如有紧急或持续加重的症状，请立即联系当地急救服务或合格医疗专业人员。"
     output = {
         "summary": "当前仅提供确定性的恢复结果。",
+        "domain_feedback": [
+            {
+                "domain": domain,
+                "status": "insufficient",
+                "commentary": "当前没有足够信息形成该维度的个体化解释。",
+                "suggestion": "继续记录后再查看该维度反馈。",
+            }
+            for domain in ("sleep", "recovery", "training", "nutrition")
+        ],
         "evidence": [
             {
                 "fact_id": "recovery_recommendation",

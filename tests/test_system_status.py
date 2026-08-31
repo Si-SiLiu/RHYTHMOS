@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date
 from pathlib import Path
 
@@ -87,6 +88,15 @@ class SystemStatusTests(unittest.TestCase):
         self.assertEqual(status["system_health"], "Warning")
         self.assertEqual(status["active_p1_count"], 1)
 
+    def test_blocked_external_p1_issue_does_not_degrade_local_health(self):
+        self.state["prioritized_issues"] = [
+            {"priority": "P1", "status": "blocked", "description": "Future provider review"}
+        ]
+        self.write_files()
+        status = self.load()
+        self.assertEqual(status["system_health"], "Healthy")
+        self.assertEqual(status["active_p1_count"], 0)
+
     def test_unreadable_database_is_unhealthy(self):
         status = system_status.load_system_status(
             self.state_path,
@@ -116,6 +126,37 @@ class SystemStatusTests(unittest.TestCase):
         self.assertEqual(status["last_sync_records_imported"], 7)
         self.assertEqual(status["last_sync_warning_count"], 2)
         self.assertEqual(status["system_health"], "Warning")
+
+    def test_failed_sync_warnings_do_not_degrade_system_health(self):
+        status = system_status.load_system_status(
+            self.state_path,
+            self.versions_path,
+            database_check=lambda _: True,
+            sync_reader=lambda _: {
+                "finish_time": "2026-07-10T18:30:00+08:00",
+                "success": 0,
+                "warning_count": 2,
+            },
+            today=date(2026, 7, 10),
+        )
+        self.assertEqual(status["system_health"], "Healthy")
+        self.assertEqual(status["last_sync_warning_count"], 2)
+
+    def test_canonical_status_uses_live_data_freshness_over_stale_snapshot(self):
+        with mock.patch.object(system_status, "STATE_PATH", self.state_path), \
+             mock.patch.object(system_status, "get_data_freshness", return_value={
+                 "latest_daily_metrics_date": "2026-07-10",
+             }):
+            status = system_status.load_system_status(
+                self.state_path,
+                self.versions_path,
+                database_check=lambda _: True,
+                sync_reader=lambda _: None,
+                today=date(2026, 7, 10),
+            )
+        self.assertEqual(status["latest_data_date"], "2026-07-10")
+        self.assertEqual(status["data_age_days"], 0)
+        self.assertEqual(status["system_health"], "Healthy")
 
 
 if __name__ == "__main__":

@@ -149,6 +149,58 @@ class DailyMetricsTests(unittest.TestCase):
         self.assertEqual(row["respiration_rate"], 14.2)
         connection.close()
 
+    def test_rebuild_projects_resolved_morning_recovery_values(self):
+        connection = self.make_connection()
+        connection.execute(
+            """INSERT INTO kubios_morning_hrv_raw(
+                   source,external_id,date,raw_json,rmssd,mean_hr,readiness,reviewed
+               ) VALUES('kubios','kubios-1','2026-07-10','{}',35,55,'good',1)"""
+        )
+        connection.execute(
+            """INSERT INTO manual_recovery_logs(
+                   date,morning_rmssd_ms,morning_resting_hr_bpm
+               ) VALUES('2026-07-10',41,61)"""
+        )
+        connection.commit()
+
+        daily_metrics.rebuild_daily_recovery_metrics(connection)
+        row = connection.execute(
+            """SELECT morning_rmssd,morning_mean_hr,kubios_readiness
+               FROM daily_recovery_metrics WHERE date='2026-07-10'"""
+        ).fetchone()
+
+        # Recovery source priority is manual for the two morning measurements,
+        # while Kubios is the sole permitted source for readiness.
+        self.assertEqual(row["morning_rmssd"], 41)
+        self.assertEqual(row["morning_mean_hr"], 61)
+        self.assertEqual(row["kubios_readiness"], "good")
+        connection.close()
+
+    def test_manual_morning_fields_can_supply_typed_kubios_trends(self):
+        from src.kubios_morning_input import sync_manual_morning_measurements
+        from src.kubios_metrics.normalizer import rebuild as rebuild_kubios_normalized
+
+        connection = self.make_connection()
+        connection.execute(
+            """INSERT INTO kubios_morning_hrv_raw(
+                   source,external_id,date,raw_json,rmssd,mean_hr,stress_index,
+                   respiratory_rate,measurement_quality,source_type,reviewed,import_method
+               ) VALUES('kubios_manual','manual:2026-07-10','2026-07-10','{}',41,61,12.5,
+                        17.2,'GOOD','manual',1,'manual')"""
+        )
+        connection.commit()
+
+        self.assertEqual(sync_manual_morning_measurements(connection), 1)
+        self.assertEqual(rebuild_kubios_normalized(connection)["normalized_records"], 1)
+        row = connection.execute(
+            """SELECT rmssd_ms,mean_hr_bpm,stress_index,respiratory_rate_bpm,
+                      readiness_percent,source_type
+               FROM kubios_hrv_normalized WHERE date='2026-07-10'"""
+        ).fetchone()
+
+        self.assertEqual(tuple(row), (41, 61, 12.5, 17.2, None, "manual"))
+        connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

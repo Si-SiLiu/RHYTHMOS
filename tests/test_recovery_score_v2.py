@@ -56,7 +56,7 @@ class RecoveryScoreV2Tests(unittest.TestCase):
         self.assertEqual(score["readiness_score"], 95)
         self.assertGreater(score["recovery_score"], 60)
 
-    def test_calculate_recovery_score_falls_back_to_v1_without_kubios(self):
+    def test_calculate_recovery_score_is_unscored_without_recovery_evidence(self):
         score = recovery_score.calculate_recovery_score(
             {
                 "date": "2026-07-10",
@@ -70,7 +70,9 @@ class RecoveryScoreV2Tests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(score["score_version"], "v0.1")
+        self.assertEqual(score["score_version"], "unscored_insufficient_recovery_evidence")
+        self.assertIsNone(score["recovery_score"])
+        self.assertIsNone(score["recommendation"])
         self.assertIsNone(score["hrv_score"])
         self.assertIsNone(score["morning_hr_score"])
         self.assertIsNone(score["readiness_score"])

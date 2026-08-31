@@ -37,6 +37,7 @@ def valid_input():
             "hrv_band": "high",
             "training_count_band": "single",
         },
+        "nutrition": {"recording_band": "complete", "coverage_band": "adequate"},
         "baseline_context": [
             {
                 "metric_name": "sleep",
@@ -47,8 +48,8 @@ def valid_input():
         ],
         "presentation": {"locale": "zh-CN", "unit_system": "metric"},
         "contract_versions": {
-            "prompt_version": "1.0.0",
-            "output_schema_version": "1.0.0",
+            "prompt_version": "1.3.0",
+            "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
         },
     }
@@ -57,6 +58,12 @@ def valid_input():
 def valid_output():
     return {
         "summary": "恢复状态稳定，证据完整度较高。",
+        "domain_feedback": [
+            {"domain": "sleep", "status": "positive", "commentary": "睡眠信号稳定。", "suggestion": "保持规律作息。"},
+            {"domain": "recovery", "status": "positive", "commentary": "恢复信号稳定。", "suggestion": "按当前节奏安排。"},
+            {"domain": "training", "status": "neutral", "commentary": "训练负荷适中。", "suggestion": "根据体感调整。"},
+            {"domain": "nutrition", "status": "neutral", "commentary": "营养记录完整。", "suggestion": "保持记录。"},
+        ],
         "evidence": [{"fact_id": "sleep_status", "statement": "睡眠处于个人典型范围以上。"}],
         "limitations": [],
         "suggested_actions": [
@@ -70,12 +77,12 @@ def valid_output():
         "safety_notice": "这不是医疗诊断。",
         "audit": {
             "model_version": "provider-model-snapshot",
-            "prompt_version": "1.0.0",
-            "output_schema_version": "1.0.0",
+            "prompt_version": "1.3.0",
+            "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
             "input_snapshot_digest": "a" * 64,
             "generated_at": "2026-07-11T10:00:00+08:00",
-            "provider_mode": "cloud_zdr",
+            "provider_mode": "cloud_standard_retention",
         },
     }
 
@@ -83,8 +90,8 @@ def valid_output():
 class AICoachContractTests(unittest.TestCase):
     def test_contract_versions_and_schema_files_are_valid(self):
         contract = ai_coach_contract.load_contract()
-        self.assertEqual(contract["prompt_version"], "1.0.0")
-        self.assertEqual(contract["output_schema_version"], "1.0.0")
+        self.assertEqual(contract["prompt_version"], "1.3.0")
+        self.assertEqual(contract["output_schema_version"], "1.3.0")
         self.assertEqual(contract["safety_policy_version"], "1.0.0")
         for key in ("input_schema", "output_schema"):
             schema = json.loads((BASE_DIR / "config" / contract[key]).read_text(encoding="utf-8"))

@@ -26,11 +26,11 @@ from src.neural_readiness import calculate_work_impact, get_daily_result, get_wo
 from src.performance_planner import (
     ADAPTIVE_RECOVERY_TITLE,
     BLOCK_STATUSES,
-    BLOCK_TYPES,
     CHECKPOINT_TRIGGERS,
     CHECKPOINT_TYPES,
     DEMAND_LEVELS,
     PLAN_STATUSES,
+    PLANNABLE_BLOCK_TYPES,
     PRIORITY_LEVELS,
     PlannerConflictError,
     PlannerNotFoundError,
@@ -199,7 +199,10 @@ def _initialise_add_block_state() -> None:
         for key in ADD_BLOCK_WIDGET_KEYS:
             st.session_state.pop(key, None)
         st.session_state.pop("pp_add_advanced_touched", None)
-    block_type = st.session_state.setdefault("pp_add_block_type", BLOCK_TYPES[0])
+    block_type = st.session_state.get("pp_add_block_type", PLANNABLE_BLOCK_TYPES[0])
+    if block_type not in PLANNABLE_BLOCK_TYPES:
+        block_type = PLANNABLE_BLOCK_TYPES[0]
+        st.session_state["pp_add_block_type"] = block_type
     defaults = get_block_defaults(block_type)
     st.session_state.setdefault("pp_add_block_title", "")
     st.session_state.setdefault("pp_add_start_time", time(9, 0))
@@ -497,7 +500,7 @@ with schedule_tab:
         first_row = st.columns(3)
         block_type = first_row[0].selectbox(
             TR("performance_planner.block_type"),
-            BLOCK_TYPES,
+            PLANNABLE_BLOCK_TYPES,
             format_func=lambda value: _label("types", value),
             key="pp_add_block_type",
             on_change=_apply_add_block_type_defaults,
@@ -645,13 +648,21 @@ with schedule_tab:
                         value=_block_title(block),
                     )
                     edit_row = st.columns(3)
-                    edit_type = edit_row[0].selectbox(
-                        TR("performance_planner.block_type"),
-                        BLOCK_TYPES,
-                        index=BLOCK_TYPES.index(block["block_type"]),
-                        format_func=lambda value: _label("types", value),
-                        key=f"pp_type_{block['block_id']}",
-                    )
+                    if block["block_type"] == "exercise":
+                        edit_row[0].text_input(
+                            TR("performance_planner.block_type"),
+                            value=_label("types", block["block_type"]),
+                            disabled=True,
+                        )
+                        edit_type = block["block_type"]
+                    else:
+                        edit_type = edit_row[0].selectbox(
+                            TR("performance_planner.block_type"),
+                            PLANNABLE_BLOCK_TYPES,
+                            index=PLANNABLE_BLOCK_TYPES.index(block["block_type"]),
+                            format_func=lambda value: _label("types", value),
+                            key=f"pp_type_{block['block_id']}",
+                        )
                     edit_start = edit_row[1].time_input(
                         TR("performance_planner.start"),
                         value=block_start.time(),

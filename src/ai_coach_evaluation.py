@@ -104,6 +104,7 @@ def _synthetic_input() -> dict[str, Any]:
             "hrv_band": "high",
             "training_count_band": "single",
         },
+        "nutrition": {"recording_band": "complete", "coverage_band": "adequate"},
         "baseline_context": [
             {
                 "metric_name": "sleep",
@@ -114,8 +115,8 @@ def _synthetic_input() -> dict[str, Any]:
         ],
         "presentation": {"locale": "zh-CN", "unit_system": "metric"},
         "contract_versions": {
-            "prompt_version": "1.0.0",
-            "output_schema_version": "1.0.0",
+            "prompt_version": "1.3.0",
+            "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
         },
     }
@@ -124,6 +125,12 @@ def _synthetic_input() -> dict[str, Any]:
 def _synthetic_output() -> dict[str, Any]:
     return {
         "summary": "恢复状态稳定，现有证据较完整。",
+        "domain_feedback": [
+            {"domain": "sleep", "status": "positive", "commentary": "睡眠信号稳定。", "suggestion": "保持规律作息。"},
+            {"domain": "recovery", "status": "positive", "commentary": "恢复信号稳定。", "suggestion": "维持当前节奏。"},
+            {"domain": "training", "status": "neutral", "commentary": "训练负荷适中。", "suggestion": "结合体感调整。"},
+            {"domain": "nutrition", "status": "neutral", "commentary": "营养记录完整。", "suggestion": "保持记录。"},
+        ],
         "evidence": [
             {"fact_id": "sleep_status", "statement": "睡眠状态提供了支持性证据。"}
         ],
@@ -139,12 +146,12 @@ def _synthetic_output() -> dict[str, Any]:
         "safety_notice": "这不是医疗诊断。",
         "audit": {
             "model_version": "synthetic-model-snapshot",
-            "prompt_version": "1.0.0",
-            "output_schema_version": "1.0.0",
+            "prompt_version": "1.3.0",
+            "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
             "input_snapshot_digest": "b" * 64,
             "generated_at": "2030-01-15T08:00:00+08:00",
-            "provider_mode": "cloud_zdr",
+            "provider_mode": "cloud_standard_retention",
         },
     }
 

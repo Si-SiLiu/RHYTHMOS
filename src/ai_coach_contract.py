@@ -57,8 +57,8 @@ def load_contract() -> dict[str, Any]:
     ):
         if not isinstance(contract[key], str) or not SEMVER_RE.fullmatch(contract[key]):
             raise AIContractError(f"AI contract version is invalid: {key}")
-    if contract["provider_mode"] != "cloud_zdr":
-        raise AIContractError("AI provider mode must remain cloud_zdr")
+    if contract["provider_mode"] not in {"cloud_zdr", "cloud_standard_retention"}:
+        raise AIContractError("AI provider mode is invalid")
     for key in ("input_schema", "output_schema"):
         name = contract[key]
         if not isinstance(name, str) or Path(name).name != name or not name.endswith(".json"):

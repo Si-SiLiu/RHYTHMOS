@@ -69,7 +69,7 @@ def load_report_data(connection, report_date=None):
         coach = None
     if coach:
         coach = dict(coach)
-        for key in ("morning_training", "evening_training", "sleep_advice", "hydration_advice", "nutrition_advice", "recovery_advice", "data_limitations", "safety_notices"):
+        for key in ("morning_training", "evening_training", "training_summary", "sleep_advice", "hydration_advice", "nutrition_advice", "recovery_advice", "data_limitations", "safety_notices"):
             try: coach[key] = json.loads(coach[f"{key}_json"])
             except (KeyError, TypeError, json.JSONDecodeError): coach = None; break
     data["local_coach"] = coach
@@ -148,9 +148,11 @@ def render_coach_section(coach, language="zh-CN"):
     tr = get_translator(language)
     if not coach:
         return f"## {tr('reports.local_coach')}\n\n{tr('local_coach.missing')}\n\n{tr('local_coach.disclaimer')}\n"
+    combined = coach.get("training_summary") or {}
+    combined_line = f"- 综合判断：{combined['advice']}\n" if combined.get("advice") else ""
     return f"""## {tr('reports.local_coach')}
 
-- {tr('local_coach.morning_strength')}: {_coach_advice('training', coach['morning_training'], tr)}
+{combined_line}- {tr('local_coach.morning_strength')}: {_coach_advice('training', coach['morning_training'], tr)}
 - {tr('local_coach.evening_hiphop')}: {_coach_advice('training', coach['evening_training'], tr)}
 - {tr('local_coach.sleep')}: {_coach_advice('sleep', coach['sleep_advice'], tr)}
 - {tr('local_coach.recovery')}: {_coach_advice('recovery', coach['recovery_advice'], tr)}

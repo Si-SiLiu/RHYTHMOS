@@ -24,6 +24,7 @@ LEGACY_PROTOCOL_VERSION = "pvt_b_v1"
 BASELINE_WINDOW_DAYS = 28
 BASELINE_MINIMUM_DAYS = 7
 BASELINE_RELIABLE_DAYS = 14
+WORK_PHASES = ("before_work", "after_work")
 _SUMMARY_FIELDS = (
     "trial_count", "valid_trial_count", "median_rt_ms", "mean_rt_ms",
     "mean_response_speed", "fastest_10pct_rt_ms", "slowest_10pct_rt_ms",
@@ -128,6 +129,15 @@ def _baseline(connection, assessment_date: str, *, test_mode: str, protocol_vers
         """SELECT metrics_json, device_context FROM neural_assessments
            WHERE assessment_date>=? AND assessment_date<? AND valid_for_baseline=1
              AND test_mode=? AND protocol_version=? AND baseline_group=?
+             AND id=(
+                 SELECT latest.id FROM neural_assessments AS latest
+                  WHERE latest.assessment_date=neural_assessments.assessment_date
+                    AND latest.valid_for_baseline=1
+                    AND latest.test_mode=neural_assessments.test_mode
+                    AND latest.protocol_version=neural_assessments.protocol_version
+                    AND latest.baseline_group=neural_assessments.baseline_group
+                  ORDER BY latest.completed_at DESC LIMIT 1
+             )
            ORDER BY assessment_date DESC LIMIT ?""",
         (start, assessment_date, test_mode, protocol_version, baseline_group,
          28 if test_mode == "daily_short" else 12),
@@ -319,6 +329,65 @@ def get_daily_result(result_date: str | None = None, db_path=None) -> dict[str, 
         return None
     finally:
         connection.close()
+
+
+def get_work_phase_results(result_date: str, db_path=None) -> dict[str, dict[str, Any]]:
+    """Return the latest before/after-work daily checks for a date."""
+    connection = connect(db_path or get_current_db_path(), migrate=False)
+    try:
+        rows = connection.execute(
+            """SELECT id, completed_at, device_context, metrics_json,
+                      mental_fatigue, mental_clarity, task_motivation,
+                      physical_heaviness, interrupted, valid_for_baseline
+                 FROM neural_assessments
+                WHERE assessment_date=? AND test_mode='daily_short'
+                ORDER BY completed_at ASC""",
+            (result_date,),
+        ).fetchall()
+        phases: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            context = json.loads(row["device_context"] or "{}")
+            phase = context.get("work_phase")
+            if phase not in WORK_PHASES:
+                continue
+            phases[phase] = {
+                "assessment_id": row["id"],
+                "completed_at": row["completed_at"],
+                **json.loads(row["metrics_json"] or "{}"),
+                "mental_fatigue": row["mental_fatigue"],
+                "mental_clarity": row["mental_clarity"],
+                "task_motivation": row["task_motivation"],
+                "physical_heaviness": row["physical_heaviness"],
+                "interrupted": bool(row["interrupted"]),
+                "valid_for_baseline": bool(row["valid_for_baseline"]),
+            }
+        return phases
+    finally:
+        connection.close()
+
+
+def calculate_work_impact(phases: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Compare paired work checks; positive RT means slower after work."""
+    before, after = phases.get("before_work"), phases.get("after_work")
+    if not before or not after:
+        return None
+    rt_delta = _number(after.get("median_rt_ms"))
+    before_rt = _number(before.get("median_rt_ms"))
+    rt_delta = rt_delta - before_rt if rt_delta is not None and before_rt is not None else None
+    cv_after = _number(after.get("rt_coefficient_of_variation"))
+    cv_before = _number(before.get("rt_coefficient_of_variation"))
+    stability_delta = cv_after - cv_before if cv_after is not None and cv_before is not None else None
+    fatigue_delta = after.get("mental_fatigue") - before.get("mental_fatigue")
+    clarity_delta = after.get("mental_clarity") - before.get("mental_clarity")
+    signals = sum((rt_delta is not None and rt_delta >= 30, stability_delta is not None and stability_delta >= 0.05, fatigue_delta >= 2, clarity_delta <= -2))
+    level = "large" if signals >= 3 else "moderate" if signals >= 1 else "small"
+    return {
+        "median_rt_delta_ms": rt_delta,
+        "stability_delta": stability_delta,
+        "mental_fatigue_delta": fatigue_delta,
+        "mental_clarity_delta": clarity_delta,
+        "level": level,
+    }
 
 
 DATA_DICTIONARY = {

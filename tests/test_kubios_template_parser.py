@@ -31,10 +31,15 @@ class SequenceAdapter:
 
 
 class TemplateParserTests(unittest.TestCase):
-    def test_three_explicit_templates_exist(self):
+    def test_explicit_templates_exist(self):
         self.assertEqual(
             {item["template_id"] for item in list_templates()},
-            {"readiness_summary", "measurement_details", "results_summary"},
+            {
+                "resting_hrv_result_full",
+                "readiness_summary",
+                "measurement_details",
+                "results_summary",
+            },
         )
 
     def test_only_user_supplied_layouts_claim_real_calibration(self):
@@ -43,8 +48,25 @@ class TemplateParserTests(unittest.TestCase):
             self.assertEqual(templates[template_id]["calibration_status"], "calibrated_anonymized_real")
             self.assertTrue(templates[template_id]["auto_detection_enabled"])
             self.assertEqual(templates[template_id]["calibration_sample_count"], 1)
+        self.assertEqual(templates["resting_hrv_result_full"]["calibration_status"], "calibrated_user_confirmed_standard")
+        self.assertTrue(templates["resting_hrv_result_full"]["auto_detection_enabled"])
+        self.assertEqual(templates["resting_hrv_result_full"]["calibration_sample_count"], 10)
         self.assertEqual(templates["results_summary"]["calibration_status"], "pending_real_calibration")
         self.assertFalse(templates["results_summary"]["auto_detection_enabled"])
+
+    def test_full_result_template_uses_the_user_confirmed_standard_layout(self):
+        template = get_template("resting_hrv_result_full")
+        self.assertEqual(template["reference_layout"]["image_size"], [1284, 2778])
+        self.assertEqual(template["reference_layout"]["source"], "user_confirmed_standard_screenshot")
+        self.assertEqual(
+            list(template["field_regions"]),
+            [
+                "mean_hr", "rmssd", "pns_index", "sns_index", "physiological_age",
+                "mean_rr_ms", "sdnn", "poincare_sd1_ms", "poincare_sd2_ms",
+                "stress_index", "respiratory_rate_bpm", "lf_power_ms2", "hf_power_ms2",
+                "lf_power_nu", "hf_power_nu", "lf_hf_ratio", "measurement_quality", "mood_code",
+            ],
+        )
 
     def test_template_auto_detection_when_calibrated_config_allows_it(self):
         config = json.loads(Path("config/kubios_screenshot_templates.json").read_text(encoding="utf-8"))
@@ -199,10 +221,12 @@ class TemplateParserTests(unittest.TestCase):
         for forbidden in ("requests", "urllib", "socket", "http://", "https://"):
             self.assertNotIn(forbidden, source)
 
-    def test_review_page_contains_manual_and_high_confidence_controls(self):
+    def test_review_page_uses_one_editable_confirmation_form(self):
         source = Path("src/pages/2_Kubios_Screenshot_Import.py").read_text(encoding="utf-8")
-        self.assertIn("accept_high", source)
-        self.assertIn("quick_manual", source)
+        self.assertIn("for name in FIELD_ORDER", source)
+        self.assertNotIn("kubios_accept_high_", source)
+        self.assertNotIn("kubios_manual_mode_", source)
+        self.assertNotIn("kubios_clear_prefill_", source)
         self.assertIn("confirm_import", source)
 
 

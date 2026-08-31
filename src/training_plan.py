@@ -55,13 +55,17 @@ def create_training_program(connection: sqlite3.Connection, name, *, description
 
 def create_training_day_template(connection: sqlite3.Connection, program_id, day_key,
                                  day_label, *, sequence_order=1, notes=None,
-                                 sport_type="indoor_strength"):
+                                 sport_type="indoor_strength", planned_date=None):
+    normalized_date = (
+        date.fromisoformat(str(planned_date)).isoformat()
+        if planned_date not in (None, "") else None
+    )
     with connection:
         return connection.execute(
             """INSERT INTO training_day_templates(
-                   uuid,training_program_id,day_key,day_label,sequence_order,notes,sport_type
-               ) VALUES(?,?,?,?,?,?,?)""",
-            (_uuid(), program_id, day_key, day_label, sequence_order, notes, sport_type),
+                   uuid,training_program_id,day_key,day_label,sequence_order,notes,sport_type,planned_date
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            (_uuid(), program_id, day_key, day_label, sequence_order, notes, sport_type, normalized_date),
         ).lastrowid
 
 
@@ -81,6 +85,19 @@ def update_training_day_sport_type(connection: sqlite3.Connection, day_template_
         connection.execute(
             "UPDATE training_day_templates SET sport_type=? WHERE id=?",
             (sport_type, day_template_id),
+        )
+
+
+def update_training_day_planned_date(connection: sqlite3.Connection, day_template_id, planned_date):
+    """Persist the manually chosen date for a weekly-plan day."""
+    normalized_date = (
+        date.fromisoformat(str(planned_date)).isoformat()
+        if planned_date not in (None, "") else None
+    )
+    with connection:
+        connection.execute(
+            "UPDATE training_day_templates SET planned_date=? WHERE id=?",
+            (normalized_date, day_template_id),
         )
 
 
@@ -210,6 +227,7 @@ def import_weekly_training_plan(connection: sqlite3.Connection, day_specs, *,
                 connection, program_id, day_key,
                 day_spec.get("day_label") or day_labels.get(day_key, day_key),
                 sequence_order=day_order,
+                planned_date=day_spec.get("planned_date"),
             )
             day = connection.execute(
                 "SELECT * FROM training_day_templates WHERE id=?", (day_id,)
@@ -312,8 +330,15 @@ def get_weekly_training_plan(connection: sqlite3.Connection, anchor_date=None):
 
 def plan_day_for_date(plan, target_date=None):
     target = target_date or date.today()
+    target_iso = target.isoformat()
+    dated_days = [day for day in plan.get("days", []) if day.get("planned_date")]
+    if dated_days:
+        exact = next((day for day in dated_days if day["planned_date"] == target_iso), None)
+        if exact:
+            return exact
     key = WEEKDAY_KEYS[target.weekday()]
-    return next((day for day in plan.get("days", []) if day["day_key"] == key), None)
+    fallback = next((day for day in plan.get("days", []) if day["day_key"] == key), None)
+    return fallback if fallback and not fallback.get("planned_date") else None
 
 
 def prescription_snapshot(day):

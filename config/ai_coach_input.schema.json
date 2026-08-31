@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "daily-recovery-coach/ai-coach-input/1.0.0",
+  "$id": "daily-recovery-coach/ai-coach-input/1.3.0",
   "type": "object",
   "additionalProperties": false,
-  "required": ["analysis_date", "recovery", "confidence", "daily_metrics", "baseline_context", "presentation", "contract_versions"],
+  "required": ["analysis_date", "recovery", "confidence", "daily_metrics", "nutrition", "baseline_context", "presentation", "contract_versions"],
   "properties": {
     "analysis_date": {"type": "string", "format": "date"},
     "recovery": {
@@ -55,7 +55,18 @@
         "training_duration_band": {"type": "string", "enum": ["none", "light", "moderate", "high", "unknown"]},
         "training_count_band": {"type": "string", "enum": ["none", "single", "multiple", "unknown"]},
         "activity_band": {"type": "string", "enum": ["low", "typical", "high", "unknown"]},
-        "readiness_label": {"type": "string", "maxLength": 64}
+        "kubios_readiness_label": {"type": "string", "enum": ["available", "unavailable"]},
+        "local_readiness_status": {"type": "string", "enum": ["ready", "steady", "cautious", "recovery_priority", "insufficient"]},
+        "local_readiness_basis": {"type": "string", "enum": ["sleep_only", "sleep_and_recovery"]}
+      }
+    },
+    "nutrition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recording_band", "coverage_band"],
+      "properties": {
+        "recording_band": {"type": "string", "enum": ["unlogged", "partial", "complete"]},
+        "coverage_band": {"type": "string", "enum": ["none", "limited", "adequate"]}
       }
     },
     "baseline_context": {
@@ -88,8 +99,8 @@
       "additionalProperties": false,
       "required": ["prompt_version", "output_schema_version", "safety_policy_version"],
       "properties": {
-        "prompt_version": {"const": "1.0.0"},
-        "output_schema_version": {"const": "1.0.0"},
+        "prompt_version": {"const": "1.3.0"},
+        "output_schema_version": {"const": "1.3.0"},
         "safety_policy_version": {"const": "1.0.0"}
       }
     }

@@ -389,7 +389,7 @@ deterministic health table is altered and `ai_coach_audit` is not created.
 - 状态：Approved design, not applied。
 - 独立表 `ai_coach_audit` 不与 Recovery、Baseline 或 Confidence 表合并。
 - 保存 request id、analysis date、input digest、provider/model/prompt/schema/
-  safety versions、cloud_zdr mode、status、safety outcome、validated response、
+  safety versions、provider mode、status、safety outcome、validated response、
   created/content-expiry/metadata-expiry/deletion timestamps。
 - 不保存请求 payload、raw health data、token、secret、provider envelope、
   stack trace 或原文 user question。

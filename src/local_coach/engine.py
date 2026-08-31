@@ -13,7 +13,7 @@ from .recovery import generate_recovery_advice
 from .safety import apply_safety_fallback
 from .sleep import generate_sleep_advice
 from .storage import ENGINE_VERSION, available_dates, latest_date, load_input, upsert_recommendation
-from .training import generate_training_advice
+from .training import build_training_summary, generate_training_advice
 
 
 def generate_recommendation(data, rules=None, symptoms=None):
@@ -31,6 +31,12 @@ def generate_recommendation(data, rules=None, symptoms=None):
         "is_historical": data.is_historical, "freshness_days": data.freshness_days,
     }
     apply_safety_fallback(data, output, rules, symptoms=symptoms)
+    output["training_summary"] = build_training_summary(
+        data, rules, {
+            "morning_training": output["morning_training"],
+            "evening_training": output["evening_training"],
+        },
+    )
     return validate_output(output)
 
 

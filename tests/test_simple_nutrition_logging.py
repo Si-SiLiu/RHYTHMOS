@@ -33,7 +33,8 @@ class SimpleNutritionLoggingTests(unittest.TestCase):
         self.connection.close()
 
     def test_catalog_has_multitag_foods_and_stable_units(self):
-        self.assertEqual(len(list_food_catalog(self.connection)), 18)
+        self.assertEqual(len(list_food_catalog(self.connection)), 19)
+        self.assertEqual(self.catalog["sweet_pepper"]["display_name_zh"], "甜椒")
         self.assertIn("protein_source", self.catalog["egg"]["category_tags"])
         self.assertIn("fat_source", self.catalog["egg"]["category_tags"])
         self.assertIn("whole_grain", self.catalog["oats"]["category_tags"])
@@ -344,7 +345,7 @@ class SimpleNutritionLoggingTests(unittest.TestCase):
                VALUES(?, 'supplement', 1, 'fish_oil', 1, 'capsule')""", (event_id,)
         )
         db.apply_migrations(legacy); db.apply_migrations(legacy)
-        self.assertEqual(db.current_schema_version(legacy), "0.24.0")
+        self.assertEqual(db.current_schema_version(legacy), db.SCHEMA_MIGRATIONS[-1].version)
         migrated = legacy.execute("SELECT * FROM meal_items").fetchone()
         self.assertEqual((migrated["quantity"], migrated["unit"]), (50, "g"))
         self.assertEqual(json.loads(migrated["category_tags_json"]), ["carbohydrate"])

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from html import escape
+import math
 from numbers import Real
 
-import pandas as pd
 import streamlit as st
 
 
@@ -19,10 +19,12 @@ def centered_number(label=None, **kwargs):
 
 def centered_columns(data) -> dict:
     """Build centered configs for every visible column in a read-only table."""
-    frame = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
     config = {}
-    for name in frame.columns:
-        if pd.api.types.is_numeric_dtype(frame[name].dtype):
+    columns, rows = _tabular_values(data)
+    for index, name in enumerate(columns):
+        values = [row[index] for row in rows if index < len(row)]
+        observed = [value for value in values if value is not None]
+        if observed and all(isinstance(value, Real) and not isinstance(value, bool) for value in observed):
             config[name] = centered_number(str(name))
         else:
             config[name] = centered_text(str(name))
@@ -40,23 +42,38 @@ def centered_dataframe(data, **kwargs):
 def _cell_text(value) -> str:
     if value is None:
         return "None"
-    try:
-        if bool(pd.isna(value)):
-            return "None"
-    except (TypeError, ValueError):
-        pass
     if isinstance(value, Real) and not isinstance(value, bool):
+        if isinstance(value, float) and math.isnan(value):
+            return "None"
         return f"{float(value):.4f}".rstrip("0").rstrip(".")
+    # Avoid importing the full pandas stack merely to render a list of dicts.
+    # DataFrame callers can still pass pandas' scalar missing values.
+    if value.__class__.__module__.startswith("pandas") and str(value) in {"<NA>", "NaT"}:
+        return "None"
     return str(value)
+
+
+def _tabular_values(data) -> tuple[list, list[tuple]]:
+    """Normalize common table inputs without eagerly importing pandas."""
+    if hasattr(data, "columns") and hasattr(data, "itertuples"):
+        return list(data.columns), list(data.itertuples(index=False, name=None))
+
+    records = list(data or [])
+    if not records:
+        return [], []
+    if isinstance(records[0], dict):
+        columns = list(dict.fromkeys(key for record in records for key in record))
+        return columns, [tuple(record.get(name) for name in columns) for record in records]
+    return list(range(len(records[0]))), [tuple(record) for record in records]
 
 
 def centered_table_html(data, max_height="32rem") -> str:
     """Build escaped table markup because Streamlit's canvas headers ignore CSS."""
-    frame = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
-    headers = "".join(f"<th>{escape(str(name))}</th>" for name in frame.columns)
+    columns, values = _tabular_values(data)
+    headers = "".join(f"<th>{escape(str(name))}</th>" for name in columns)
     rows = []
-    for values in frame.itertuples(index=False, name=None):
-        cells = "".join(f"<td>{escape(_cell_text(value))}</td>" for value in values)
+    for row in values:
+        cells = "".join(f"<td>{escape(_cell_text(value))}</td>" for value in row)
         rows.append(f"<tr>{cells}</tr>")
     return f"""
     <style>

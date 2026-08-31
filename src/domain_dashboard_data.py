@@ -80,6 +80,12 @@ def _number(value):
         return None
 
 
+def _measurement_quality_code(value):
+    """Normalize Kubios' lower-case storage code for all recovery views."""
+    text = str(value).strip().upper() if value not in (None, "") else None
+    return text or None
+
+
 def _nested(mapping, *path):
     value = mapping
     for key in path:
@@ -118,7 +124,7 @@ def _sleep_raw_heart_rates(raw):
     return []
 
 
-def _continuous_sleep_heart_rates(connection, start_value, end_value):
+def _continuous_sleep_heart_rates(connection, start_value, end_value, raw_cache=None):
     start = _parse_datetime(start_value)
     end = _parse_datetime(end_value)
     if not start or not end or end <= start:
@@ -137,54 +143,57 @@ def _continuous_sleep_heart_rates(connection, start_value, end_value):
         date_bounds[cursor.isoformat()] = (lower, upper)
         cursor += timedelta(days=1)
     dates = tuple(date_bounds)
-    placeholders = ",".join("?" for _ in dates)
-    rows = connection.execute(
-        f"SELECT date,raw_json FROM polar_continuous_hr_raw WHERE date IN ({placeholders})",
-        dates,
-    ).fetchall()
+    if raw_cache is None:
+        raw_cache = {}
+    missing_dates = tuple(value for value in dates if value not in raw_cache)
+    if missing_dates:
+        for value in missing_dates:
+            raw_cache[value] = []
+        placeholders = ",".join("?" for _ in missing_dates)
+        rows = connection.execute(
+            f"SELECT date,raw_json FROM polar_continuous_hr_raw WHERE date IN ({placeholders})",
+            missing_dates,
+        ).fetchall()
+        for row in rows:
+            raw_cache[row["date"]].append(_json(row["raw_json"]))
     values = []
-    for row in rows:
-        raw = _json(row["raw_json"])
-        samples = raw.get("samples")
-        if not isinstance(samples, list):
-            samples = raw.get("heart_rate_samples") or raw.get("heartRateSamples")
-        if not isinstance(samples, list):
-            continue
-        lower, upper = date_bounds[row["date"]]
-        sample_date = None
-        midnight = None
-        for sample in samples:
-            if not isinstance(sample, dict):
+    for date_value in dates:
+        lower, upper = date_bounds[date_value]
+        for raw in raw_cache.get(date_value, ()):
+            samples = raw.get("samples")
+            if not isinstance(samples, list):
+                samples = raw.get("heart_rate_samples") or raw.get("heartRateSamples")
+            if not isinstance(samples, list):
                 continue
-            # Polar's normal shape uses numeric ``heartRate`` and
-            # ``offsetMillis``.  Keep the slower compatibility path only for
-            # legacy/alternate payloads.
-            heart_rate = sample.get("heartRate")
-            offset = sample.get("offsetMillis")
-            if not isinstance(heart_rate, (int, float)) or not isinstance(offset, (int, float)):
-                if heart_rate is None:
-                    heart_rate = sample.get("heart_rate")
-                if heart_rate is None:
-                    heart_rate = sample.get("value")
-                if offset is None:
-                    offset = sample.get("offset_millis")
-                heart_rate = _number(heart_rate)
-                offset = _number(offset)
-            if offset is not None:
-                if heart_rate is not None and lower <= offset <= upper:
+            sample_date = None
+            for sample in samples:
+                if not isinstance(sample, dict):
+                    continue
+                heart_rate = sample.get("heartRate")
+                offset = sample.get("offsetMillis")
+                if not isinstance(heart_rate, (int, float)) or not isinstance(offset, (int, float)):
+                    if heart_rate is None:
+                        heart_rate = sample.get("heart_rate")
+                    if heart_rate is None:
+                        heart_rate = sample.get("value")
+                    if offset is None:
+                        offset = sample.get("offset_millis")
+                    heart_rate = _number(heart_rate)
+                    offset = _number(offset)
+                if offset is not None:
+                    if heart_rate is not None and lower <= offset <= upper:
+                        values.append(heart_rate)
+                    continue
+                if sample_date is None:
+                    sample_date = date_type.fromisoformat(date_value)
+                clock = sample.get("sample_time", sample.get("sampleTime", sample.get("time")))
+                try:
+                    parsed_time = time.fromisoformat(str(clock))
+                    timestamp = datetime.combine(sample_date, parsed_time, tzinfo=start.tzinfo)
+                except (TypeError, ValueError):
+                    continue
+                if heart_rate is not None and start <= timestamp <= end:
                     values.append(heart_rate)
-                continue
-            if sample_date is None:
-                sample_date = date_type.fromisoformat(row["date"])
-                midnight = datetime.combine(sample_date, time.min, tzinfo=start.tzinfo)
-            clock = sample.get("sample_time", sample.get("sampleTime", sample.get("time")))
-            try:
-                parsed_time = time.fromisoformat(str(clock))
-                timestamp = datetime.combine(sample_date, parsed_time, tzinfo=start.tzinfo)
-            except (TypeError, ValueError):
-                continue
-            if heart_rate is not None and start <= timestamp <= end:
-                values.append(heart_rate)
     return values
 
 
@@ -348,8 +357,15 @@ def get_latest_training(db_path=None, log_date=None):
         connection.close()
 
 
-def get_latest_sleep(db_path=None, log_date=None):
-    connection = connect_readonly(db_path)
+def get_latest_sleep(
+    db_path=None,
+    log_date=None,
+    *,
+    _connection=None,
+    _continuous_hr_cache=None,
+):
+    connection = _connection or connect_readonly(db_path)
+    owns_connection = _connection is None
     try:
         latest = log_date or connection.execute(
             """SELECT MAX(log_date) FROM (
@@ -400,7 +416,12 @@ def get_latest_sleep(db_path=None, log_date=None):
         )
         heart_rates = _sleep_raw_heart_rates(raw)
         if not heart_rates:
-            heart_rates = _continuous_sleep_heart_rates(connection, bedtime, wake_time)
+            heart_rates = _continuous_sleep_heart_rates(
+                connection,
+                bedtime,
+                wake_time,
+                _continuous_hr_cache,
+            )
         projection = {
             **daily,
             "bedtime": bedtime,
@@ -498,7 +519,8 @@ def get_latest_sleep(db_path=None, log_date=None):
     except sqlite3.OperationalError:
         return None
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
 
 
 def get_latest_recovery(db_path=None, log_date=None):
@@ -515,16 +537,26 @@ def get_latest_recovery(db_path=None, log_date=None):
         if not latest:
             return None
         row = connection.execute(
-            """SELECT m.date,m.morning_rmssd,m.morning_mean_hr,s.recovery_score,
-                      s.recommendation,s.score_version
+            """SELECT m.date,m.steps,m.active_calories,m.training_count,m.training_duration,
+                      m.training_calories,m.sleep_duration,m.sleep_score,
+                      m.nightly_hrv_rmssd,m.nightly_resting_hr,m.respiration_rate,
+                      m.morning_rmssd,m.morning_mean_hr,m.kubios_readiness,
+                      s.recovery_score,s.recommendation,s.score_version,c.missing_groups_json
                FROM daily_recovery_metrics m
-               LEFT JOIN recovery_scores s ON s.date=m.date WHERE m.date=?""",
+               LEFT JOIN recovery_scores s ON s.date=m.date
+               LEFT JOIN recovery_confidence c ON c.date=m.date
+               WHERE m.date=?""",
             (latest,),
         ).fetchone()
         data = dict(row) if row else {
             "date": latest, "morning_rmssd": None, "morning_mean_hr": None,
             "recovery_score": None, "recommendation": None, "score_version": None,
+            "missing_groups_json": "[]",
         }
+        try:
+            data["missing_groups"] = json.loads(data.pop("missing_groups_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            data["missing_groups"] = []
         resolved = resolve_recovery_date(connection, latest)
         manual_row = connection.execute(
             "SELECT id FROM manual_recovery_logs WHERE date=? ORDER BY id DESC LIMIT 1",
@@ -552,8 +584,10 @@ def get_latest_recovery(db_path=None, log_date=None):
         data["measurement_time"] = data["resolved_fields"].get("measurement_time", {}).get("value")
         data["manual_record_id"] = manual_row[0] if manual_row else None
         data["stress_index"] = kubios_row[0] if kubios_row else None
-        data["respiratory_rate"] = kubios_row[1] if kubios_row else None
-        data["measurement_quality"] = kubios_row[2] if kubios_row else None
+        data["respiratory_rate"] = kubios_row[1] if kubios_row else data.get("respiratory_rate")
+        data["measurement_quality"] = _measurement_quality_code(
+            kubios_row[2] if kubios_row else None
+        )
         return data
     except sqlite3.OperationalError:
         return None
@@ -562,7 +596,7 @@ def get_latest_recovery(db_path=None, log_date=None):
 
 
 def get_recovery_history(db_path=None, limit=60):
-    """Return resolved core recovery fields plus reviewed Kubios morning inputs."""
+    """Return resolved recovery records with their complete Kubios evidence."""
     connection = connect_readonly(db_path)
     try:
         dates = [row[0] for row in connection.execute(
@@ -574,6 +608,53 @@ def get_recovery_history(db_path=None, limit=60):
                ) ORDER BY log_date DESC LIMIT ?""",
             (limit,),
         ).fetchall()]
+        kubios_by_date = {}
+        if dates:
+            placeholders = ",".join("?" for _ in dates)
+            kubios_rows = connection.execute(
+                f"""SELECT n.date,n.measurement_group_id,
+                           n.rmssd_ms,n.mean_hr_bpm,n.sdnn_ms,n.stress_index,
+                           n.respiratory_rate_bpm,n.pns_index,n.sns_index,
+                           n.physiological_age,n.measurement_quality,
+                           r.mean_rr_ms,r.poincare_sd1_ms,r.poincare_sd2_ms,
+                           r.lf_power_ms2,r.hf_power_ms2,r.lf_power_nu,
+                           r.hf_power_nu,r.lf_hf_ratio
+                    FROM kubios_hrv_normalized n
+                    JOIN kubios_hrv_measurements_raw r ON r.id=n.source_raw_id
+                    WHERE n.selected_as_primary=1 AND n.date IN ({placeholders})
+                    ORDER BY n.date DESC,n.measurement_time DESC""",
+                dates,
+            ).fetchall()
+            kubios_by_date = {row["date"]: dict(row) for row in kubios_rows}
+            group_ids = {
+                row["measurement_group_id"] for row in kubios_rows
+                if row["measurement_group_id"]
+            }
+            extended_fields = (
+                "mean_rr_ms", "poincare_sd1_ms", "poincare_sd2_ms",
+                "lf_power_ms2", "hf_power_ms2", "lf_power_nu", "hf_power_nu",
+                "lf_hf_ratio",
+            )
+            for group_id in group_ids:
+                grouped_dates = [
+                    item["date"] for item in kubios_by_date.values()
+                    if item.get("measurement_group_id") == group_id
+                ]
+                members = connection.execute(
+                    f"""SELECT {','.join(extended_fields)}
+                        FROM kubios_hrv_measurements_raw
+                        WHERE measurement_group_id=? ORDER BY source_priority,id""",
+                    (group_id,),
+                ).fetchall()
+                for date_value in grouped_dates:
+                    record = kubios_by_date[date_value]
+                    for field in extended_fields:
+                        if record.get(field) is None:
+                            record[field] = next(
+                                (member[field] for member in members if member[field] is not None),
+                                None,
+                            )
+
         records = []
         for date_value in dates:
             resolved = resolve_recovery_date(connection, date_value)
@@ -584,13 +665,29 @@ def get_recovery_history(db_path=None, limit=60):
                             measurement_time DESC,updated_at DESC,id DESC LIMIT 1""",
                 (date_value,),
             ).fetchone()
+            kubios = kubios_by_date.get(date_value, {})
+            measurement_quality = _measurement_quality_code(
+                kubios.get("measurement_quality", raw[2] if raw else None)
+            )
             records.append({
                 "date": date_value,
                 "morning_rmssd": resolved["morning_rmssd"]["value"],
                 "morning_mean_hr": resolved["morning_mean_hr"]["value"],
-                "stress_index": raw[0] if raw else None,
-                "respiratory_rate": raw[1] if raw else None,
-                "measurement_quality": raw[2] if raw else None,
+                "stress_index": kubios.get("stress_index", raw[0] if raw else None),
+                "respiratory_rate": kubios.get("respiratory_rate_bpm", raw[1] if raw else None),
+                "measurement_quality": measurement_quality,
+                "pns_index": kubios.get("pns_index"),
+                "sns_index": kubios.get("sns_index"),
+                "physiological_age": kubios.get("physiological_age"),
+                "mean_rr_ms": kubios.get("mean_rr_ms"),
+                "sdnn_ms": kubios.get("sdnn_ms"),
+                "poincare_sd1_ms": kubios.get("poincare_sd1_ms"),
+                "poincare_sd2_ms": kubios.get("poincare_sd2_ms"),
+                "lf_power_ms2": kubios.get("lf_power_ms2"),
+                "hf_power_ms2": kubios.get("hf_power_ms2"),
+                "lf_power_nu": kubios.get("lf_power_nu"),
+                "hf_power_nu": kubios.get("hf_power_nu"),
+                "lf_hf_ratio": kubios.get("lf_hf_ratio"),
             })
         return records
     except sqlite3.OperationalError:
@@ -733,7 +830,22 @@ def get_sleep_history(db_path=None, limit=30):
         "SELECT sleep_date AS log_date FROM manual_sleep_logs",
         "SELECT date AS log_date FROM daily_recovery_metrics WHERE sleep_duration IS NOT NULL",
     ), limit)
-    return [item for item in (get_latest_sleep(db_path, value) for value in dates) if item]
+    connection = connect_readonly(db_path)
+    continuous_hr_cache = {}
+    try:
+        return [
+            item for item in (
+                get_latest_sleep(
+                    db_path,
+                    value,
+                    _connection=connection,
+                    _continuous_hr_cache=continuous_hr_cache,
+                )
+                for value in dates
+            ) if item
+        ]
+    finally:
+        connection.close()
 
 
 def get_domain_baselines(metric_names, db_path=None, window_days=28):

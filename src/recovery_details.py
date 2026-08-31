@@ -22,11 +22,31 @@ QUALITY_ALIASES = {
 }
 
 METRIC_SPECS = {
-    "morning_rmssd": {"label_key": "morning_rmssd", "unit": "ms", "rule": "rmssd"},
-    "morning_mean_hr": {"label_key": "morning_resting_hr", "unit": "bpm", "rule": "resting_hr"},
-    "stress_index": {"label_key": "stress_index", "unit": "", "rule": "stress"},
-    "respiratory_rate": {"label_key": "respiratory_rate", "unit": "breaths_per_minute", "rule": "respiration"},
+    "morning_rmssd": {"label_key": "domain.recovery.morning_rmssd", "unit": "ms", "rule": "rmssd"},
+    "morning_mean_hr": {"label_key": "domain.recovery.morning_resting_hr", "unit": "bpm", "rule": "resting_hr"},
+    "stress_index": {"label_key": "domain.recovery.stress_index", "unit": "", "rule": "stress"},
+    "respiratory_rate": {"label_key": "domain.recovery.respiratory_rate", "unit": "breaths_per_minute", "rule": "respiration"},
+    # These extended Kubios measurements are useful personal trend evidence,
+    # but do not carry a universal "higher/lower is better" interpretation.
+    # They therefore share the same baseline card anatomy while remaining
+    # descriptive rather than contributing to the recovery conclusion.
+    "pns_index": {"label_key": "kubios_metrics.pns.name", "unit": "", "rule": "context", "positive": False},
+    "sns_index": {"label_key": "kubios_metrics.sns.name", "unit": "", "rule": "context", "positive": False},
+    "physiological_age": {"label_key": "kubios_metrics.physiological_age.name", "unit": "years", "rule": "context"},
+    "mean_rr_ms": {"label_key": "kubios_metrics.mean_rr.name", "unit": "ms", "rule": "context"},
+    "sdnn_ms": {"label_key": "kubios_metrics.sdnn.name", "unit": "ms", "rule": "context"},
+    "poincare_sd1_ms": {"label_key": "kubios_metrics.sd1.name", "unit": "ms", "rule": "context"},
+    "poincare_sd2_ms": {"label_key": "kubios_metrics.sd2.name", "unit": "ms", "rule": "context"},
+    "lf_power_ms2": {"label_key": "kubios_metrics.lf_power.name", "unit": "ms²", "rule": "context"},
+    "hf_power_ms2": {"label_key": "kubios_metrics.hf_power.name", "unit": "ms²", "rule": "context"},
+    "lf_power_nu": {"label_key": "kubios_metrics.lf_nu.name", "unit": "%", "rule": "context"},
+    "hf_power_nu": {"label_key": "kubios_metrics.hf_nu.name", "unit": "%", "rule": "context"},
+    "lf_hf_ratio": {"label_key": "kubios_metrics.lf_hf.name", "unit": "", "rule": "context"},
 }
+
+RECOVERY_SIGNAL_NAMES = (
+    "morning_rmssd", "morning_mean_hr", "stress_index", "respiratory_rate",
+)
 
 
 def normalize_measurement_quality(value):
@@ -54,7 +74,7 @@ def _number(value, *, positive=False):
 
 
 def _value_is_valid(metric_name, value):
-    number = _number(value, positive=True)
+    number = _number(value, positive=METRIC_SPECS[metric_name].get("positive", True))
     if number is None:
         return None
     if metric_name == "stress_index" and number < 0:
@@ -148,6 +168,10 @@ def _metric_impact(rule, current, baseline):
         if current < lower:
             return "supportive", "stress_below_range"
         return ("supportive", "stress_below_center") if delta < 0 and abs(percent or 0) >= 2 else ("neutral", "within_range")
+    if rule == "context":
+        if current < lower or current > upper:
+            return "observe", "context_outside_range"
+        return "neutral", "context_within_range"
     if current < lower or current > upper:
         return "negative", "respiration_outside_range"
     return "neutral", "respiration_within_range"
@@ -169,7 +193,7 @@ def _status(quality, analyses, maturity):
     if maturity == "collecting":
         return "building"
     core = [analyses[name]["impact"] for name in ("morning_rmssd", "morning_mean_hr")]
-    all_impacts = [item["impact"] for item in analyses.values()]
+    all_impacts = [analyses[name]["impact"] for name in RECOVERY_SIGNAL_NAMES]
     supportive = sum(impact == "supportive" for impact in all_impacts)
     negative_core = sum(impact == "negative" for impact in core)
     negative_any = sum(impact == "negative" for impact in all_impacts)
@@ -196,6 +220,7 @@ def build_recovery_details(data, history, target_date=None, window_days=28):
         delta = None if current is None or center is None else current - center
         analyses[name] = {
             "metric_name": name,
+            "label_key": spec["label_key"],
             "unit": spec["unit"],
             "current_value": current,
             "baseline_center": center,
@@ -226,8 +251,7 @@ def build_recovery_details(data, history, target_date=None, window_days=28):
 
     supports = []
     watches = []
-    factor_order = ("morning_rmssd", "morning_mean_hr", "stress_index", "respiratory_rate")
-    for name in factor_order:
+    for name in RECOVERY_SIGNAL_NAMES:
         item = analyses[name]
         if item["impact"] == "supportive":
             supports.append(f"{name}_support")

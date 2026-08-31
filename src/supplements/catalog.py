@@ -148,14 +148,58 @@ def favorite_products(connection: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def recent_products(connection: sqlite3.Connection, limit=8) -> list[dict[str, Any]]:
     rows = connection.execute(
-        """SELECT p.*,MAX(i.taken_at) AS last_taken_at
+        """SELECT p.*,MAX(i.taken_at) AS last_taken_at,COUNT(*) AS usage_count
            FROM supplement_intake_records i JOIN supplement_products p
              ON p.id=i.supplement_product_id
            WHERE i.deleted_at IS NULL AND p.deleted_at IS NULL
-           GROUP BY p.id ORDER BY MAX(i.created_at) DESC,p.id DESC LIMIT ?""",
+           GROUP BY p.id ORDER BY COUNT(*) DESC,MAX(i.created_at) DESC,p.id DESC LIMIT ?""",
         (int(limit),),
     ).fetchall()
     return [_project_product(connection, row) for row in rows]
+
+
+def recent_intake_preferences(connection: sqlite3.Connection, limit=64) -> list[dict[str, Any]]:
+    """Return learned product/custom-name preferences from saved intakes.
+
+    Each entry keeps the most recently used dose/unit while ordering names by
+    how often they have been saved.  This intentionally uses intake history
+    instead of a separate profile table, so existing local data immediately
+    contributes to the preference model.
+    """
+    rows = connection.execute(
+        """WITH history AS (
+               SELECT i.supplement_product_id,
+                      p.product_name,
+                      p.product_kind,
+                      i.custom_product_name,
+                      i.quantity,
+                      i.unit,
+                      i.taken_at,
+                      i.created_at,
+                      i.id,
+                      CASE WHEN i.supplement_product_id IS NOT NULL
+                           THEN 'product:' || CAST(i.supplement_product_id AS TEXT)
+                           ELSE 'custom:' || lower(trim(i.custom_product_name)) END AS preference_key
+               FROM supplement_intake_records i
+               LEFT JOIN supplement_products p ON p.id=i.supplement_product_id
+               WHERE i.deleted_at IS NULL
+                 AND (p.id IS NULL OR p.deleted_at IS NULL)
+           ), ranked AS (
+               SELECT history.*,
+                      COUNT(*) OVER (PARTITION BY preference_key) AS usage_count,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY preference_key
+                          ORDER BY taken_at DESC,created_at DESC,id DESC
+                      ) AS preference_rank
+               FROM history
+           )
+           SELECT * FROM ranked
+           WHERE preference_rank=1
+           ORDER BY usage_count DESC,taken_at DESC,created_at DESC,id DESC
+           LIMIT ?""",
+        (int(limit),),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def calculate_intake_ingredients(
@@ -184,6 +228,121 @@ def calculate_intake_ingredients(
         for item in product["ingredients"]
         if item["ingredient_role"] in {"active", "nutrient"}
     ]
+
+
+def sync_label_verified_product(
+    connection: sqlite3.Connection,
+    *,
+    product_id: int | None,
+    product_name: str,
+    brand_name: str | None,
+    product_kind: str,
+    serving_quantity: object,
+    serving_unit: object,
+    ingredients: list[dict[str, Any]],
+    source_reference: str,
+) -> int:
+    """Make a user-confirmed label reusable from the product selector.
+
+    The OCR library is the source of a label-backed product's formula.  This
+    bridge keeps the selected product and that stored label in sync, rather
+    than leaving a selectable product with an unrelated, empty formula.
+    """
+    clean_ingredients = [normalize_ingredient(item) for item in ingredients]
+    product_name = str(product_name or "").strip()
+    brand_name = str(brand_name or "").strip() or None
+    if not product_name:
+        raise ValueError("PRODUCT_NAME_REQUIRED")
+    if product_kind not in {"supplement", "medication"}:
+        raise ValueError("INVALID_PRODUCT_KIND")
+
+    requested_unit = str(serving_unit or "").strip().lower()
+    requested_quantity = serving_quantity
+    existing = get_product(connection, int(product_id)) if product_id else None
+    if existing is None:
+        row = connection.execute(
+            """SELECT id FROM supplement_products
+               WHERE product_name=? AND product_kind=? AND deleted_at IS NULL
+                 AND COALESCE(brand_name,'')=COALESCE(?, '')
+               ORDER BY id DESC LIMIT 1""",
+            (product_name, product_kind, brand_name),
+        ).fetchone()
+        if row is None and brand_name:
+            # Earlier type entries did not collect a brand. Reuse that type
+            # and enrich it with the brand supplied for this confirmed label.
+            row = connection.execute(
+                """SELECT id FROM supplement_products
+                   WHERE product_name=? AND product_kind=? AND deleted_at IS NULL
+                     AND COALESCE(brand_name,'')=''
+                   ORDER BY id DESC LIMIT 1""",
+                (product_name, product_kind),
+            ).fetchone()
+        existing = get_product(connection, int(row["id"])) if row else None
+
+    fallback_unit = (existing or {}).get("serving_unit") or "capsule"
+    if requested_unit not in {"g", "mg", "mcg", "ml", "capsule", "tablet", "sachet", "scoop", "drop", "iu"}:
+        requested_unit = fallback_unit
+    try:
+        requested_quantity = float(requested_quantity)
+    except (TypeError, ValueError):
+        requested_quantity = (existing or {}).get("serving_quantity") or 1.0
+    if requested_quantity <= 0:
+        requested_quantity = (existing or {}).get("serving_quantity") or 1.0
+
+    verified_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    verification_status = "label_verified" if clean_ingredients else "unverified"
+    if existing is None:
+        return create_product(
+            connection,
+            {
+                "brand_name": brand_name,
+                "product_name": product_name,
+                "dosage_form": "powder" if requested_unit == "g" else "capsule",
+                "product_kind": product_kind,
+                "default_intake_unit": requested_unit,
+                "serving_quantity": requested_quantity,
+                "serving_unit": requested_unit,
+                "data_source": "label_ocr",
+                "primary_source_reference": source_reference,
+                "primary_source_type": "user_label",
+                "verification_status": verification_status,
+                "user_confirmed": bool(clean_ingredients),
+                "verified_at": verified_at if clean_ingredients else None,
+            },
+            clean_ingredients,
+        )
+
+    with connection:
+        connection.execute(
+            """UPDATE supplement_products SET
+                   brand_name=CASE WHEN COALESCE(brand_name,'')='' THEN ? ELSE brand_name END,
+                   default_intake_unit=?,serving_quantity=?,serving_unit=?,
+                   data_source='label_ocr',primary_source_reference=?,
+                   primary_source_type='user_label',verification_status=?,
+                   user_confirmed=?,verified_at=?,updated_at=CURRENT_TIMESTAMP
+               WHERE id=? AND deleted_at IS NULL""",
+            (
+                brand_name, requested_unit, requested_quantity, requested_unit,
+                source_reference, verification_status, int(bool(clean_ingredients)),
+                verified_at if clean_ingredients else None, existing["id"],
+            ),
+        )
+        if clean_ingredients:
+            connection.execute(
+                "DELETE FROM supplement_product_ingredients WHERE supplement_product_id=?",
+                (existing["id"],),
+            )
+            for item in clean_ingredients:
+                connection.execute(
+                    """INSERT INTO supplement_product_ingredients(
+                           uuid,supplement_product_id,canonical_ingredient_name,
+                           display_name_zh,display_name_en,amount_per_serving,
+                           amount_unit,serving_quantity,serving_unit,ingredient_role,
+                           source_reference,source_type,confidence_level,user_confirmed
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (_uuid(), existing["id"], *item.values()),
+                )
+    return int(existing["id"])
 
 
 def soft_delete_product(connection: sqlite3.Connection, product_id: int) -> bool:

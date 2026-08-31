@@ -439,6 +439,67 @@ def calculate_sri(records: Iterable[CanonicalSleepRecord], *, maturity_status: s
     )
 
 
+def calculate_rolling_regularity_scores(
+    records: Iterable[Mapping[str, Any] | CanonicalSleepRecord],
+    *,
+    window_nights: int | None = None,
+) -> dict[date, float | None]:
+    """Calculate overlapping regularity windows without rebuilding each timeline.
+
+    Baseline charts need one score for many adjacent dates. Their SRI windows
+    overlap almost completely, so build each night's state timeline once and
+    reuse the adjacent-day comparisons for every window.
+    """
+    window = window_nights or CONFIG["window_nights"]
+    valid = select_valid_sleep_records(records)
+    timeline_records = [record for record in valid if len(record.sleep_segments) >= 2]
+    timeline_dates = {record.sleep_date for record in timeline_records}
+    state_map = _timeline_map(timeline_records)
+    pair_stats: dict[date, tuple[int, int, int]] = {}
+    for current in sorted(timeline_dates):
+        next_day = current + timedelta(days=1)
+        if next_day not in timeline_dates:
+            continue
+        comparable = matching = 0
+        for minute in range(1440):
+            left = state_map.get((current, minute))
+            right = state_map.get((next_day, minute))
+            if left in {"asleep", "awake"} and right in {"asleep", "awake"}:
+                comparable += 1
+                matching += int(left == right)
+        pair_stats[current] = (
+            comparable,
+            matching,
+            int(comparable >= CONFIG["sri_min_pair_minutes"]),
+        )
+
+    scores: dict[date, float | None] = {}
+    for end_index, record in enumerate(valid):
+        rolling = valid[max(0, end_index - window + 1):end_index + 1]
+        has_timeline = sum(len(item.sleep_segments) >= 2 for item in rolling) >= CONFIG["minimum_score_nights"]
+        if not has_timeline:
+            scores[record.sleep_date] = calculate_summary_score(rolling).score
+            continue
+        dates = sorted(item.sleep_date for item in rolling if item.sleep_date in timeline_dates)
+        comparable = matching = pairs = 0
+        date_set = set(dates)
+        for current in dates:
+            if current + timedelta(days=1) not in date_set:
+                continue
+            pair_comparable, pair_matching, pair_is_valid = pair_stats.get(current, (0, 0, 0))
+            comparable += pair_comparable
+            matching += pair_matching
+            pairs += pair_is_valid
+        possible = max(1, (len(dates) - 1) * 1440)
+        coverage = comparable / possible
+        scores[record.sleep_date] = (
+            matching / comparable * 100
+            if comparable and coverage >= CONFIG["sri_min_coverage"] and pairs >= 2
+            else calculate_summary_score(rolling).score
+        )
+    return scores
+
+
 def calculate_last_night_deviation(current: Mapping[str, Any] | CanonicalSleepRecord, records: Iterable[Mapping[str, Any] | CanonicalSleepRecord]) -> LastNightScheduleDeviation:
     target = current if isinstance(current, CanonicalSleepRecord) else canonicalize_sleep_record(current)
     if target is None:

@@ -24,6 +24,76 @@ def _average(values):
     return sum(values) / len(values) if values else None
 
 
+def _row_or_empty(connection, sql, parameters=()):
+    """Read an optional sidecar table without making old databases fail."""
+    try:
+        row = connection.execute(sql, parameters).fetchone()
+    except Exception:
+        return {}
+    return _dict(row)
+
+
+def _nutrition_context(connection, coach_date):
+    """Prefer the current meal editor, then fall back to legacy nutrition logs."""
+    modern = _row_or_empty(
+        connection,
+        """
+        SELECT COUNT(DISTINCT r.id) AS logged_meals,
+               SUM(i.calories_kcal) AS calories,
+               SUM(i.protein_g) AS protein_g,
+               SUM(i.carbohydrate_g) AS carbohydrate_g,
+               SUM(i.water_ml) AS water_ml,
+               COUNT(i.id) AS item_count,
+               SUM(CASE WHEN i.calories_kcal IS NOT NULL
+                             OR i.protein_g IS NOT NULL
+                             OR i.carbohydrate_g IS NOT NULL
+                             OR i.water_ml IS NOT NULL THEN 1 ELSE 0 END) AS known_item_count
+        FROM meal_records r
+        LEFT JOIN meal_items i ON i.meal_record_id = r.id
+             AND i.deleted_at IS NULL
+        WHERE r.date = ? AND r.status = 'completed' AND r.deleted_at IS NULL
+        """,
+        (coach_date,),
+    )
+    if modern.get("logged_meals"):
+        item_count = modern.get("item_count") or 0
+        completeness = (
+            (modern.get("known_item_count") or 0) / item_count * 100
+            if item_count else 0
+        )
+        source = modern
+        source["data_completeness"] = round(completeness)
+    else:
+        source = _row_or_empty(
+            connection,
+            "SELECT logged_meals,calories,protein_g,carbohydrate_g,water_ml,data_completeness "
+            "FROM daily_nutrition_summary WHERE date = ?",
+            (coach_date,),
+        )
+    targets = {}
+    try:
+        targets = {
+            row["metric"]: (row["minimum_value"], row["maximum_value"])
+            for row in connection.execute(
+                "SELECT metric,minimum_value,maximum_value FROM nutrition_targets"
+            ).fetchall()
+        }
+    except Exception:
+        pass
+    completeness = source.get("data_completeness")
+    if completeness is not None and float(completeness) <= 1:
+        completeness = float(completeness) * 100
+    return {
+        "logged_meals": source.get("logged_meals"),
+        "calories": source.get("calories"),
+        "protein_g": source.get("protein_g"),
+        "carbohydrate_g": source.get("carbohydrate_g"),
+        "water_ml": source.get("water_ml"),
+        "data_completeness": completeness,
+        "targets": targets,
+    }
+
+
 def available_dates(connection):
     return [row[0] for row in connection.execute("SELECT date FROM recovery_scores ORDER BY date")]
 
@@ -54,6 +124,19 @@ def load_input(connection, coach_date, today=None, freshness_days=3):
     baselines = {item["metric_name"]: dict(item) for item in connection.execute(
         "SELECT * FROM baseline_metrics WHERE date = ? AND window_days = 28", (coach_date,)
     )}
+    manual_training = _row_or_empty(
+        connection,
+        "SELECT * FROM daily_training_summary WHERE date = ?",
+        (coach_date,),
+    )
+    nutrition = _nutrition_context(connection, coach_date)
+    neural = _row_or_empty(
+        connection,
+        """SELECT mental_fatigue,mental_clarity,physical_heaviness,
+                  baseline_status,confidence_level,lapse_355_count,slowest_20pct_rt_ms
+           FROM daily_neural_features WHERE date = ?""",
+        (coach_date,),
+    )
     target, today = date_type.fromisoformat(coach_date), today or date_type.today()
     freshness = max((today - target).days, 0)
     return CoachInput(
@@ -70,6 +153,26 @@ def load_input(connection, coach_date, today=None, freshness_days=3):
         previous_training_duration_minutes=_duration(previous.get("training_duration"), 60),
         previous_training_calories=previous.get("training_calories"), active_calories=values.get("active_calories"),
         training_count=values.get("training_count"),
+        current_training_duration_minutes=_duration(values.get("training_duration"), 60),
+        current_training_session_rpe_load=manual_training.get("session_rpe_load"),
+        manual_training_session_count=manual_training.get("session_count"),
+        manual_training_duration_minutes=manual_training.get("total_duration_minutes"),
+        manual_training_rpe_load=manual_training.get("session_rpe_load"),
+        nutrition_logged_meals=nutrition.get("logged_meals"),
+        nutrition_data_completeness=nutrition.get("data_completeness"),
+        nutrition_calories=nutrition.get("calories"),
+        nutrition_protein_g=nutrition.get("protein_g"),
+        nutrition_carbohydrate_g=nutrition.get("carbohydrate_g"),
+        nutrition_water_ml=nutrition.get("water_ml"),
+        nutrition_targets=nutrition.get("targets", {}),
+        neural_available=bool(neural),
+        neural_mental_fatigue=neural.get("mental_fatigue"),
+        neural_mental_clarity=neural.get("mental_clarity"),
+        neural_physical_heaviness=neural.get("physical_heaviness"),
+        neural_baseline_status=neural.get("baseline_status"),
+        neural_confidence_level=neural.get("confidence_level"),
+        neural_lapse_355_count=neural.get("lapse_355_count"),
+        neural_slowest_20pct_rt_ms=neural.get("slowest_20pct_rt_ms"),
         baseline_status={name: item.get("status") for name, item in baselines.items()},
         explanation_json=generate_recovery_explanation(values, baselines), freshness_days=freshness,
         is_historical=freshness > freshness_days,
@@ -81,14 +184,15 @@ def upsert_recommendation(connection, output):
     connection.execute(
         """
         INSERT INTO local_coach_recommendations (
-            date, morning_training_json, evening_training_json, sleep_advice_json,
+            date, morning_training_json, evening_training_json, training_summary_json, sleep_advice_json,
             hydration_advice_json, nutrition_advice_json, recovery_advice_json,
             rationale_json, data_limitations_json, safety_notices_json,
             engine_version, rule_config_version, generated_without_cloud_ai
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date, engine_version) DO UPDATE SET
             morning_training_json=excluded.morning_training_json,
             evening_training_json=excluded.evening_training_json,
+            training_summary_json=excluded.training_summary_json,
             sleep_advice_json=excluded.sleep_advice_json,
             hydration_advice_json=excluded.hydration_advice_json,
             nutrition_advice_json=excluded.nutrition_advice_json,
@@ -100,7 +204,7 @@ def upsert_recommendation(connection, output):
             generated_without_cloud_ai=excluded.generated_without_cloud_ai,
             updated_at=CURRENT_TIMESTAMP
         """,
-        (output["date"], payload("morning_training"), payload("evening_training"), payload("sleep_advice"),
+        (output["date"], payload("morning_training"), payload("evening_training"), payload("training_summary"), payload("sleep_advice"),
          payload("hydration_advice"), payload("nutrition_advice"), payload("recovery_advice"), payload("rationale"),
          payload("data_limitations"), payload("safety_notices"), output["engine_version"],
          output["rule_config_version"], int(output["generated_without_cloud_ai"])),
@@ -114,7 +218,7 @@ def load_recommendation(connection, coach_date):
     if not row:
         return None
     result = dict(row)
-    for key in ("morning_training", "evening_training", "sleep_advice", "hydration_advice", "nutrition_advice",
+    for key in ("morning_training", "evening_training", "training_summary", "sleep_advice", "hydration_advice", "nutrition_advice",
                 "recovery_advice", "rationale", "data_limitations", "safety_notices"):
         result[key] = json.loads(result.pop(f"{key}_json"))
     result["generated_without_cloud_ai"] = bool(result["generated_without_cloud_ai"])

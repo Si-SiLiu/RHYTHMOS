@@ -35,6 +35,29 @@ class LocalCoachEngineTests(unittest.TestCase):
     def test_high_load_alone_does_not_force_rest(self):
         result = generate_recommendation(self.data(stress_load_score=95))
         self.assertEqual(result["morning_training"]["status"], "normal")
+        self.assertIn("训练负荷偏高", result["training_summary"]["advice"])
+
+    def test_sleep_and_neural_pressure_are_combined(self):
+        result = generate_recommendation(self.data(
+            sleep_duration_hours=5.0,
+            neural_available=True,
+            neural_mental_fatigue=8,
+        ))
+        self.assertEqual(result["morning_training"]["status"], "major_reduction")
+        self.assertEqual(result["evening_training"]["status"], "technique_only")
+        self.assertEqual(result["training_summary"]["status"], "adjusted")
+        self.assertEqual(len(result["training_summary"]["drivers"]), 2)
+
+    def test_nutrition_shortfall_changes_summary_and_fueling_direction(self):
+        result = generate_recommendation(self.data(
+            nutrition_logged_meals=3,
+            nutrition_data_completeness=100,
+            nutrition_protein_g=10,
+            nutrition_targets={"protein_g": (80, None)},
+        ))
+        self.assertEqual(result["morning_training"]["status"], "normal")
+        self.assertEqual(result["training_summary"]["status"], "adjusted")
+        self.assertIn("营养", result["training_summary"]["advice"])
 
     def test_low_confidence_and_completeness_fail_conservative(self):
         result = generate_recommendation(self.data(level="very_low", completeness=20))

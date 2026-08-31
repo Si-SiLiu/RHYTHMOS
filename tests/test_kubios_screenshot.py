@@ -10,6 +10,8 @@ from PIL import Image
 
 from src import db, kubios_import
 from src.kubios_screenshot import audit, confidence, importer, parser, service, storage, validation
+from src.kubios_screenshot.cloud_ocr import OpenAIVisionOCRAdapter
+from src.kubios_screenshot.config import load_config
 from src.kubios_screenshot.image_preprocess import UnsupportedImageError, preprocess_image, validate_image_bytes
 from src.kubios_screenshot.models import OCRResult, TextBlock
 from src.kubios_screenshot.ocr_adapter import LocalOCRError, VisionOCRAdapter
@@ -109,12 +111,20 @@ class KubiosScreenshotTests(unittest.TestCase):
             self.assertEqual(info["mode"], "L")
             self.assertTrue(output.is_file())
 
-    def test_duplicate_upload_is_detected_by_database_hash(self):
+    def test_pending_upload_resumes_but_confirmed_upload_is_detected_by_hash(self):
         with tempfile.TemporaryDirectory() as directory, self.storage_context(directory):
             first = service.process_upload(self.connection, image_bytes(), "one.png", FakeAdapter())
             second = service.process_upload(self.connection, image_bytes(), "renamed.png", FakeAdapter())
             self.assertFalse(first["duplicate"])
-            self.assertTrue(second["duplicate"])
+            self.assertFalse(second["duplicate"])
+            self.assertEqual(second["audit_id"], first["audit_id"])
+            self.connection.execute(
+                "UPDATE kubios_screenshot_imports SET reviewed = 1 WHERE id = ?",
+                (first["audit_id"],),
+            )
+            self.connection.commit()
+            third = service.process_upload(self.connection, image_bytes(), "again.png", FakeAdapter())
+            self.assertTrue(third["duplicate"])
 
     def test_ocr_adapter_has_no_network_dependency(self):
         source = Path("src/kubios_screenshot/ocr_adapter.py").read_text(encoding="utf-8")
@@ -129,6 +139,104 @@ class KubiosScreenshotTests(unittest.TestCase):
             with self.assertRaisesRegex(LocalOCRError, "local_ocr_unavailable"):
                 adapter.recognize(path)
 
+    def test_cloud_ocr_sends_one_image_and_returns_canonical_lines(self):
+        captured = {}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"output_text": "Mean HR: 61 bpm\nRMSSD: 37 ms\nMeasurement quality: GOOD"}
+
+        def post(*_args, **kwargs):
+            captured.update(kwargs)
+            return Response()
+
+        adapter = OpenAIVisionOCRAdapter(post=post)
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-cloud-ocr-key"}):
+            path = Path(directory) / "image.png"
+            path.write_bytes(image_bytes())
+            result = adapter.recognize(path)
+
+        self.assertEqual(result.engine, "openai_vision")
+        self.assertEqual([block.text for block in result.text_blocks][:2], ["Mean HR: 61 bpm", "RMSSD: 37 ms"])
+        request = captured["json"]
+        self.assertFalse(request["store"])
+        self.assertEqual(request["input"][0]["content"][1]["type"], "input_image")
+        self.assertTrue(request["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,"))
+
+    def test_cloud_ocr_recheck_limits_the_prompt_to_missing_supported_fields(self):
+        captured = {}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"output_text": "HF power n.u.: 33.88 %\nMeasurement quality: GOOD"}
+
+        def post(*_args, **kwargs):
+            captured.update(kwargs)
+            return Response()
+
+        adapter = OpenAIVisionOCRAdapter(post=post)
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-cloud-ocr-key"}):
+            path = Path(directory) / "image.png"
+            path.write_bytes(image_bytes())
+            result = adapter.recognize_missing_fields(path, ["hf_power_nu", "measurement_quality", "unknown"])
+
+        self.assertEqual([block.text for block in result.text_blocks], ["HF power n.u.: 33.88 %", "Measurement quality: GOOD"])
+        prompt = captured["json"]["input"][0]["content"][0]["text"]
+        self.assertIn("HF power n.u.", prompt)
+        self.assertIn("Measurement quality", prompt)
+        self.assertNotIn("RMSSD", prompt)
+
+    def test_cloud_result_uses_full_image_parser_before_template_regions(self):
+        cloud_result = ocr_result(["Mean HR: 61 bpm", "RMSSD: 37 ms", "Measurement quality: GOOD"])
+        cloud_result = OCRResult("openai_vision", "test", cloud_result.image_size, cloud_result.text_blocks, cloud_result.raw_text)
+
+        class FullImageAdapter(FakeAdapter):
+            engine = "openai_vision_with_local_fallback"
+
+            def is_full_image_result(self, result):
+                return result.engine == "openai_vision"
+
+        with tempfile.TemporaryDirectory() as directory, self.storage_context(directory):
+            result = service.process_upload(self.connection, image_bytes(), "cloud.png", FullImageAdapter(cloud_result))
+
+        self.assertEqual(result["status"], "review_required")
+        self.assertIn("rmssd", result["review"]["fields"])
+        self.assertIn("mean_hr", result["review"]["fields"])
+
+    def test_cloud_rechecks_missing_capture_fields_without_overwriting_first_pass(self):
+        first = ocr_result(["Mean HR: 61 bpm", "RMSSD: 37 ms"])
+        first = OCRResult("openai_vision", "test", first.image_size, first.text_blocks, first.raw_text)
+        focused = ocr_result(["PNS index: 0.13", "Measurement quality: GOOD"])
+        focused = OCRResult("openai_vision", "test", focused.image_size, focused.text_blocks, focused.raw_text)
+
+        class RetryAdapter(FakeAdapter):
+            engine = "openai_vision_with_local_fallback"
+
+            def __init__(self):
+                super().__init__(first)
+                self.requested = []
+
+            def is_full_image_result(self, result):
+                return result.engine == "openai_vision"
+
+            def recognize_missing_fields(self, _path, fields):
+                self.requested = list(fields)
+                return focused
+
+        adapter = RetryAdapter()
+        with tempfile.TemporaryDirectory() as directory, self.storage_context(directory):
+            result = service.process_upload(self.connection, image_bytes(), "cloud-retry.png", adapter)
+
+        self.assertIn("pns_index", adapter.requested)
+        self.assertEqual(result["parse"].fields["pns_index"].value, 0.13)
+        self.assertEqual(result["parse"].fields["rmssd"].value, 37.0)
+
     def test_rmssd_is_parsed_same_line(self):
         result = parser.parse_ocr_result(ocr_result(["RMSSD 54 ms", "Date 2026-07-08", "Mean HR 58 bpm"]))
         self.assertEqual(result.fields["rmssd"].value, 54.0)
@@ -141,15 +249,47 @@ class KubiosScreenshotTests(unittest.TestCase):
         result = parser.parse_ocr_result(ocr_result(["Average Heart Rate: 61 bpm", "Date 2026-07-08", "RMSSD 44 ms"]))
         self.assertEqual(result.fields["mean_hr"].value, 61.0)
 
-    def test_readiness_is_parsed(self):
+    def test_normalized_power_labels_are_not_captured_as_absolute_power(self):
+        result = parser.parse_ocr_result(ocr_result([
+            "RMSSD: 22 ms", "Mean HR: 65 bpm",
+            "LF power (n.u.): 66.04 %", "HF power (n.u.): 33.88 %",
+        ]))
+        self.assertEqual(result.fields["lf_power_nu"].value, 66.04)
+        self.assertEqual(result.fields["hf_power_nu"].value, 33.88)
+        self.assertNotIn("lf_power_ms2", result.fields)
+        self.assertNotIn("hf_power_ms2", result.fields)
+
+    def test_measurement_quality_survives_label_stripping_without_colon(self):
+        result = parser.parse_ocr_result(ocr_result([
+            "RMSSD: 22 ms", "Mean HR: 65 bpm", "Measurement quality GOOD",
+        ]))
+        self.assertEqual(result.fields["measurement_quality"].value, "GOOD")
+
+    def test_mood_text_is_captured_without_interpreting_the_mood_icon(self):
+        result = parser.parse_ocr_result(ocr_result([
+            "RMSSD: 22 ms", "Mean HR: 65 bpm",
+            "MOOD: Moderate stress, lowered readiness",
+        ]))
+        self.assertEqual(result.fields["mood_code"].value, "Moderate stress, lowered readiness")
+
+    def test_standard_cloud_labels_reach_95_percent_only_after_validation(self):
+        cloud_text = ocr_result([
+            "Mean HR: 61 bpm", "RMSSD: 37 ms", "PNS index: 0.13", "SNS index: -0.07",
+            "Physiological age: 45 years", "Mean RR: 979.38 ms", "SDNN: 38.57 ms",
+            "Poincaré SD1: 25.97 ms", "Poincaré SD2: 47.87 ms", "Stress index: 10.88",
+            "Respiratory rate: 18.59 breaths/min", "LF power: 837.58 ms²", "HF power: 395.03 ms²",
+            "LF power n.u.: 67.94 %", "HF power n.u.: 32.04 %", "LF/HF ratio: 2.12",
+            "Measurement quality: GOOD", "Mood: Moderate stress, lowered readiness",
+        ], score=0.97)
+        parsed = parser.parse_ocr_result(cloud_text)
+        self.assertEqual(set(parsed.fields), set(load_config()["capture_fields"]))
+        self.assertTrue(all(field.confidence >= 0.95 for field in parsed.fields.values()))
+
+    def test_non_recovery_fields_are_not_parsed(self):
         result = parser.parse_ocr_result(ocr_result())
-        self.assertEqual(result.fields["readiness"].value, 82.0)
-
-    def test_date_is_parsed(self):
-        self.assertEqual(parser.parse_ocr_result(ocr_result()).fields["date"].value, "2026-07-08")
-
-    def test_time_is_parsed(self):
-        self.assertEqual(parser.parse_ocr_result(ocr_result()).fields["measurement_time"].value, "06:30:00")
+        self.assertNotIn("readiness", result.fields)
+        self.assertNotIn("date", result.fields)
+        self.assertNotIn("measurement_time", result.fields)
 
     def test_units_increase_field_confidence(self):
         with_unit = parser.parse_ocr_result(ocr_result(["RMSSD 54 ms", "Date 2026-07-08", "Mean HR 58 bpm"]))
@@ -158,7 +298,7 @@ class KubiosScreenshotTests(unittest.TestCase):
 
     def test_missing_required_fields_are_reported(self):
         result = parser.parse_ocr_result(ocr_result(["Readiness 80"]))
-        self.assertEqual(set(result.missing_required_fields), {"date", "rmssd", "mean_hr"})
+        self.assertEqual(set(result.missing_required_fields), {"rmssd", "mean_hr"})
 
     def test_obviously_invalid_value_is_rejected_not_medically_interpreted(self):
         result = parser.parse_ocr_result(ocr_result(["Date 2026-07-08", "RMSSD -5 ms", "Mean HR 58 bpm"]))
@@ -182,7 +322,7 @@ class KubiosScreenshotTests(unittest.TestCase):
 
     def test_user_modified_values_are_imported_as_reviewed_screenshot(self):
         audit_id = self.insert_audit()
-        outcome = importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, "keep_both")
+        outcome = importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True)
         row = self.connection.execute("SELECT * FROM kubios_morning_hrv_raw").fetchone()
         self.assertTrue(outcome.success)
         self.assertEqual(row["rmssd"], 55)
@@ -193,29 +333,31 @@ class KubiosScreenshotTests(unittest.TestCase):
     def test_duplicate_confirmed_import_is_idempotent(self):
         audit_id = self.insert_audit()
         fields = {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}
-        first = importer.import_reviewed_result(self.connection, audit_id, fields, True, "keep_both")
-        second = importer.import_reviewed_result(self.connection, audit_id, fields, True, "keep_both")
+        first = importer.import_reviewed_result(self.connection, audit_id, fields, True)
+        second = importer.import_reviewed_result(self.connection, audit_id, fields, True)
         self.assertEqual(first.raw_record_id, second.raw_record_id)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM kubios_morning_hrv_raw").fetchone()[0], 1)
 
-    def test_csv_conflict_requires_explicit_resolution(self):
+    def test_confirmed_screenshot_becomes_daily_preferred(self):
         kubios_import.upsert_kubios_rows(self.connection, [{"date": "2026-07-08", "measurement_time": "2026-07-08T06:00:00", "rmssd": 40, "mean_hr": 60, "readiness": "Good", "raw": {}}])
         audit_id = self.insert_audit()
         outcome = importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True)
-        self.assertEqual(outcome.status, "conflict_review_required")
+        self.assertTrue(outcome.success)
+        metric = self.connection.execute("SELECT morning_rmssd FROM daily_recovery_metrics WHERE date='2026-07-08'").fetchone()
+        self.assertEqual(metric[0], 55)
 
-    def test_csv_remains_priority_when_both_are_kept(self):
+    def test_screenshot_replaces_csv_as_daily_preferred(self):
         csv_row = {"date": "2026-07-08", "measurement_time": "2026-07-08T06:00:00", "rmssd": 40, "mean_hr": 60, "readiness": "Good", "raw": {}}
         kubios_import.upsert_kubios_rows(self.connection, [csv_row])
         audit_id = self.insert_audit()
-        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, "keep_both")
+        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True)
         metric = self.connection.execute("SELECT morning_rmssd FROM daily_recovery_metrics WHERE date='2026-07-08'").fetchone()
-        self.assertEqual(metric[0], 40)
+        self.assertEqual(metric[0], 55)
 
-    def test_explicit_screenshot_priority_is_persisted(self):
+    def test_screenshot_priority_is_persisted(self):
         kubios_import.upsert_kubios_rows(self.connection, [{"date": "2026-07-08", "measurement_time": "2026-07-08T06:00:00", "rmssd": 40, "mean_hr": 60, "readiness": None, "raw": {}}])
         audit_id = self.insert_audit()
-        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, "use_screenshot")
+        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True)
         metric = self.connection.execute("SELECT morning_rmssd FROM daily_recovery_metrics WHERE date='2026-07-08'").fetchone()
         self.assertEqual(metric[0], 55)
 
@@ -239,12 +381,12 @@ class KubiosScreenshotTests(unittest.TestCase):
             parsed = parser.parse_ocr_result(ocr)
             audit_id = audit.create_audit(self.connection, stored, ocr, parsed)
             summary = self.connection.execute("SELECT ocr_text_summary FROM kubios_screenshot_imports WHERE id=?", (audit_id,)).fetchone()[0]
-            self.assertEqual(summary, "fields=date,mean_hr,measurement_time,readiness,rmssd")
+            self.assertEqual(summary, "fields=mean_hr,rmssd")
             self.assertNotIn("54", summary)
 
     def test_delete_audit_preserves_formal_record_by_default(self):
         audit_id = self.insert_audit()
-        imported = importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, "keep_both")
+        imported = importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True)
         with tempfile.TemporaryDirectory() as directory, self.storage_context(directory):
             outcome = storage.delete_import(self.connection, audit_id, False, False)
         self.assertTrue(outcome["formal_record_preserved"])
@@ -253,13 +395,13 @@ class KubiosScreenshotTests(unittest.TestCase):
     def test_downstream_runs_only_after_confirmed_import(self):
         audit_id = self.insert_audit()
         runner = Mock(return_value={"success": True})
-        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, "keep_both", True, runner)
+        importer.import_reviewed_result(self.connection, audit_id, {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}, True, True, runner)
         runner.assert_called_once_with("2026-07-08")
 
     def test_migration_is_idempotent(self):
         db.apply_migrations(self.connection)
         db.apply_migrations(self.connection)
-        self.assertEqual(db.current_schema_version(self.connection), "0.15.0")
+        self.assertEqual(db.current_schema_version(self.connection), db.SCHEMA_MIGRATIONS[-1].version)
 
     def test_migration_checksum_drift_fails(self):
         self.connection.execute("UPDATE schema_migrations SET checksum='drift' WHERE version='0.6.0'")
@@ -290,10 +432,11 @@ class KubiosScreenshotTests(unittest.TestCase):
         self.assertNotIn("original_relative_path", source)
         self.assertNotIn("processed_relative_path", source)
 
-    def test_cloud_ai_is_not_imported_by_screenshot_modules(self):
-        combined = "\n".join(path.read_text(encoding="utf-8") for path in Path("src/kubios_screenshot").glob("*.py"))
-        self.assertNotIn("openai", combined.lower())
-        self.assertNotIn("api_key", combined.lower())
+    def test_cloud_ocr_is_isolated_and_preserves_manual_confirmation(self):
+        source = Path("src/kubios_screenshot/cloud_ocr.py").read_text(encoding="utf-8")
+        self.assertIn('"store": False', source)
+        self.assertIn('"type": "input_image"', source)
+        self.assertNotIn("import_reviewed_result", source)
 
     def test_locales_have_matching_screenshot_keys(self):
         resources = [json.loads(Path(f"locales/{language}.json").read_text(encoding="utf-8"))["kubios_screenshot"] for language in ("zh-CN", "en")]

@@ -22,7 +22,7 @@ from src.scheduler.launch_agent import (
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Install the RHYTHMOS｜律衡 23:00 LaunchAgent."
+        description="Install the RHYTHMOS｜律衡 fixed-time sync LaunchAgent."
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
@@ -48,7 +48,7 @@ def main(argv=None) -> int:
         result = {
             "status": "dry_run",
             "target": str(args.plist.expanduser()),
-            "sync_time": config.sync_time,
+            "sync_times": list(config.scheduled_times),
             "timezone_mode": config.timezone_mode,
             "config_fallback": loaded.used_fallback,
             "wrote_files": False,
@@ -64,7 +64,7 @@ def main(argv=None) -> int:
         result = {
             "status": "installed",
             "target": str(installed.path),
-            "sync_time": config.sync_time,
+            "sync_times": list(config.scheduled_times),
             "timezone_mode": config.timezone_mode,
             "config_fallback": loaded.used_fallback,
             "changed": installed.changed,
