@@ -9,13 +9,18 @@ import requests
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 
+try:
+    from .secure_token_store import TokenStoreError, token_store_for
+except ImportError:
+    from secure_token_store import TokenStoreError, token_store_for
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 
 DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
-TOKEN_FILE = DATA_DIR / "polar_tokens.json"
+TOKEN_FILE = Path(os.getenv("POLAR_TOKEN_FILE", DATA_DIR / "polar_tokens.json"))
 USER_FILE = DATA_DIR / "polar_user.json"
 API_BASE_URL = "https://www.polaraccesslink.com/v3"
 API_V4_BASE_URL = "https://www.polaraccesslink.com/v4/data"
@@ -103,11 +108,16 @@ class PolarClient:
         api_base_url=API_BASE_URL,
         api_v4_base_url=API_V4_BASE_URL,
         session=None,
+        token_store=None,
     ):
         self.token_file = Path(token_file)
         self.api_base_url = api_base_url.rstrip("/")
         self.api_v4_base_url = api_v4_base_url.rstrip("/")
-        self.tokens = load_json_file(self.token_file)
+        self.token_store = token_store or token_store_for(self.token_file)
+        try:
+            self.tokens = self.token_store.load()
+        except TokenStoreError as error:
+            raise PolarClientError(str(error)) from error
         self.session = session or requests.Session()
 
         if not self.tokens.get("access_token"):
@@ -159,7 +169,10 @@ class PolarClient:
             refreshed["refresh_token"] = refresh_token
         refreshed["expires_at"] = int(time.time()) + int(refreshed.get("expires_in", 0)) - 60
         self.tokens.update(refreshed)
-        save_json_file(self.token_file, self.tokens)
+        try:
+            self.token_store.save(self.tokens)
+        except TokenStoreError as error:
+            raise PolarTokenRefreshError("Unable to persist refreshed Polar credentials.") from error
         return self.tokens
 
     def bearer_headers(self):

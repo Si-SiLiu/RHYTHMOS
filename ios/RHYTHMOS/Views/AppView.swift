@@ -8,10 +8,10 @@ struct AppView: View {
             TodayView(repository: repository)
                 .tabItem { Label("今天", systemImage: "sun.max") }
 
-            PlaceholderView(title: "趋势", message: "历史趋势将在本地数据契约落地后提供。", symbol: "chart.xyaxis.line")
+            CheckInTrendView()
                 .tabItem { Label("趋势", systemImage: "chart.line.uptrend.xyaxis") }
 
-            PlaceholderView(title: "记录", message: "晨间、训练与营养记录正在准备中。", symbol: "square.and.pencil")
+            CheckInView()
                 .tabItem { Label("记录", systemImage: "plus.circle") }
 
             PlaceholderView(title: "我的", message: "个人目标与数据源设置将在后续阶段加入。", symbol: "person")

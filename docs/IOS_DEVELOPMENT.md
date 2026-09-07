@@ -3,12 +3,15 @@
 ## Decision
 
 RHYTHMOS iOS will be a native SwiftUI client, targeting iOS 17 and later. The
-current macOS product remains supported at `dist/RHYTHMOS.app`; this work neither
-rebuilds it nor changes its local data. The iOS client must not embed Streamlit,
-run a loopback Python server, or open the macOS `data/recovery.db` directly.
+first automated data source is Polar AccessLink. The current macOS product
+remains supported at `dist/RHYTHMOS.app`; this work neither rebuilds it nor
+changes its local data. The iOS client must not embed Streamlit, run a loopback
+Python server, or open the macOS `data/recovery.db` directly.
 
 Those shortcuts would produce a fragile mobile UI, make iOS background behavior
-unreliable, and bypass the current database migration and provenance rules.
+unreliable, bypass the current database migration and provenance rules, or
+expose Polar OAuth credentials. Polar values are synchronized automatically;
+they are not manually entered as a substitute for the provider API.
 
 ## Initial project
 
@@ -16,6 +19,9 @@ unreliable, and bypass the current database migration and provenance rules.
 
 - `Today` presents readiness, data confidence, and next action without turning
   absent measurements into normal values.
+- The recovery and sleep cards open read-only detail screens. They retain the
+  imported recovery score, confidence, morning/overnight measurements, and
+  source/fallback markers, while preserving an explicit unavailable state.
 - `DashboardRepository` isolates the presentation layer from storage and future
   data-source decisions.
 - The Today toolbar supports a user-selected `MobileDailySnapshot v1` JSON
@@ -25,6 +31,13 @@ unreliable, and bypass the current database migration and provenance rules.
   stored snapshot from the same menu.
 - The sample repository intentionally displays an insufficient-data state. It
   is safe to run on a simulator and requests no health or account permission.
+- The `记录` tab now supports a local manual check-in for subjective recovery,
+  training intent, and an optional note. It is deliberately separate from the
+  imported projection: user input cannot silently replace a source measurement
+  or the desktop-derived recovery score.
+- The `趋势` tab charts up to 14 days of those subjective entries locally. It
+  does not label them as physiological measurements; objective historical
+  trends still require a versioned history projection.
 - The project has a small XCTest target for the readiness-state contract.
 
 ## Mobile data boundary
@@ -36,37 +49,28 @@ Polar tokens, the desktop SQLite file, or cloud AI context.
 
 ```mermaid
 flowchart LR
-    H[HealthKit — future] --> M[Mobile local store]
-    P[Polar — future OAuth] --> M
-    M --> C[Versioned daily projection]
-    D[Desktop Python + SQLite] --> C
+    P[Polar AccessLink] --> B[Secure RHYTHMOS sync backend]
+    B --> D[Ingestion + recovery pipeline]
+    D --> C[Versioned daily projection]
     C --> U[SwiftUI client]
+    H[HealthKit — future] --> U
 ```
 
-The synchronization design still needs an explicit product decision:
-
-1. **Independent local stores** — iPhone computes its own projection from
-   HealthKit/Polar. Best privacy and offline behavior; requires a Swift port of
-   deterministic algorithms and migration tests.
-2. **Encrypted user-approved export/import** — desktop exports only an
-   allowlisted, versioned projection for the iPhone. Fastest bridge; no
-   background cross-device sync.
-3. **End-to-end encrypted sync service** — best device continuity; needs an
-   account model, conflict policy, security review, and operating service.
-
-Do not select or implement one implicitly. In all cases, raw provenance must be
-preserved, source authority stays Polar-first where currently defined, and a
-missing value remains missing.
+The selected synchronization design is a secure sync backend: it owns the
+Polar client secret and refresh token, reads Polar automatically, runs the
+deterministic pipeline, and delivers only the allowlisted v1 projection to
+iOS. The client never receives raw Polar payloads or OAuth material. See
+[`POLAR_IOS_AUTO_SYNC.md`](POLAR_IOS_AUTO_SYNC.md) for the required boundary.
 
 ## Phased delivery
 
 | Phase | Outcome | Gate |
 | --- | --- | --- |
 | 0 | Native shell, design tokens, sample states | Builds and tests on iOS simulator |
-| 1 | Read-only Today, Recovery, Sleep, Training projections | Versioned mobile DTO and fixtures approved |
-| 2 | Local manual morning, sleep, training, and nutrition logging | Validation and conflict rules match product policy |
+| 1 | Polar automatic sync plus read-only Today, Recovery, Sleep, Training projections | HTTPS callback, encrypted server token storage, snapshot endpoint, and integration tests approved |
+| 2 | Local subjective check-in only (never a Polar substitute) | Validation and conflict rules match product policy |
 | 3 | HealthKit read integration | Permission UX, data mapping, privacy text, and reconciliation tests approved |
-| 4 | Polar OAuth and sync choice | Registered redirect, secure token storage, background behavior verified |
+| 4 | Background reliability, disconnect, and sync observability | Registered redirect, refresh behavior, error recovery, and device QA verified |
 | 5 | Trends, plans, accessibility, localization, TestFlight | Device QA, privacy review, and no-data/migration tests pass |
 
 ## Security and App Store constraints

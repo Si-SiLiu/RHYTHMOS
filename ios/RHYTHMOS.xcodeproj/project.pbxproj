@@ -17,6 +17,11 @@
 		100000000000000000000100 /* MobileDailySnapshot-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* MobileDailySnapshot-v1.json */; };
 		100000000000000000000102 /* SnapshotFileLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* SnapshotFileLoader.swift */; };
 		100000000000000000000104 /* SnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* SnapshotStore.swift */; };
+		100000000000000000000106 /* DailyCheckIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000107 /* DailyCheckIn.swift */; };
+		100000000000000000000108 /* DailyCheckInStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000109 /* DailyCheckInStore.swift */; };
+		100000000000000000000110 /* CheckInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000111 /* CheckInView.swift */; };
+		100000000000000000000112 /* CheckInTrendView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000113 /* CheckInTrendView.swift */; };
+		100000000000000000000114 /* RecoverySleepDetailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000115 /* RecoverySleepDetailViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +39,11 @@
 		100000000000000000000101 /* MobileDailySnapshot-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "MobileDailySnapshot-v1.json"; sourceTree = "<group>"; };
 		100000000000000000000103 /* SnapshotFileLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFileLoader.swift; sourceTree = "<group>"; };
 		100000000000000000000105 /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
+		100000000000000000000107 /* DailyCheckIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyCheckIn.swift; sourceTree = "<group>"; };
+		100000000000000000000109 /* DailyCheckInStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyCheckInStore.swift; sourceTree = "<group>"; };
+		100000000000000000000111 /* CheckInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckInView.swift; sourceTree = "<group>"; };
+		100000000000000000000113 /* CheckInTrendView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckInTrendView.swift; sourceTree = "<group>"; };
+		100000000000000000000115 /* RecoverySleepDetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoverySleepDetailViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,9 +54,9 @@
 /* Begin PBXGroup section */
 		100000000000000000000030 = {isa = PBXGroup; children = (100000000000000000000031 /* RHYTHMOS */, 100000000000000000000036 /* RHYTHMOSTests */, 100000000000000000000037 /* Products */); sourceTree = "<group>"; };
 		100000000000000000000031 /* RHYTHMOS */ = {isa = PBXGroup; children = (100000000000000000000001 /* RHYTHMOSApp.swift */, 100000000000000000000032 /* Models */, 100000000000000000000033 /* Services */, 100000000000000000000034 /* Views */, 100000000000000000000035 /* Fixtures */, 100000000000000000000007 /* Info.plist */); path = RHYTHMOS; sourceTree = "<group>"; };
-		100000000000000000000032 /* Models */ = {isa = PBXGroup; children = (100000000000000000000002 /* DailySnapshot.swift */, 100000000000000000000019 /* MobileDailySnapshot.swift */); path = Models; sourceTree = "<group>"; };
-		100000000000000000000033 /* Services */ = {isa = PBXGroup; children = (100000000000000000000003 /* DashboardRepository.swift */, 100000000000000000000103 /* SnapshotFileLoader.swift */, 100000000000000000000105 /* SnapshotStore.swift */); path = Services; sourceTree = "<group>"; };
-		100000000000000000000034 /* Views */ = {isa = PBXGroup; children = (100000000000000000000004 /* AppView.swift */, 100000000000000000000005 /* TodayView.swift */, 100000000000000000000006 /* DesignTokens.swift */); path = Views; sourceTree = "<group>"; };
+		100000000000000000000032 /* Models */ = {isa = PBXGroup; children = (100000000000000000000002 /* DailySnapshot.swift */, 100000000000000000000019 /* MobileDailySnapshot.swift */, 100000000000000000000107 /* DailyCheckIn.swift */); path = Models; sourceTree = "<group>"; };
+		100000000000000000000033 /* Services */ = {isa = PBXGroup; children = (100000000000000000000003 /* DashboardRepository.swift */, 100000000000000000000103 /* SnapshotFileLoader.swift */, 100000000000000000000105 /* SnapshotStore.swift */, 100000000000000000000109 /* DailyCheckInStore.swift */); path = Services; sourceTree = "<group>"; };
+		100000000000000000000034 /* Views */ = {isa = PBXGroup; children = (100000000000000000000004 /* AppView.swift */, 100000000000000000000005 /* TodayView.swift */, 100000000000000000000006 /* DesignTokens.swift */, 100000000000000000000111 /* CheckInView.swift */, 100000000000000000000113 /* CheckInTrendView.swift */, 100000000000000000000115 /* RecoverySleepDetailViews.swift */); path = Views; sourceTree = "<group>"; };
 		100000000000000000000035 /* Fixtures */ = {isa = PBXGroup; children = (100000000000000000000101 /* MobileDailySnapshot-v1.json */); path = Fixtures; sourceTree = "<group>"; };
 		100000000000000000000036 /* RHYTHMOSTests */ = {isa = PBXGroup; children = (100000000000000000000008 /* DailySnapshotTests.swift */); path = RHYTHMOSTests; sourceTree = "<group>"; };
 		100000000000000000000037 /* Products */ = {isa = PBXGroup; children = (100000000000000000000009 /* RHYTHMOS.app */, 100000000000000000000010 /* RHYTHMOSTests.xctest */); name = Products; sourceTree = "<group>"; };
@@ -67,7 +77,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		100000000000000000000060 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000011 /* RHYTHMOSApp.swift in Sources */, 100000000000000000000012 /* DailySnapshot.swift in Sources */, 100000000000000000000018 /* MobileDailySnapshot.swift in Sources */, 100000000000000000000013 /* DashboardRepository.swift in Sources */, 100000000000000000000102 /* SnapshotFileLoader.swift in Sources */, 100000000000000000000104 /* SnapshotStore.swift in Sources */, 100000000000000000000014 /* AppView.swift in Sources */, 100000000000000000000015 /* TodayView.swift in Sources */, 100000000000000000000016 /* DesignTokens.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000060 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000011 /* RHYTHMOSApp.swift in Sources */, 100000000000000000000012 /* DailySnapshot.swift in Sources */, 100000000000000000000018 /* MobileDailySnapshot.swift in Sources */, 100000000000000000000106 /* DailyCheckIn.swift in Sources */, 100000000000000000000013 /* DashboardRepository.swift in Sources */, 100000000000000000000102 /* SnapshotFileLoader.swift in Sources */, 100000000000000000000104 /* SnapshotStore.swift in Sources */, 100000000000000000000108 /* DailyCheckInStore.swift in Sources */, 100000000000000000000014 /* AppView.swift in Sources */, 100000000000000000000015 /* TodayView.swift in Sources */, 100000000000000000000016 /* DesignTokens.swift in Sources */, 100000000000000000000110 /* CheckInView.swift in Sources */, 100000000000000000000112 /* CheckInTrendView.swift in Sources */, 100000000000000000000114 /* RecoverySleepDetailViews.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 		100000000000000000000062 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000017 /* DailySnapshotTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 

@@ -10,6 +10,11 @@ from dotenv import load_dotenv
 from flask import Flask, request, session
 from requests.auth import HTTPBasicAuth
 
+try:
+    from .secure_token_store import TokenStoreError, token_store_for
+except ImportError:
+    from secure_token_store import TokenStoreError, token_store_for
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 
@@ -22,7 +27,7 @@ AUTH_URL = "https://auth.polar.com/oauth/authorize"
 TOKEN_URL = "https://auth.polar.com/oauth/token"
 
 DATA_DIR = BASE_DIR / "data"
-TOKEN_FILE = DATA_DIR / "polar_tokens.json"
+TOKEN_FILE = Path(os.getenv("POLAR_TOKEN_FILE", DATA_DIR / "polar_tokens.json"))
 DATA_DIR.mkdir(exist_ok=True)
 
 SCOPES = [
@@ -130,14 +135,14 @@ def oauth2_callback():
     token_data = response.json()
     token_data["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 0)) - 60
 
-    TOKEN_FILE.write_text(
-        json.dumps(token_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    try:
+        token_store_for(TOKEN_FILE).save(token_data)
+    except TokenStoreError:
+        return "Token 安全存储配置无效，请检查服务端环境变量。", 503
 
     return """
     <h2>Polar 授权成功！</h2>
-    <p>Token 已保存到 data/polar_tokens.json。</p>
+    <p>Polar 凭据已安全保存到服务端。</p>
     <p>下一步可以使用 token 抓取训练和活动数据。</p>
     """
 

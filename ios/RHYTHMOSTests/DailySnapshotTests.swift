@@ -25,11 +25,24 @@ final class DailySnapshotTests: XCTestCase {
         XCTAssertEqual(dateFormatter.string(from: snapshot.date), "2026-09-07")
         XCTAssertEqual(snapshot.recovery.status, .ready)
         XCTAssertEqual(snapshot.recovery.confidence, .high)
+        XCTAssertEqual(snapshot.recoveryDetails.score, 84)
+        XCTAssertEqual(snapshot.recoveryDetails.confidenceScore, 86)
+        XCTAssertEqual(snapshot.recoveryDetails.missingGroups, [])
+        XCTAssertEqual(snapshot.recoveryDetails.morningHRV.provenance.source, "kubios")
         XCTAssertEqual(snapshot.recovery.explanation, "今日恢复分数为 84。请结合数据完整度与身体感受安排训练。")
         XCTAssertEqual(snapshot.sleep.value, "7 h 30 min")
+        XCTAssertEqual(snapshot.sleepDetails.score.value, "82 分")
+        XCTAssertEqual(snapshot.sleepDetails.nightlyHRV.value, "52 ms")
+        XCTAssertEqual(snapshot.sleepDetails.restingHeartRate.value, "49 bpm")
+        XCTAssertEqual(snapshot.sleepDetails.respirationRate.value, "14 次/分")
+        XCTAssertEqual(snapshot.sleepDetails.duration.provenance.source, "polar")
         XCTAssertEqual(snapshot.hrv.value, "44 ms")
         XCTAssertEqual(snapshot.hrv.detail, "晨间 RMSSD")
         XCTAssertEqual(snapshot.restingHeartRate.value, "56 bpm")
+        XCTAssertEqual(snapshot.training.sessionCount, 1)
+        XCTAssertEqual(snapshot.training.durationMinutes, 45)
+        XCTAssertEqual(snapshot.training.caloriesKcal, 460)
+        XCTAssertEqual(snapshot.training.sports, ["running"])
         XCTAssertEqual(snapshot.nextAction, "按计划正常训练")
     }
 
@@ -68,6 +81,33 @@ final class DailySnapshotTests: XCTestCase {
 
         XCTAssertTrue(SnapshotStore.hasSavedSnapshot())
         XCTAssertEqual(try SnapshotStore.load(), fixture)
+    }
+
+    func testDailyCheckInStoreKeepsOneEntryPerDayAndPreservesOtherDays() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("check-ins.json")
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = DailyCheckInStore(fileURL: fileURL)
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.startOfDay(for: .now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        let prior = DailyCheckIn(
+            date: yesterday, perceivedRecovery: .low, trainingIntent: .rest, note: "休息", updatedAt: .now
+        )
+        let latest = DailyCheckIn(
+            date: today, perceivedRecovery: .good, trainingIntent: .normal, note: nil, updatedAt: .now
+        )
+        try store.save(prior)
+        try store.save(latest)
+
+        XCTAssertEqual(try store.load(on: today), latest)
+        XCTAssertEqual(try store.all().map(\.date), [today, yesterday])
+
+        try store.remove(on: today)
+        XCTAssertNil(try store.load(on: today))
+        XCTAssertEqual(try store.load(on: yesterday), prior)
     }
 
     private func decodeFixture() throws -> DailySnapshot {

@@ -38,9 +38,10 @@ struct MobileDailySnapshot: Decodable, Sendable {
         let score: Double?
         let level: String?
         let missingGroups: [String]
+        let version: String?
 
         enum CodingKeys: String, CodingKey {
-            case score, level
+            case score, level, version
             case missingGroups = "missing_groups"
         }
     }
@@ -50,12 +51,14 @@ struct MobileDailySnapshot: Decodable, Sendable {
         let score: MobileMetric
         let nightlyHRV: MobileMetric
         let restingHeartRate: MobileMetric
+        let respirationRate: MobileMetric
 
         enum CodingKeys: String, CodingKey {
             case score
             case durationMinutes = "duration_minutes"
             case nightlyHRV = "nightly_hrv_rmssd_ms"
             case restingHeartRate = "resting_hr_bpm"
+            case respirationRate = "respiration_rate_bpm"
         }
     }
 
@@ -127,12 +130,64 @@ extension MobileDailySnapshot {
                 confidence: confidence,
                 explanation: recoveryExplanation
             ),
+            recoveryDetails: RecoveryDetails(
+                score: recovery.score,
+                scoreVersion: recovery.scoreVersion,
+                confidenceScore: recovery.confidence?.score,
+                confidence: confidence,
+                confidenceVersion: recovery.confidence?.version,
+                missingGroups: recovery.confidence?.missingGroups ?? [],
+                morningHRV: detailMetric(
+                    recovery.morningHRV,
+                    id: "morning-hrv",
+                    label: "晨间 HRV",
+                    value: numberText(recovery.morningHRV.value, suffix: " ms")
+                ),
+                morningRestingHeartRate: detailMetric(
+                    recovery.morningRestingHeartRate,
+                    id: "morning-rhr",
+                    label: "晨间静息心率",
+                    value: numberText(recovery.morningRestingHeartRate.value, suffix: " bpm")
+                )
+            ),
             sleep: metric(
                 id: "sleep",
                 label: "睡眠",
                 value: durationText(sleep.durationMinutes.value),
                 detail: "睡眠时长",
                 rawValue: sleep.durationMinutes.value
+            ),
+            sleepDetails: SleepDetails(
+                duration: detailMetric(
+                    sleep.durationMinutes,
+                    id: "sleep-duration",
+                    label: "睡眠时长",
+                    value: durationText(sleep.durationMinutes.value)
+                ),
+                score: detailMetric(
+                    sleep.score,
+                    id: "sleep-score",
+                    label: "睡眠评分",
+                    value: numberText(sleep.score.value, suffix: " 分")
+                ),
+                nightlyHRV: detailMetric(
+                    sleep.nightlyHRV,
+                    id: "nightly-hrv",
+                    label: "夜间 HRV",
+                    value: numberText(sleep.nightlyHRV.value, suffix: " ms")
+                ),
+                restingHeartRate: detailMetric(
+                    sleep.restingHeartRate,
+                    id: "sleep-rhr",
+                    label: "夜间静息心率",
+                    value: numberText(sleep.restingHeartRate.value, suffix: " bpm")
+                ),
+                respirationRate: detailMetric(
+                    sleep.respirationRate,
+                    id: "respiration-rate",
+                    label: "呼吸率",
+                    value: numberText(sleep.respirationRate.value, suffix: " 次/分")
+                )
             ),
             hrv: metric(
                 id: "hrv",
@@ -147,6 +202,12 @@ extension MobileDailySnapshot {
                 value: numberText(restingHeartRate, suffix: " bpm"),
                 detail: "个人记录",
                 rawValue: restingHeartRate
+            ),
+            training: TrainingSummary(
+                sessionCount: training.sessionCount,
+                durationMinutes: training.durationMinutes,
+                caloriesKcal: training.caloriesKcal,
+                sports: training.sports
             ),
             nextAction: nextAction
         )
@@ -176,6 +237,26 @@ extension MobileDailySnapshot {
             value: value,
             detail: rawValue == nil ? "尚未记录" : detail,
             state: rawValue == nil ? .unavailable : .neutral
+        )
+    }
+
+    private func detailMetric(
+        _ metric: MobileMetric,
+        id: String,
+        label: String,
+        value: String
+    ) -> DetailMetric {
+        DetailMetric(
+            id: id,
+            label: label,
+            value: value,
+            rawValue: metric.value,
+            provenance: MetricProvenance(
+                source: metric.provenance.source,
+                isFallback: metric.provenance.isFallback,
+                isManualOverride: metric.provenance.isManualOverride,
+                reason: metric.provenance.reason
+            )
         )
     }
 

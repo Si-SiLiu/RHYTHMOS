@@ -3,9 +3,12 @@ import Foundation
 struct DailySnapshot: Equatable, Sendable {
     let date: Date
     let recovery: RecoverySummary
+    let recoveryDetails: RecoveryDetails
     let sleep: MetricValue
+    let sleepDetails: SleepDetails
     let hrv: MetricValue
     let restingHeartRate: MetricValue
+    let training: TrainingSummary
     let nextAction: String
 }
 
@@ -45,6 +48,7 @@ enum DataConfidence: String, Sendable {
     case medium
     case building
     case low
+    case veryLow = "very_low"
 
     var title: String {
         switch self {
@@ -52,8 +56,43 @@ enum DataConfidence: String, Sendable {
         case .medium: return "数据适中"
         case .building: return "基线建立中"
         case .low: return "数据有限"
+        case .veryLow: return "数据很有限"
         }
     }
+}
+
+struct RecoveryDetails: Equatable, Sendable {
+    let score: Double?
+    let scoreVersion: String?
+    let confidenceScore: Double?
+    let confidence: DataConfidence
+    let confidenceVersion: String?
+    let missingGroups: [String]
+    let morningHRV: DetailMetric
+    let morningRestingHeartRate: DetailMetric
+}
+
+struct SleepDetails: Equatable, Sendable {
+    let duration: DetailMetric
+    let score: DetailMetric
+    let nightlyHRV: DetailMetric
+    let restingHeartRate: DetailMetric
+    let respirationRate: DetailMetric
+}
+
+struct DetailMetric: Equatable, Sendable, Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let rawValue: Double?
+    let provenance: MetricProvenance
+}
+
+struct MetricProvenance: Equatable, Sendable {
+    let source: String
+    let isFallback: Bool
+    let isManualOverride: Bool
+    let reason: String
 }
 
 struct MetricValue: Equatable, Sendable, Identifiable {
@@ -62,6 +101,17 @@ struct MetricValue: Equatable, Sendable, Identifiable {
     let value: String
     let detail: String
     let state: MetricState
+}
+
+struct TrainingSummary: Equatable, Sendable {
+    let sessionCount: Int
+    let durationMinutes: Double?
+    let caloriesKcal: Double?
+    let sports: [String]
+
+    var hasActivity: Bool {
+        sessionCount > 0 || durationMinutes != nil || caloriesKcal != nil
+    }
 }
 
 enum MetricState: Sendable {
