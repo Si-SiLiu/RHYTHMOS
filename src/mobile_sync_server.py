@@ -32,6 +32,7 @@ from .sync_pipeline import PipelineError, PipelineRunner
 
 AUTH_URL = "https://auth.polar.com/oauth/authorize"
 TOKEN_URL = "https://auth.polar.com/oauth/token"
+USER_REGISTRATION_URL = "https://www.polaraccesslink.com/v3/users"
 SCOPES = (
     "training_sessions:read",
     "activity:read",
@@ -49,6 +50,7 @@ def _settings(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         "POLAR_CLIENT_SECRET": os.getenv("POLAR_CLIENT_SECRET"),
         "POLAR_REDIRECT_URI": os.getenv("POLAR_REDIRECT_URI"),
         "POLAR_TOKEN_ENCRYPTION_KEY": os.getenv("POLAR_TOKEN_ENCRYPTION_KEY"),
+        "POLAR_MEMBER_ID": os.getenv("POLAR_MEMBER_ID", "daily-recovery-coach-local"),
         "MOBILE_SYNC_API_TOKEN": os.getenv("MOBILE_SYNC_API_TOKEN"),
         "POLAR_CONNECT_USERNAME": os.getenv("POLAR_CONNECT_USERNAME", "owner"),
         "POLAR_CONNECT_PASSWORD": os.getenv("POLAR_CONNECT_PASSWORD"),
@@ -186,6 +188,21 @@ def create_app(
             tokens = response.json()
             if not isinstance(tokens, dict) or not tokens.get("access_token"):
                 raise ValueError("invalid token response")
+            registration = http_post(
+                USER_REGISTRATION_URL,
+                json={"member-id": current["POLAR_MEMBER_ID"]},
+                headers={
+                    "Authorization": f"Bearer {tokens['access_token']}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=30,
+            )
+            # A user may already exist when authorization is repeated after an
+            # instance rebuild. Polar reports that state as a conflict, which
+            # still means the account is registered and may be synchronized.
+            if registration.status_code not in {200, 201, 409}:
+                raise ValueError("Polar user registration failed")
             tokens["expires_at"] = int(time.time()) + int(tokens.get("expires_in", 0)) - 60
             token_store_for(current["POLAR_TOKEN_FILE"], current["POLAR_TOKEN_ENCRYPTION_KEY"]).save(tokens)
         except (TokenStoreError, ValueError, TypeError):

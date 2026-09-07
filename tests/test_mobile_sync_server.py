@@ -86,9 +86,11 @@ class MobileSyncServerTests(unittest.TestCase):
             "refresh_token": "sensitive-refresh-token",
             "expires_in": 3600,
         }
+        registration_response = Mock(status_code=201)
+        http_post = Mock(side_effect=[token_response, registration_response])
         app = create_app(
             self.config,
-            http_post=Mock(return_value=token_response),
+            http_post=http_post,
         )
         app.config["TESTING"] = True
         client = app.test_client()
@@ -102,6 +104,12 @@ class MobileSyncServerTests(unittest.TestCase):
         self.assertNotIn(b"sensitive-access-token", Path(self.token_file).read_bytes())
         saved = EncryptedTokenStore(self.token_file, self.encryption_key).load()
         self.assertEqual(saved["access_token"], "sensitive-access-token")
+        self.assertEqual(http_post.call_count, 2)
+        self.assertEqual(http_post.call_args_list[1].args[0], "https://www.polaraccesslink.com/v3/users")
+        self.assertEqual(
+            http_post.call_args_list[1].kwargs["headers"]["Authorization"],
+            "Bearer sensitive-access-token",
+        )
 
     def test_invalid_snapshot_date_is_rejected(self):
         response = self.client.get("/v1/mobile/daily-snapshot?date=not-a-date", headers=self.headers)
