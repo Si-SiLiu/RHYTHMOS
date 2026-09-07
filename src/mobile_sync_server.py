@@ -20,6 +20,11 @@ from flask import Flask, Response, jsonify, redirect, request, session
 from requests.auth import HTTPBasicAuth
 
 from .mobile_snapshot import build_mobile_daily_snapshot
+from .mobile_recovery_history import (
+    MobileRecoveryHistoryError,
+    build_mobile_recovery_history,
+)
+from .mobile_kubios_import import MobileKubiosImportError, import_mobile_screenshot_measurement
 from .polar_client import TOKEN_FILE
 from .secure_token_store import TokenStoreError, token_store_for
 from .sync_pipeline import PipelineError, PipelineRunner
@@ -93,6 +98,8 @@ def create_app(
     *,
     runner_factory: Callable[[], PipelineRunner] = PipelineRunner,
     snapshot_builder: Callable[..., dict[str, Any] | None] = build_mobile_daily_snapshot,
+    history_builder: Callable[..., dict[str, Any]] = build_mobile_recovery_history,
+    screenshot_importer: Callable[[dict[str, Any]], dict[str, Any]] = import_mobile_screenshot_measurement,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> Flask:
     """Create the service without requiring deploy-time secrets at import time."""
@@ -228,6 +235,43 @@ def create_app(
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 404
         response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/mobile/recovery-history")
+    def recovery_history() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        requested_days = request.args.get("days", "14")
+        try:
+            history = history_builder(days=int(requested_days))
+        except (TypeError, ValueError, MobileRecoveryHistoryError):
+            return jsonify(error="INVALID_HISTORY_RANGE"), 400
+        response = jsonify(history)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/kubios-screenshot-import")
+    def import_kubios_screenshot() -> Response:
+        """Accept reviewed local OCR values, never an iPhone screenshot image."""
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_SCREENSHOT_PAYLOAD"), 400
+        try:
+            result = screenshot_importer(payload)
+        except MobileKubiosImportError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="SCREENSHOT_IMPORT_FAILED"), 502
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        response = jsonify(snapshot)
+        response.status_code = 201
         response.headers["Cache-Control"] = "no-store"
         return response
 

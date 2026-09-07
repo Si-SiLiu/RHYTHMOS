@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .dashboard_data import connect_readonly, get_day_metrics
+from .dashboard_data import connect_readonly, get_day_metrics, get_kubios_advanced_metrics
 from .domain_dashboard_data import (
     get_latest_recovery,
     get_latest_sleep,
@@ -96,10 +96,16 @@ def _require_number(
     return value
 
 
-def _validate_metric(value: Any, path: str, *, maximum: float | None = None) -> None:
+def _validate_metric(
+    value: Any,
+    path: str,
+    *,
+    minimum: float | None = 0,
+    maximum: float | None = None,
+) -> None:
     metric = _require_exact_keys(value, {"value", "provenance"}, path)
     metric_value = _require_number(
-        metric["value"], f"{path}.value", allow_none=True, minimum=0, maximum=maximum,
+        metric["value"], f"{path}.value", allow_none=True, minimum=minimum, maximum=maximum,
     )
     provenance = _require_exact_keys(
         metric["provenance"],
@@ -108,7 +114,27 @@ def _validate_metric(value: Any, path: str, *, maximum: float | None = None) -> 
     )
     provenance_value = _require_number(
         provenance["value"], f"{path}.provenance.value", allow_none=True,
-        minimum=0, maximum=maximum,
+        minimum=minimum, maximum=maximum,
+    )
+    if metric_value != provenance_value:
+        raise MobileSnapshotContractError(f"{path}.value must equal its provenance value")
+    _require_string(provenance["source"], f"{path}.provenance.source")
+    _require_string(provenance["reason"], f"{path}.provenance.reason")
+    for name in ("is_fallback", "is_manual_override"):
+        if not isinstance(provenance[name], bool):
+            raise MobileSnapshotContractError(f"{path}.provenance.{name} must be a boolean")
+
+
+def _validate_text_metric(value: Any, path: str) -> None:
+    metric = _require_exact_keys(value, {"value", "provenance"}, path)
+    metric_value = _require_string(metric["value"], f"{path}.value", allow_none=True)
+    provenance = _require_exact_keys(
+        metric["provenance"],
+        {"value", "source", "is_fallback", "is_manual_override", "reason"},
+        f"{path}.provenance",
+    )
+    provenance_value = _require_string(
+        provenance["value"], f"{path}.provenance.value", allow_none=True,
     )
     if metric_value != provenance_value:
         raise MobileSnapshotContractError(f"{path}.value must equal its provenance value")
@@ -160,7 +186,7 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
         root["recovery"],
         {
             "status", "score", "score_version", "recommendation_code", "confidence",
-            "morning_hrv_rmssd_ms", "morning_resting_hr_bpm",
+            "morning_hrv_rmssd_ms", "morning_resting_hr_bpm", "details",
         },
         "snapshot.recovery",
     )
@@ -194,14 +220,44 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
         _require_string(confidence["version"], "snapshot.recovery.confidence.version", allow_none=True)
     _validate_metric(recovery["morning_hrv_rmssd_ms"], "snapshot.recovery.morning_hrv_rmssd_ms", maximum=1_000)
     _validate_metric(recovery["morning_resting_hr_bpm"], "snapshot.recovery.morning_resting_hr_bpm", maximum=300)
+    details = _require_exact_keys(
+        recovery["details"],
+        {
+            "pns_index", "sns_index", "physiological_age_years", "mean_rr_ms",
+            "sdnn_ms", "poincare_sd1_ms", "poincare_sd2_ms", "stress_index",
+            "respiration_rate_bpm", "measurement_quality",
+        },
+        "snapshot.recovery.details",
+    )
+    _validate_metric(details["pns_index"], "snapshot.recovery.details.pns_index", minimum=None)
+    _validate_metric(details["sns_index"], "snapshot.recovery.details.sns_index", minimum=None)
+    _validate_metric(details["physiological_age_years"], "snapshot.recovery.details.physiological_age_years", maximum=130)
+    _validate_metric(details["mean_rr_ms"], "snapshot.recovery.details.mean_rr_ms", maximum=3_000)
+    _validate_metric(details["sdnn_ms"], "snapshot.recovery.details.sdnn_ms", maximum=1_000)
+    _validate_metric(details["poincare_sd1_ms"], "snapshot.recovery.details.poincare_sd1_ms", maximum=1_000)
+    _validate_metric(details["poincare_sd2_ms"], "snapshot.recovery.details.poincare_sd2_ms", maximum=2_000)
+    _validate_metric(details["stress_index"], "snapshot.recovery.details.stress_index", maximum=10_000)
+    _validate_metric(details["respiration_rate_bpm"], "snapshot.recovery.details.respiration_rate_bpm", maximum=100)
+    _validate_text_metric(details["measurement_quality"], "snapshot.recovery.details.measurement_quality")
 
     sleep = _require_exact_keys(
         root["sleep"],
-        {"duration_minutes", "score", "nightly_hrv_rmssd_ms", "resting_hr_bpm", "respiration_rate_bpm"},
+        {
+            "duration_minutes", "score", "sleep_start_time", "wake_time",
+            "actual_duration_minutes", "deep_duration_minutes", "rem_duration_minutes",
+            "average_hr_bpm", "nightly_hrv_rmssd_ms", "resting_hr_bpm",
+            "respiration_rate_bpm",
+        },
         "snapshot.sleep",
     )
     _validate_metric(sleep["duration_minutes"], "snapshot.sleep.duration_minutes", maximum=1_440)
     _validate_metric(sleep["score"], "snapshot.sleep.score", maximum=100)
+    _validate_text_metric(sleep["sleep_start_time"], "snapshot.sleep.sleep_start_time")
+    _validate_text_metric(sleep["wake_time"], "snapshot.sleep.wake_time")
+    _validate_metric(sleep["actual_duration_minutes"], "snapshot.sleep.actual_duration_minutes", maximum=1_440)
+    _validate_metric(sleep["deep_duration_minutes"], "snapshot.sleep.deep_duration_minutes", maximum=1_440)
+    _validate_metric(sleep["rem_duration_minutes"], "snapshot.sleep.rem_duration_minutes", maximum=1_440)
+    _validate_metric(sleep["average_hr_bpm"], "snapshot.sleep.average_hr_bpm", maximum=300)
     _validate_metric(sleep["nightly_hrv_rmssd_ms"], "snapshot.sleep.nightly_hrv_rmssd_ms", maximum=1_000)
     _validate_metric(sleep["resting_hr_bpm"], "snapshot.sleep.resting_hr_bpm", maximum=300)
     _validate_metric(sleep["respiration_rate_bpm"], "snapshot.sleep.respiration_rate_bpm", maximum=100)
@@ -324,6 +380,21 @@ def _metric(
     return {"value": value, "provenance": _field(field)}
 
 
+def _text_metric(
+    value: Any,
+    field: dict[str, Any] | None = None,
+    *,
+    default_source: str = "missing",
+) -> dict[str, Any]:
+    if field is None and value is not None:
+        field = {
+            "value": value,
+            "value_source": default_source,
+            "resolution_reason": f"{default_source}_value_available",
+        }
+    return {"value": value, "provenance": _field(field)}
+
+
 def build_mobile_daily_snapshot(
     db_path: Path | str | None = None,
     snapshot_date: date | str | None = None,
@@ -356,6 +427,8 @@ def build_mobile_daily_snapshot(
     )
     recovery_fields = recovery.get("resolved_fields") or {}
     sleep_fields = sleep.get("resolved_fields") or {}
+    advanced_rows = get_kubios_advanced_metrics(db_path, limit=1, date_value=target_date)
+    advanced = advanced_rows[0] if advanced_rows else {}
 
     snapshot = {
         "kind": CONTRACT_KIND,
@@ -374,6 +447,33 @@ def build_mobile_daily_snapshot(
             "morning_resting_hr_bpm": _metric(
                 recovery.get("morning_mean_hr"), recovery_fields.get("morning_mean_hr"),
             ),
+            "details": {
+                "pns_index": _metric(advanced.get("pns_index"), default_source="kubios"),
+                "sns_index": _metric(advanced.get("sns_index"), default_source="kubios"),
+                "physiological_age_years": _metric(advanced.get("physiological_age"), default_source="kubios"),
+                "mean_rr_ms": _metric(advanced.get("mean_rr_ms"), default_source="kubios"),
+                "sdnn_ms": _metric(advanced.get("sdnn_ms"), default_source="kubios"),
+                "poincare_sd1_ms": _metric(advanced.get("poincare_sd1_ms"), default_source="kubios"),
+                "poincare_sd2_ms": _metric(advanced.get("poincare_sd2_ms"), default_source="kubios"),
+                "stress_index": _metric(
+                    advanced.get("stress_index")
+                    if advanced.get("stress_index") is not None
+                    else recovery.get("stress_index"),
+                    default_source="kubios",
+                ),
+                "respiration_rate_bpm": _metric(
+                    advanced.get("respiratory_rate_bpm")
+                    if advanced.get("respiratory_rate_bpm") is not None
+                    else recovery.get("respiratory_rate"),
+                    default_source="kubios",
+                ),
+                "measurement_quality": _text_metric(
+                    advanced.get("measurement_quality")
+                    if advanced.get("measurement_quality") is not None
+                    else recovery.get("measurement_quality"),
+                    default_source="kubios",
+                ),
+            },
         },
         "sleep": {
             "duration_minutes": _metric(
@@ -381,6 +481,30 @@ def build_mobile_daily_snapshot(
                 sleep_fields.get("total_sleep_duration_minutes"),
             ),
             "score": _metric(daily.get("sleep_score"), default_source="daily_metric"),
+            "sleep_start_time": _text_metric(
+                sleep_fields.get("sleep_start_time", {}).get("value"),
+                sleep_fields.get("sleep_start_time"),
+            ),
+            "wake_time": _text_metric(
+                sleep_fields.get("wake_time", {}).get("value"),
+                sleep_fields.get("wake_time"),
+            ),
+            "actual_duration_minutes": _metric(
+                sleep_fields.get("actual_sleep_duration_minutes", {}).get("value"),
+                sleep_fields.get("actual_sleep_duration_minutes"),
+            ),
+            "deep_duration_minutes": _metric(
+                sleep_fields.get("deep_sleep_duration_minutes", {}).get("value"),
+                sleep_fields.get("deep_sleep_duration_minutes"),
+            ),
+            "rem_duration_minutes": _metric(
+                sleep_fields.get("rem_sleep_duration_minutes", {}).get("value"),
+                sleep_fields.get("rem_sleep_duration_minutes"),
+            ),
+            "average_hr_bpm": _metric(
+                sleep_fields.get("average_sleep_hr_bpm", {}).get("value"),
+                sleep_fields.get("average_sleep_hr_bpm"),
+            ),
             "nightly_hrv_rmssd_ms": _metric(
                 sleep.get("nightly_hrv_rmssd"), sleep_fields.get("nightly_hrv_rmssd"),
             ),
