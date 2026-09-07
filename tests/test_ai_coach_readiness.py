@@ -30,7 +30,7 @@ def model_evaluation(model_version):
     return {
         "suite_version": "1.0.0",
         "model_version": model_version,
-        "prompt_version": "1.3.0",
+        "prompt_version": "1.3.1",
         "output_schema_version": "1.3.0",
         "safety_policy_version": "1.0.0",
         "cases_per_run": 200,
@@ -131,7 +131,7 @@ class AICoachReadinessTests(unittest.TestCase):
                 path,
                 model_version="synthetic-model",
                 contract={
-                    "prompt_version": "1.3.0",
+                    "prompt_version": "1.3.1",
                     "output_schema_version": "1.3.0",
                     "safety_policy_version": "1.0.0",
                 },

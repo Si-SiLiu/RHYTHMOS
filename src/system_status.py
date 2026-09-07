@@ -75,6 +75,7 @@ def load_system_status(
     database_check=None,
     sync_reader=None,
     freshness_reader=None,
+    freshness=None,
     today=None,
     stale_after_days=3,
 ):
@@ -118,10 +119,11 @@ def load_system_status(
     # tests and tooling.
     latest_data_date = state.get("latest_data_date")
     if Path(state_path).resolve() == STATE_PATH.resolve():
-        try:
-            freshness = freshness_reader(db_path=db_path, today=today) or {}
-        except (OSError, RuntimeError, ValueError):
-            freshness = {}
+        if freshness is None:
+            try:
+                freshness = freshness_reader(db_path=db_path, today=today) or {}
+            except (OSError, RuntimeError, ValueError):
+                freshness = {}
         latest_data_date = (
             freshness.get("latest_daily_metrics_date")
             or freshness.get("latest_source_data_date")
@@ -159,9 +161,20 @@ def load_system_status(
     if p1_issues:
         warning_reasons.append(f"{len(p1_issues)} active P1 issue(s) remain.")
     sync_warning_count = int(last_sync.get("warning_count", 0) or 0) if last_sync else 0
-    if sync_warning_count and last_sync and bool(last_sync.get("success")):
+    # Older history readers expose only one aggregate count. Treat that as a
+    # source-data warning for backward compatibility. Current pipeline history
+    # separates the fetch-stage count, so optional AI or documentation work
+    # cannot make healthy local Polar data look degraded.
+    has_source_warning_breakdown = bool(last_sync) and "source_warning_count" in last_sync
+    source_sync_warning_count = (
+        int(last_sync.get("source_warning_count", 0) or 0)
+        if has_source_warning_breakdown
+        else sync_warning_count
+    )
+    auxiliary_sync_warning_count = max(0, sync_warning_count - source_sync_warning_count)
+    if source_sync_warning_count and last_sync and bool(last_sync.get("success")):
         warning_reasons.append(
-            f"Last sync completed with {sync_warning_count} endpoint warning(s)."
+            f"Last Polar sync completed with {source_sync_warning_count} optional data warning(s)."
         )
 
     if unhealthy_reasons:
@@ -202,6 +215,8 @@ def load_system_status(
             last_sync.get("records_imported") if last_sync else None
         ),
         "last_sync_warning_count": sync_warning_count,
+        "last_sync_source_warning_count": source_sync_warning_count,
+        "last_sync_auxiliary_warning_count": auxiliary_sync_warning_count,
         "local_coach_ready": state.get("local_coach_ready", False),
         "cloud_ai_runtime_ready": state.get("cloud_ai_runtime_ready", False),
         "last_sync_local_coach_records_updated": (

@@ -8,12 +8,10 @@ never invokes Cloud AI.
 
 The periodic schedule is intentionally selective:
 
-- Polar daily activity data runs every two hours. This is the source for the
-  activity and total-consumption values.
-- Polar training data runs every four hours.
-- No periodic Polar refresh runs after 23:00.
-- Sleep data is not polled periodically. It is refreshed by the existing
-  post-save sync after the day's recovery data is entered.
+- Polar daily activity, training, sleep, recovery, and continuous heart-rate
+  data refresh every two hours.
+- The cadence includes the required 12:00 and 22:00 local-time refreshes.
+- No periodic Polar refresh runs after the 22:00 slot.
 
 ## Configuration
 

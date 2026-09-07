@@ -1,0 +1,96 @@
+{
+  "date": "2026-09-07",
+  "generated_at": "2026-09-07T05:30:00Z",
+  "kind": "rhythmos.mobile_daily_snapshot",
+  "recovery": {
+    "confidence": {
+      "level": "high",
+      "missing_groups": [],
+      "score": 86,
+      "version": "1.0.0"
+    },
+    "morning_hrv_rmssd_ms": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "kubios_value_available",
+        "source": "kubios",
+        "value": 44
+      },
+      "value": 44
+    },
+    "morning_resting_hr_bpm": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "kubios_value_available",
+        "source": "kubios",
+        "value": 56
+      },
+      "value": 56
+    },
+    "recommendation_code": "normal_training",
+    "score": 84,
+    "score_version": "1.0.0",
+    "status": "ready"
+  },
+  "sleep": {
+    "duration_minutes": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "polar_value_available",
+        "source": "polar",
+        "value": 450
+      },
+      "value": 450
+    },
+    "nightly_hrv_rmssd_ms": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "polar_value_available",
+        "source": "polar",
+        "value": 52
+      },
+      "value": 52
+    },
+    "respiration_rate_bpm": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "polar_value_available",
+        "source": "polar",
+        "value": 14
+      },
+      "value": 14
+    },
+    "resting_hr_bpm": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "polar_value_available",
+        "source": "polar",
+        "value": 49
+      },
+      "value": 49
+    },
+    "score": {
+      "provenance": {
+        "is_fallback": false,
+        "is_manual_override": false,
+        "reason": "daily_metric_value_available",
+        "source": "daily_metric",
+        "value": 82
+      },
+      "value": 82
+    }
+  },
+  "training": {
+    "calories_kcal": 460,
+    "duration_minutes": 45,
+    "session_count": 1,
+    "sports": ["running"]
+  },
+  "version": 1
+}

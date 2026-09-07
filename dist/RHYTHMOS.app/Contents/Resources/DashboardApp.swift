@@ -354,8 +354,8 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
             let process = Process()
             // Start the local launcher directly. A dashboard launch must never
             // open Terminal or expose a temporary shell script to the user.
-            process.executableURL = pythonURL
-            process.arguments = [launcherURL.path, "--no-browser"]
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/arch")
+            process.arguments = ["-arm64", pythonURL.path, launcherURL.path, "--no-browser"]
             process.currentDirectoryURL = projectRootURL
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = standardOutput
@@ -393,8 +393,8 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         guard FileManager.default.isExecutableFile(atPath: pythonURL.path),
               FileManager.default.fileExists(atPath: runnerURL.path) else { return }
         let process = Process()
-        process.executableURL = pythonURL
-        process.arguments = [runnerURL.path, "--trigger-type", "catch_up"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/arch")
+        process.arguments = ["-arm64", pythonURL.path, runnerURL.path, "--trigger-type", "catch_up"]
         process.currentDirectoryURL = projectRootURL
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice

@@ -359,11 +359,59 @@ class SimpleNutritionLoggingTests(unittest.TestCase):
         self.assertIn('TR("simple_nutrition.add_item")', page)
         self.assertIn('TR("simple_nutrition.delete_row")', page)
         self.assertIn('use_container_width=True', page)
-        self.assertIn('key="simple_active_meal_type"', page)
+        self.assertIn('key="simple_active_meal_slot"', page)
         self.assertIn('key="simple_active_meal_date"', page)
         self.assertNotIn('TR("simple_nutrition.copy_previous_row")', page)
         self.assertNotIn("categories_for_meal", page)
         self.assertNotIn("def _item_editor", page)
+
+    def test_food_editor_uses_single_set_of_field_labels(self):
+        page = (Path(__file__).resolve().parents[1] / "src/pages/3_Nutrition.py").read_text(encoding="utf-8")
+        editor = page.split("def _food_editor", 1)[1].split("def _quick_actions", 1)[0]
+        self.assertNotIn("headers = (item_label, \"quantity\", \"unit\", \"actions\")", editor)
+        self.assertIn("Each native input already provides its own accessible field label.", editor)
+
+    def test_actions_offer_matching_cycle_plan_import(self):
+        page = (Path(__file__).resolve().parents[1] / "src/pages/3_Nutrition.py").read_text(encoding="utf-8")
+        actions = page.split("def _quick_actions", 1)[1].split("def _next_unrecorded_meal_slot", 1)[0]
+        self.assertIn("导入对应周期计划", actions)
+        self.assertIn("_weekly_plan_recipe_for_slot(connection, meal_date, meal_slot)", actions)
+        self.assertIn("status\": \"draft\", \"source\": \"imported\"", actions)
+        self.assertIn("_clear_editor_widget_state(imported_editor_key)", actions)
+
+    def test_weekly_plan_cell_uses_left_meal_label_for_time(self):
+        page = (Path(__file__).resolve().parents[1] / "src/pages/3_Nutrition.py").read_text(encoding="utf-8")
+        formatter = page.split("def _weekly_recipe_plan_cell_text", 1)[1].split("def _weekly_recipe_slot_name", 1)[0]
+        self.assertNotIn("lines.append(time_match.group(1))", formatter)
+        self.assertIn("The time is already shown in the left-hand meal label.", formatter)
+        self.assertIn(r"[、，,；;·]+", formatter)
+
+    def test_weekly_plan_uses_edit_and_delete_meal_actions(self):
+        page = (Path(__file__).resolve().parents[1] / "src/pages/3_Nutrition.py").read_text(encoding="utf-8")
+        slots = page.split("def _weekly_recipe_slots", 1)[1].split("def _delete_weekly_recipe_slot", 1)[0]
+        self.assertNotIn("max(numbered) + 2", slots)
+        self.assertIn("return tuple(f\"meal_{number}\" for number in sorted(set(numbered)))", slots)
+        self.assertNotIn("nutrition_weekly_recipe_add_slot_", page)
+        self.assertNotIn("nutrition_weekly_recipe_selected_slot_", page)
+        self.assertIn("编辑餐次", page)
+        self.assertIn("删除餐次", page)
+        self.assertIn("Reuse the full plan editor", page)
+        self.assertIn('"meal_type": initial_meal_slot', page)
+        self.assertIn("_delete_weekly_recipe_slot(connection, plan_id, delete_meal_slot)", page)
+        self.assertIn("vertical_alignment=\"bottom\"", page)
+        self.assertIn("label_visibility=\"collapsed\"", page)
+        self.assertIn("_load_weekly_recipe_editor_selection", page)
+        self.assertIn("_plan_recipe_import_rows(", page)
+        self.assertIn("represent the identical meal content", page)
+        self.assertNotIn("实际饮食仍以“编辑今日饮食数据”中保存的记录为准", page)
+        self.assertNotIn('st.text_input(_ui("备注（可选）", "Notes (optional)")', page)
+
+    def test_short_weekly_plan_cells_center_within_their_scroll_viewport(self):
+        page = (Path(__file__).resolve().parents[1] / "src/pages/3_Nutrition.py").read_text(encoding="utf-8")
+        self.assertIn("align-content:center!important", page)
+        self.assertIn("button>div>span", page)
+        self.assertIn("min-height:100%!important", page)
+        self.assertIn("text-align:left!important;white-space:pre-line!important", page)
 
     def test_localized_simple_input_contract(self):
         base = Path(__file__).resolve().parents[1] / "locales"

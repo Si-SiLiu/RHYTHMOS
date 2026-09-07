@@ -227,6 +227,7 @@ MIGRATIONS = {
     "meal_records": {
         "planned_meal_time": "TEXT",
         "actual_meal_time": "TEXT",
+        "meal_slot": "TEXT",
     },
     "meal_templates": {
         "template_type": "TEXT NOT NULL DEFAULT 'meal'",
@@ -2790,16 +2791,63 @@ def backup_before_migration(db_path, connection):
     return backup_path
 
 
+def _requires_initialization(connection):
+    """Check a current database without taking a write lock on every rerun.
+
+    Re-read the ledger on each connection so replacements, pending migrations,
+    and checksum drift cannot be hidden by a process-local cache.
+    """
+    try:
+        rows = connection.execute(
+            "SELECT version,sequence,name,checksum FROM schema_migrations"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return True
+    applied = {row[0]: tuple(row[1:]) for row in rows}
+    pending = False
+    for migration in SCHEMA_MIGRATIONS:
+        actual = applied.get(migration.version)
+        if actual is None:
+            pending = True
+        elif actual != (migration.sequence, migration.name, migration.checksum):
+            raise DatabaseMigrationError(
+                f"Schema migration history mismatch for {migration.version}"
+            )
+    if pending:
+        return True
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    required = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA))
+    if not required.issubset(tables):
+        return True
+    for table, columns in MIGRATIONS.items():
+        if table not in tables:
+            return True
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if not set(columns).issubset(existing):
+            return True
+    # Preserve the existing compatibility repair when legacy rows arrive.
+    return connection.execute(
+        "SELECT 1 FROM meal_records WHERE actual_meal_time IS NULL "
+        "OR meal_slot IS NULL OR trim(meal_slot)='' LIMIT 1"
+    ).fetchone() is not None
+
+
 def connect(db_path=None, migrate=True):
     db_path = get_current_db_path() if db_path is None else Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    if migrate:
-        backup_before_migration(db_path, connection)
-        init_db(connection)
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        if migrate and _requires_initialization(connection):
+            backup_before_migration(db_path, connection)
+            init_db(connection)
+        return connection
+    except BaseException:
+        connection.close()
+        raise
 
 
 def integrity_check(connection):
@@ -2831,6 +2879,19 @@ def apply_migrations(connection):
     if {"eaten_at", "actual_meal_time"}.issubset(meal_columns):
         connection.execute(
             "UPDATE meal_records SET actual_meal_time=eaten_at WHERE actual_meal_time IS NULL"
+        )
+    if "meal_slot" in meal_columns:
+        # Preserve legacy records while giving the numbered-meal editor a
+        # stable slot to reopen. Their nutritional classification is retained.
+        connection.execute(
+            """UPDATE meal_records
+               SET meal_slot=CASE meal_type
+                   WHEN 'breakfast' THEN 'meal_1'
+                   WHEN 'lunch' THEN 'meal_2'
+                   WHEN 'dinner' THEN 'meal_3'
+                   ELSE 'meal_1'
+               END
+               WHERE meal_slot IS NULL OR trim(meal_slot)=''"""
         )
 
 

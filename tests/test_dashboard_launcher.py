@@ -17,6 +17,7 @@ class DashboardLauncherTests(unittest.TestCase):
             8502,
         )
         self.assertIn("--server.address=127.0.0.1", command)
+        self.assertIn("--server.fileWatcherType=none", command)
         self.assertIn("--server.port=8502", command)
         self.assertIn("--server.headless=true", command)
 
@@ -90,7 +91,8 @@ class DashboardLauncherTests(unittest.TestCase):
         source = render_swift_source(dashboard_launcher.BASE_DIR)
         self.assertIn('appendingPathComponent(".venv/bin/python")', source)
         self.assertIn('appendingPathComponent("src/dashboard_launcher.py")', source)
-        self.assertIn('process.arguments = [launcherURL.path, "--no-browser"]', source)
+        self.assertIn('process.arguments = ["-arm64", pythonURL.path, launcherURL.path, "--no-browser"]', source)
+        self.assertIn('process.arguments = ["-arm64", pythonURL.path, runnerURL.path, "--trigger-type", "catch_up"]', source)
         self.assertNotIn('"-a", "Terminal"', source)
         self.assertNotIn("daily-recovery-coach-launch", source)
 
@@ -112,6 +114,9 @@ class DashboardLauncherTests(unittest.TestCase):
             self.assertEqual(info["CFBundlePackageType"], "APPL")
             self.assertEqual(info["CFBundleExecutable"], executable.name)
             self.assertEqual(info["NSPrincipalClass"], "NSApplication")
+            self.assertEqual(info["LSArchitecturePriority"], ["arm64"])
+            self.assertTrue(info["LSRequiresNativeExecution"])
+            self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
 
     @mock.patch("src.dashboard_launcher.subprocess.run")
     def test_open_dashboard_url_uses_native_macos_open(self, mock_run):

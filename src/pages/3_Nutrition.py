@@ -24,25 +24,26 @@ import streamlit.components.v1 as components
 from src.branding import browser_page_title, load_page_icon
 from src.dashboard_data import get_day_metrics
 from src.db import connect
-from src.post_save_sync import refresh_local_coach_for_date
+from src.post_save_sync import refresh_local_coach_for_date, start_priority_data_sync
 from src.input_habits import record_input_habit
-from src.demo_sandbox import configure_demo_runtime
+from src.demo_sandbox import configure_demo_runtime, is_demo_mode
 from src.exercise_format import time_to_hms
 from src.i18n import format_date, format_number, get_translator
 from src.i18n.ui import current_language, render_sidebar
 from src.i18n.traditional import traditionalize
 from src.nutrition_logging import (
-    FOOD_COUNT_UNITS, FOOD_UNITS, MEAL_TYPES,
+    FOOD_COUNT_UNITS, FOOD_UNITS, INITIAL_MEAL_SLOTS, MEAL_TYPES,
     SUPPLEMENT_UNITS, allowed_food_units,
     copy_meal_record,
-    create_meal_record, favorite_foods, find_meal_id, find_previous_meal_id,
+    create_meal_record, favorite_foods, find_meal_id_for_slot, find_previous_meal_id,
     find_yesterday_meal_id, food_catalog_by_id, food_unit_label_key,
     food_display_name, ensure_manual_food_option, get_meal_record,
     list_food_catalog, list_meal_records,
-    meal_time_warning, predict_meal_time, recent_foods, save_meal_record,
+    inferred_meal_slot, is_meal_slot, meal_slot_number, meal_time_warning, meal_type_for_slot, predict_meal_time, recent_foods, save_meal_record,
     summarize_supplements,
     unit_label_key,
 )
+from src.nutrition_logging.online_lookup import enrich_manual_food_from_chinanutri
 from src.nutrition_logging.nutrition_baseline import calculate_personal_nutrition_baseline
 from src.nutrition_logging.label_ocr import (
     create_custom_food_from_ocr, list_custom_food_nutrition_library,
@@ -1318,8 +1319,8 @@ div[data-testid="stTimeInput"] div[data-baseweb="select"] div[value]{
 div[data-testid="stExpander"]:has(.drc-recipe-editor-marker) label[data-testid="stWidgetLabel"],div[data-testid="stExpander"]:has(.drc-recipe-cycle-settings-marker) label[data-testid="stWidgetLabel"]{width:100%!important;justify-content:center!important;text-align:center!important}
 div[data-testid="stExpander"]:has(.drc-recipe-editor-marker) label[data-testid="stWidgetLabel"] p,div[data-testid="stExpander"]:has(.drc-recipe-cycle-settings-marker) label[data-testid="stWidgetLabel"] p{width:100%!important;text-align:center!important}
 div[data-testid="stExpander"]:has(.drc-recipe-editor-marker) [data-baseweb="input"] input,div[data-testid="stExpander"]:has(.drc-recipe-cycle-settings-marker) [data-baseweb="input"] input{text-align:center!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) label[data-testid="stWidgetLabel"],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"]{display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;min-height:1.4rem;padding:0!important;text-align:center!important;line-height:1!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) label[data-testid="stWidgetLabel"] p,div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"] p{width:100%!important;margin:0!important;text-align:center!important;line-height:1.2!important}
+[class*="st-key-simple_active_meal_slot"] label[data-testid="stWidgetLabel"],[class*="st-key-simple_active_meal_date"] label[data-testid="stWidgetLabel"],[class*="st-key-simple_meal_time_"] label[data-testid="stWidgetLabel"],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"]{display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;min-height:1.4rem;padding:0!important;text-align:center!important;line-height:1!important}
+[class*="st-key-simple_active_meal_slot"] label[data-testid="stWidgetLabel"] p,[class*="st-key-simple_active_meal_date"] label[data-testid="stWidgetLabel"] p,[class*="st-key-simple_meal_time_"] label[data-testid="stWidgetLabel"] p,div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"] p{width:100%!important;margin:0!important;text-align:center!important;line-height:1.2!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-baseweb="input"] input,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-testid="stTimeInput"] input{text-align:center!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) div[data-testid="stSelectbox"] [data-baseweb="select"]>div{position:relative}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) div[data-testid="stSelectbox"] [data-baseweb="select"]>div>div:first-child{position:absolute!important;inset:0;display:flex!important;align-items:center!important;justify-content:center!important;padding:0!important;text-align:center!important;line-height:1!important}
@@ -1339,9 +1340,13 @@ div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) [data-testi
 /* Streamlit's select labels use a baseline-aligned inner wrapper.  Pin the
    recipe editor controls to a real flex centre so labels and values remain
    centred on both axes regardless of the browser's native control padding. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) label[data-testid="stWidgetLabel"],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"]{height:1.5rem!important;min-height:1.5rem!important}
+[class*="st-key-simple_active_meal_slot"] label[data-testid="stWidgetLabel"],[class*="st-key-simple_active_meal_date"] label[data-testid="stWidgetLabel"],[class*="st-key-simple_meal_time_"] label[data-testid="stWidgetLabel"],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) label[data-testid="stWidgetLabel"]{height:1.5rem!important;min-height:1.5rem!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-testid="stSelectbox"] [data-baseweb="select"]>div,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-testid="stTimeInput"] [data-baseweb="select"]>div,div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) [data-testid="stSelectbox"] [data-baseweb="select"]>div,div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) [data-testid="stTimeInput"] [data-baseweb="select"]>div{position:relative!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-testid="stSelectbox"] [data-baseweb="select"] div[value],div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-meal-editor-marker) [data-testid="stTimeInput"] [data-baseweb="select"] div[value],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) [data-testid="stSelectbox"] [data-baseweb="select"] div[value],div[data-testid="stColumn"]:has(.drc-recipe-schedule-control-marker) [data-testid="stTimeInput"] [data-baseweb="select"] div[value]{position:absolute!important;inset:0!important;display:flex!important;align-items:center!important;justify-content:center!important;min-height:0!important;margin:0!important;padding:0!important;text-align:center!important;line-height:1.2!important;transform:none!important}
+/* Nutrition entry rows use one shared table header.  Their native widget
+   labels are still available to assistive technology, but must stay collapsed
+   so the same wording is not repeated above every row. */
+[class*="st-key-food_"][class*="_name_"] label[data-testid="stWidgetLabel"],[class*="st-key-food_"][class*="_quantity_"] label[data-testid="stWidgetLabel"],[class*="st-key-food_"][class*="_unit_"] label[data-testid="stWidgetLabel"],[class*="st-key-supplement_product_"] label[data-testid="stWidgetLabel"],[class*="st-key-supplement_quantity_"] label[data-testid="stWidgetLabel"],[class*="st-key-supplement_unit_"] label[data-testid="stWidgetLabel"],[class*="st-key-nutrition_recipe_food_"] label[data-testid="stWidgetLabel"],[class*="st-key-nutrition_recipe_supplement_"] label[data-testid="stWidgetLabel"],[class*="st-key-nutrition_recipe_medication_"] label[data-testid="stWidgetLabel"]{display:none!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker){overflow-x:auto;gap:0!important;row-gap:0!important;margin:.35rem 0 .7rem;border:1px solid rgba(117,130,148,.22);border-radius:.75rem}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker)>div[data-testid="stElementContainer"]{margin:0!important;padding:0!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker)>div[data-testid="stElementContainer"]:has(.drc-recipe-edit-grid-marker){display:none!important}
@@ -1386,7 +1391,14 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button{background:rgba(77,145,214,.13)!important;color:var(--rh-text)}
 /* Filled cells use the same readable text rhythm as the training-plan table. */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button{font-size:.82rem!important;line-height:1.5!important;text-align:center!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button>div,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button>div{padding:.6rem .7rem!important}
+/* Planned entries are newline-delimited in Python.  Preserve those breaks so
+   every bullet always starts a distinct line instead of flowing inline. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button>div,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button>div{box-sizing:border-box!important;padding:.6rem .7rem!important}
+/* Streamlit wraps each button label in a span.  Making that wrapper at least
+   as tall as the scroll viewport centers short entries vertically; when an
+   entry is longer, it grows naturally and the parent retains top-down scroll. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button>div>span,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button>div>span{display:grid!important;align-content:center!important;width:100%!important;min-height:100%!important}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button>div>span [data-testid="stMarkdownContainer"],div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button>div>span [data-testid="stMarkdownContainer"],div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-auto) [data-testid="stButton"] button>div>span p,div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-manual) [data-testid="stButton"] button>div>span p{width:100%!important;margin:0!important;text-align:left!important;white-space:pre-line!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .drc-recipe-edit-grid-marker) div[data-testid="stColumn"]:has(.drc-recipe-edit-cell-marker-empty) [data-testid="stButton"] button{color:var(--rh-text-muted)}
 /* Empty plan cells are actions rather than scrollable content.  Make every
    Streamlit wrapper fill the table cell, then centre the add label on both
@@ -1423,6 +1435,14 @@ def _meal_name(value):
     return TR(f"nutrition_entry.meals.{value}")
 
 
+def _meal_slot_name(value):
+    try:
+        number = meal_slot_number(value)
+    except ValueError:
+        return str(value)
+    return _ui(f"餐{number}", f"Meal {number}")
+
+
 def _cell(value, css="drc-simple-title"):
     return f'<div class="{css}">{escape(str(value))}</div>'
 
@@ -1442,6 +1462,10 @@ FIXED_RECOMMENDED_MEAL_TIMES = {
     "afternoon_snack": "15:30", "dinner": "18:30", "bedtime_fuel": "21:30",
 }
 
+FIXED_MEAL_SLOT_TIMES = {
+    "meal_1": "08:00", "meal_2": "12:30", "meal_3": "18:30",
+}
+
 
 def _current_meal_time():
     current = datetime.now().astimezone()
@@ -1450,9 +1474,13 @@ def _current_meal_time():
 
 
 def _recommended_meal_time(connection, meal_type, meal_date):
-    predicted = predict_meal_time(connection, meal_type, meal_date)
+    default_time = FIXED_MEAL_SLOT_TIMES.get(meal_type)
+    classified_type = meal_type_for_slot(meal_type, default_time) if default_time else meal_type
+    predicted = predict_meal_time(connection, classified_type, meal_date)
     if predicted:
         return predicted
+    if default_time:
+        return time.fromisoformat(default_time)
     fixed = FIXED_RECOMMENDED_MEAL_TIMES.get(meal_type)
     if fixed:
         return time.fromisoformat(fixed)
@@ -1505,6 +1533,7 @@ def _clear_editor_widget_state(editor_key):
 
 
 def _food_editor(connection, existing, item_type, editor_key=None):
+    # Each native input already provides its own accessible field label.
     catalog_items = list_food_catalog(connection)
     combined = item_type == "food_beverage"
     editor_catalog_items = [
@@ -1550,9 +1579,13 @@ def _food_editor(connection, existing, item_type, editor_key=None):
         if not active_ids:
             active_ids = [min(st.session_state[row_ids_key], default=1)]
         st.session_state[row_ids_key] = active_ids
-    recent = recent_foods(connection)
+    # Keep a compact recent-name list in the UI, but retain the full local
+    # preference set for selected-food defaults.  A familiar item such as
+    # chicken breast must still recover its last 180 g even when it is not in
+    # the first eight most frequent entries.
+    recent = recent_foods(connection, limit=None)
     recent_names = []
-    for recent_item in recent:
+    for recent_item in recent[:8]:
         recent_catalog = recent_item.get("catalog")
         if not combined and recent_item.get("item_type") != item_type:
             continue
@@ -1565,10 +1598,6 @@ def _food_editor(connection, existing, item_type, editor_key=None):
     }
     favorites = favorite_foods(connection)
     widget_prefix = f"food_{item_type}"
-    item_label = _ui(
-        "食物/饮品" if combined else "食物" if item_type == "food" else "饮品",
-        "Food / Beverage" if combined else "Food" if item_type == "food" else "Beverage",
-    )
     add_item_label = TR("simple_nutrition.add_item")
     add_item_label = _ui(
         "添加食物/饮品" if combined else "添加食物" if item_type == "food" else "添加饮品",
@@ -1579,14 +1608,18 @@ def _food_editor(connection, existing, item_type, editor_key=None):
             _display_food(item) for item in favorites
         ))
 
-    headers = (item_label, "quantity", "unit", "actions")
-    for column, key in zip(st.columns((2.0, 1.0, 0.8, 0.8)), headers):
-        # The first header is already a localized display label, not an i18n
-        # lookup key. Translating it again produces `[missing: ...]` in zh-TW
-        # because the traditionalized slash/name no longer matches a key.
-        label = key if key in {"quantity", "unit", "actions"} else key
-        if key in {"quantity", "unit", "actions"}:
-            label = TR(f"simple_nutrition.{key}")
+    # A single shared header keeps the entry grid readable without repeating
+    # the same native field labels above every food row.
+    food_column_widths = (2.0, 1.0, 0.8, 0.8)
+    for column, label in zip(
+        st.columns(food_column_widths),
+        (
+            TR("simple_nutrition.food_or_beverage"),
+            TR("simple_nutrition.quantity"),
+            TR("simple_nutrition.unit"),
+            TR("simple_nutrition.actions"),
+        ),
+    ):
         column.markdown(_cell(label), unsafe_allow_html=True)
 
     rows = []
@@ -1594,7 +1627,7 @@ def _food_editor(connection, existing, item_type, editor_key=None):
         saved = saved_items[row_id - 1] if isinstance(row_id, int) and 1 <= row_id <= len(saved_items) else {}
         saved_catalog = by_id.get(saved.get("food_catalog_id"))
         initial_food_name = _display_food(saved_catalog) if saved_catalog else (saved.get("custom_food_name") or "")
-        columns = st.columns((2.0, 1.0, 0.8, 0.8))
+        columns = st.columns(food_column_widths)
         food_name_key = f"{widget_prefix}_name_{record_key}_{row_id}"
         unit_key = f"{widget_prefix}_unit_{record_key}_{row_id}"
         quantity_key = f"{widget_prefix}_quantity_{record_key}_{row_id}"
@@ -2003,8 +2036,108 @@ def _supplement_editor(connection, existing, record_key, taken_at, product_kind=
     return rows
 
 
-def _quick_actions(connection, existing, meal_type, meal_date, eaten_at, food_items, supplements):
-    columns = st.columns(2)
+_PLAN_IMPORT_UNIT_MAP = {
+    "g": "g", "克": "g", "ml": "ml", "毫升": "ml", "l": "l", "升": "l",
+    "个": "piece", "片": "slice", "粒": "capsule", "胶囊": "capsule",
+}
+_PLAN_IMPORT_SUPPLEMENT_WORDS = (
+    "叶黄素", "非那雄胺", "保法止", "d3k2", "鱼油", "omacor", "乳清蛋白粉", "肌酸",
+)
+
+
+def _plan_import_tokens(title):
+    """Read legacy recipe text into independent, quantity-bearing entries."""
+    tokens = []
+    for line in str(title or "").splitlines():
+        line = re.sub(r"^\s*\d{1,2}:\d{2}\s*[：:]?\s*", "", line).strip()
+        if not line:
+            continue
+        for parenthetical in re.findall(r"[（(]([^（）()]*)[）)]", line):
+            tokens.extend(part.strip() for part in parenthetical.split("+") if part.strip())
+        outside = re.sub(r"[（(][^（）()]*[）)]", "", line)
+        tokens.extend(part.strip() for part in re.split(r"[、，,；;·]+", outside) if part.strip())
+    return tokens
+
+
+def _plan_import_entry(token):
+    """Turn one plan token into either a food/beverage or supplement row."""
+    suffix = re.match(r"^(.*?)(\d+(?:\.\d+)?)\s*(毫升|ml|升|l|克|g|个|粒|片|胶囊)\s*$", token, re.I)
+    prefix = re.match(r"^(\d+(?:\.\d+)?)\s*(毫升|ml|升|l|克|g)\s*(.+)$", token, re.I)
+    if suffix:
+        name, quantity, raw_unit = suffix.group(1).strip(), suffix.group(2), suffix.group(3)
+    elif prefix:
+        quantity, raw_unit, name = prefix.group(1), prefix.group(2), prefix.group(3).strip()
+    else:
+        return None
+    unit = _PLAN_IMPORT_UNIT_MAP.get(raw_unit.lower())
+    if not name or not unit:
+        return None
+    parsed = {"name": name, "quantity": float(quantity), "unit": unit}
+    lowered = name.casefold()
+    parsed["kind"] = (
+        "supplement" if unit in {"capsule", "tablet"}
+        or any(word in lowered for word in _PLAN_IMPORT_SUPPLEMENT_WORDS)
+        else "food"
+    )
+    if "非那雄胺" in name or "保法止" in name:
+        parsed["product_kind"] = "medication"
+    return parsed
+
+
+def _weekly_plan_recipe_for_slot(connection, meal_date, meal_slot):
+    monday = meal_date - timedelta(days=meal_date.weekday())
+    cycle = _current_nutrition_plan_cycle(connection, on_date=meal_date)
+    query = """SELECT i.item_id,i.title,i.start_time,i.end_time,i.notes
+               FROM user_weekly_plan_items i
+               JOIN user_weekly_plans p ON p.plan_id=i.plan_id
+               WHERE p.week_start=? AND p.deleted_at IS NULL
+                 AND i.weekday=? AND i.category='meal' AND i.deleted_at IS NULL
+                 AND i.notes LIKE ?"""
+    parameters = [monday.isoformat(), meal_date.weekday(), f"{WEEKLY_RECIPE_MANUAL_MARKER}:{meal_slot}|%"]
+    if cycle:
+        query += " AND p.nutrition_cycle_id=?"
+        parameters.append(cycle["id"])
+    query += " ORDER BY i.updated_at DESC,i.created_at DESC LIMIT 1"
+    row = connection.execute(query, parameters).fetchone()
+    return dict(row) if row else None
+
+
+def _plan_recipe_import_rows(connection, item):
+    payload = _weekly_recipe_payload(item)
+    food_rows = list(payload.get("items") or [])
+    supplement_rows = list(payload.get("supplements") or [])
+    if food_rows or supplement_rows:
+        return food_rows, supplement_rows
+
+    catalog = list_food_catalog(connection)
+    names = {
+        str(name).strip().casefold(): food
+        for food in catalog
+        for name in (food.get("canonical_name"), food.get("display_name_zh"), food.get("display_name_en"), *food.get("aliases", ()))
+        if str(name or "").strip()
+    }
+    for token in _plan_import_tokens(item.get("title")):
+        entry = _plan_import_entry(token)
+        if not entry:
+            continue
+        if entry["kind"] == "supplement":
+            supplement_rows.append({
+                "custom_product_name": entry["name"], "quantity": entry["quantity"],
+                "unit": entry["unit"], "product_kind": entry.get("product_kind", "supplement"),
+            })
+            continue
+        catalog_item = names.get(entry["name"].casefold())
+        food_rows.append({
+            "food_catalog_id": catalog_item["id"] if catalog_item else None,
+            "custom_food_name": None if catalog_item else entry["name"],
+            "item_type": "beverage" if entry["unit"] in {"ml", "l"} else "food",
+            "quantity": entry["quantity"], "unit": entry["unit"],
+        })
+    return food_rows, supplement_rows
+
+
+def _quick_actions(connection, existing, meal_type, meal_slot, meal_date, eaten_at, food_items, supplements):
+    columns = st.columns(3)
     if columns[0].button(TR("simple_nutrition.copy_yesterday")):
         source_id = find_yesterday_meal_id(connection, meal_type, meal_date.isoformat())
         if source_id:
@@ -2017,16 +2150,81 @@ def _quick_actions(connection, existing, meal_type, meal_date, eaten_at, food_it
             new_id = copy_meal_record(connection, source_id, meal_date.isoformat(), eaten_at.isoformat(timespec="seconds"))
             st.session_state["simple_meal_selector_pending"] = new_id; st.success(TR("simple_nutrition.copied")); st.rerun()
         st.warning(TR("simple_nutrition.no_copy_source"))
+    if columns[2].button(_ui("导入对应周期计划", "Import Matching Cycle Plan"), use_container_width=True):
+        plan_item = _weekly_plan_recipe_for_slot(connection, meal_date, meal_slot)
+        if not plan_item:
+            st.warning(_ui("未找到该日期和餐次对应的周期计划。", "No matching cycle-plan meal was found for this date and meal."))
+            return
+        if existing and existing.get("status") == "completed":
+            st.warning(_ui("该餐次已有已保存记录；请先编辑或删除后再导入计划。", "This meal is already saved. Edit or remove it before importing a plan."))
+            return
+        planned_foods, planned_supplements = _plan_recipe_import_rows(connection, plan_item)
+        if not planned_foods and not planned_supplements:
+            st.warning(_ui("对应计划中没有可导入的营养项目。", "The matching plan has no importable nutrition items."))
+            return
+        plan_time = _time_value(plan_item.get("start_time"))
+        imported_meal = {
+            "date": meal_date.isoformat(), "meal_type": meal_type, "meal_slot": meal_slot,
+            "eaten_at": plan_time.isoformat(timespec="seconds"),
+            "planned_meal_time": plan_time.isoformat(timespec="seconds"),
+            "actual_meal_time": plan_time.isoformat(timespec="seconds"),
+            "status": "draft", "source": "imported",
+        }
+        record_id = save_meal_record(
+            connection, imported_meal, planned_foods, planned_supplements,
+            existing["id"] if existing else None,
+        )
+        # An imported draft replaces every editable value in this meal.  Clear
+        # any field state from a previous draft and reset the time widget so
+        # the following render is sourced entirely from the imported plan.
+        imported_editor_key = f"{record_id}_{meal_slot}_{meal_date.isoformat()}"
+        _clear_editor_widget_state(imported_editor_key)
+        st.session_state[f"simple_meal_time_{record_id}"] = plan_time
+        st.session_state["simple_meal_selector_pending"] = record_id
+        st.session_state["simple_active_meal_slot"] = meal_slot
+        st.session_state["simple_active_meal_date"] = meal_date
+        st.session_state["nutrition_plan_import_notice"] = _ui(
+            "已导入对应周期计划，请核对后保存餐次。",
+            "Matching cycle-plan data imported. Review it, then save the meal.",
+        )
+        st.rerun()
 
 
-def _next_unrecorded_meal_type(records, meal_date, extra_meal_type=None):
+def _next_unrecorded_meal_slot(records, meal_date, extra_meal_slot=None):
     recorded = {
-        row.get("meal_type") for row in records
-        if row.get("date") == meal_date.isoformat()
+        row.get("meal_slot") or inferred_meal_slot(row.get("meal_type"), row.get("actual_meal_time") or row.get("eaten_at"))
+        for row in records if row.get("date") == meal_date.isoformat()
     }
-    if extra_meal_type:
-        recorded.add(extra_meal_type)
-    return next((meal_type for meal_type in MEAL_TYPES if meal_type not in recorded), MEAL_TYPES[0])
+    if extra_meal_slot:
+        recorded.add(extra_meal_slot)
+    next_number = 1
+    while f"meal_{next_number}" in recorded:
+        next_number += 1
+    return f"meal_{next_number}"
+
+
+def _meal_slot_options(records, meal_date, active_slot=None):
+    """Expose the next numbered meal without imposing an upper limit."""
+    numbers = {meal_slot_number(slot) for slot in INITIAL_MEAL_SLOTS}
+    for record in records:
+        if record.get("date") != meal_date.isoformat():
+            continue
+        slot = record.get("meal_slot") or inferred_meal_slot(
+            record.get("meal_type"), record.get("actual_meal_time") or record.get("eaten_at"),
+        )
+        try:
+            numbers.add(meal_slot_number(slot))
+        except ValueError:
+            continue
+    if active_slot:
+        try:
+            numbers.add(meal_slot_number(active_slot))
+        except ValueError:
+            pass
+    # The next number is always selectable. Once it is saved, another next
+    # number appears; this continues indefinitely.
+    highest = max(numbers, default=0)
+    return [f"meal_{number}" for number in range(1, highest + 2)]
 
 
 
@@ -2108,7 +2306,7 @@ def _render_current_nutrition_details(connection, records, meal_state, targets):
     """Render the read-only daily details outside the meal editor expander."""
     meal_date = meal_state["meal_date"]
     live_summary = summarize_draft_food_items(connection, meal_state["food_items"])
-    _, resolved_targets = _render_today_nutrition(
+    _render_today_nutrition(
         records,
         meal_date.isoformat(),
         section_number=2,
@@ -2116,13 +2314,6 @@ def _render_current_nutrition_details(connection, records, meal_state, targets):
         live_meal_summary=live_summary,
         replacing_record_id=meal_state["record_id"],
     )
-    aligned_records = _records_with_live_draft(
-        records, meal_date.isoformat(), live_summary, meal_state["record_id"],
-    )
-    feedback_summary = NutritionFeedbackService(
-        aligned_records, meal_date.isoformat(), LANGUAGE, targets=resolved_targets,
-    ).today_summary()
-    return feedback_summary, resolved_targets
 
 
 def _render_current_nutrition_advice(connection, feedback_summary, targets, meal_state):
@@ -2145,21 +2336,26 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
     pending_section = st.session_state.pop("simple_pending_nutrition_section", None)
     if pending_section in {"diet", "supplement", "medication"}:
         st.session_state["simple_active_nutrition_section"] = pending_section
-    meal_type = st.selectbox(
-        TR("simple_nutrition.meal"), MEAL_TYPES,
-        format_func=_meal_name, key="simple_active_meal_type",
+    active_date_value = st.session_state.get("simple_active_meal_date", date.today())
+    active_date = active_date_value if hasattr(active_date_value, "isoformat") else date.fromisoformat(str(active_date_value))
+    meal_slot_options = _meal_slot_options(
+        records, active_date, st.session_state.get("simple_active_meal_slot"),
+    )
+    meal_slot = st.selectbox(
+        TR("simple_nutrition.meal"), meal_slot_options,
+        format_func=_meal_slot_name, key="simple_active_meal_slot",
     )
     left, right = st.columns(2)
     meal_date = left.date_input(
         TR("nutrition_entry.date"),
         key="simple_active_meal_date",
     )
-    recommended_time = _recommended_meal_time(connection, meal_type, meal_date)
+    recommended_time = _recommended_meal_time(connection, meal_slot, meal_date)
     planned_time = _time_value(
         (existing or {}).get("planned_meal_time") or recommended_time
     )
     time_key = f"simple_meal_time_{record_key}"
-    recommendation_signature = f"{meal_type}:{meal_date.isoformat()}"
+    recommendation_signature = f"{meal_slot}:{meal_date.isoformat()}"
     signature_key = f"simple_meal_recommendation_signature_{record_key}"
     if existing:
         st.session_state.setdefault(
@@ -2173,12 +2369,13 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
         TR("simple_nutrition.actual_meal_time"),
         step=300, key=time_key,
     )
+    meal_type = meal_type_for_slot(meal_slot, eaten_at.isoformat(timespec="seconds"))
     if meal_time_warning(meal_type, eaten_at.isoformat(timespec="seconds")):
         st.warning(TR("simple_nutrition.time_warning"))
 
     # New meal/date combinations get isolated widget state, so inputs from a
     # previous meal cannot leak into the next one.
-    editor_key = f"{record_key}_{meal_type}_{meal_date.isoformat()}"
+    editor_key = f"{record_key}_{meal_slot}_{meal_date.isoformat()}"
 
     scanner_target_section = st.session_state.pop("supplement_ocr_switch_to_section", None)
     if scanner_target_section in {"supplement", "medication"}:
@@ -2202,13 +2399,16 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
     _render_html(action_title_html)
     copy_actions, save_action = st.columns((2, 1))
     with copy_actions:
-        _quick_actions(connection, existing, meal_type, meal_date, eaten_at, food_items, supplements)
+        _quick_actions(connection, existing, meal_type, meal_slot, meal_date, eaten_at, food_items, supplements)
     with save_action:
         complete = st.button(
             TR("simple_nutrition.save_meal"), type="primary", use_container_width=True,
         )
     if flash_key:
         st.success(TR(flash_key))
+    plan_import_notice = st.session_state.pop("nutrition_plan_import_notice", None)
+    if plan_import_notice:
+        st.success(plan_import_notice)
 
     # Notes remain intact on existing records, but are no longer part of the
     # nutrition-entry interface.
@@ -2216,19 +2416,30 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
     if complete:
         try:
             # Keep names entered in the editor available for future selection.
-            # The current item remains unclassified until nutrition values are
-            # supplied, so this never invents nutrient data.
+            # For a manual food, try the conservative public-food-composition
+            # lookup before saving.  Only an exact match with complete macro
+            # data is bound; unresolved names remain explicit custom entries.
             for item in food_items:
                 if item.get("food_catalog_id") is None and item.get("custom_food_name"):
-                    ensure_manual_food_option(
+                    custom_name = str(item["custom_food_name"]).strip()
+                    catalog_id = ensure_manual_food_option(
                         connection,
-                        item["custom_food_name"],
+                        custom_name,
                         item.get("item_type", "food"),
                     )
+                    if catalog_id is None:
+                        continue
+                    enriched = enrich_manual_food_from_chinanutri(
+                        connection, catalog_id, custom_name,
+                    )
+                    if enriched:
+                        item["food_catalog_id"] = catalog_id
+                        item["custom_food_name"] = None
             connection.commit()
             action = save_meal_record if existing else create_meal_record
             meal = {
                 "date": meal_date.isoformat(), "meal_type": meal_type,
+                "meal_slot": meal_slot,
                 "eaten_at": eaten_at.isoformat(timespec="seconds"),
                 "planned_meal_time": planned_time.isoformat(timespec="seconds"),
                 "actual_meal_time": eaten_at.isoformat(timespec="seconds"),
@@ -2239,6 +2450,7 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
                 record_id = action(connection, meal, food_items, supplements, existing["id"])
             else:
                 record_id = action(connection, meal, food_items, supplements)
+            habit_catalog = food_catalog_by_id(connection)
             # The weekly plan reads this saved meal directly for its matching
             # calendar date. Do not create a history-derived plan mirror:
             # the meal record remains the only source of actual intake.
@@ -2253,16 +2465,36 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
                 ],
                 choices={
                     "nutrition.meal_type": meal_type,
+                    "nutrition.meal_slot": meal_slot,
                     "nutrition.category": active_section,
+                    "nutrition.food_name": [
+                        (
+                            _display_food(habit_catalog.get(item.get("food_catalog_id")))
+                            if item.get("food_catalog_id") is not None
+                            else str(item.get("custom_food_name") or "").strip()
+                        )
+                        for item in food_items
+                        if item.get("food_catalog_id") is not None or item.get("custom_food_name")
+                    ],
                 },
                 numeric={"nutrition.food_item_count": len(food_items)},
             )
             refresh_local_coach_for_date(meal_date.isoformat(), connection=connection)
+            # Nutrition is one of the four Codex-feedback inputs. Queue the
+            # same priority refresh used by sleep, training, and recovery once
+            # the meal and its local summary have been committed.
+            if not is_demo_mode():
+                try:
+                    start_priority_data_sync()
+                except RuntimeError:
+                    # The meal save remains durable; a later fixed sync can
+                    # reconcile feedback if the optional runner is unavailable.
+                    pass
             # Apply the active editor category before the next segmented
             # control is created. This keeps medication saves on Medication.
             st.session_state["simple_pending_nutrition_section"] = active_section
             st.session_state["simple_nutrition_advance_on_reentry"] = {
-                "meal_type": meal_type,
+                "meal_slot": meal_slot,
                 "date": meal_date.isoformat(),
             }
             _clear_editor_widget_state(editor_key)
@@ -2276,6 +2508,7 @@ def _meal_form(connection, existing, records, targets=None, flash_key=None):
         "record_id": (existing or {}).get("id"),
         "meal_date": meal_date,
         "meal_type": meal_type,
+        "meal_slot": meal_slot,
         "food_items": food_items,
     }
 
@@ -2474,14 +2707,6 @@ def _historical_nutrition_details(connection, records, selected_date):
             _ui("本餐没有用药记录。", "No medication recorded for this meal."),
         )
 
-    summary = selected_record.get("summary") or {}
-    feedback_service = NutritionFeedbackService(records, selected_date, LANGUAGE)
-    _render_meal_feedback(
-        _nutrition_advice(
-            connection, summary, recommended_nutrition_targets(connection), day=selected_date,
-        ),
-        selected_record.get("meal_type"), section_number=3,
-    )
     _render_today_nutrition(
         records, selected_date, historical=True, section_number=2,
         targets=recommended_nutrition_targets(connection),
@@ -2932,6 +3157,16 @@ def _learn_weekly_recipe(connection, records, monday, *, cycle_id=None, cycle_ti
     plan_id = _ensure_weekly_recipe_plan(
         connection, monday, cycle_id=cycle_id, title=cycle_title,
     )
+    # A numbered plan is fully user-authored. Do not add legacy automatic
+    # rows beside it on every render.
+    numbered_plan = connection.execute(
+        """SELECT 1 FROM user_weekly_plan_items
+           WHERE plan_id=? AND category='meal' AND deleted_at IS NULL
+             AND notes LIKE ? LIMIT 1""",
+        (plan_id, f"{WEEKLY_RECIPE_MANUAL_MARKER}:meal_%|%"),
+    ).fetchone()
+    if numbered_plan:
+        return 0
     for (weekday, meal_type), choices in grouped.items():
         best = max(choices.values(), key=lambda value: (value["count"], value["record"].get("date", "")))
         record = best["record"]
@@ -3050,18 +3285,15 @@ def _weekly_recipe_payload_title(connection, payload):
 
 
 def _weekly_recipe_plan_cell_text(connection, item):
-    """Format plan cells with standalone times and one item per visual line."""
+    """Format plan cells as one food or supplement per visual line."""
     payload = _weekly_recipe_payload(item)
     labels = _weekly_recipe_payload_labels(connection, payload)
     if labels:
-        start_time = str(item.get("start_time") or "").strip()
-        end_time = str(item.get("end_time") or "").strip()
-        time_line = "–".join(value for value in (start_time, end_time) if value)
-        return "\n".join(([time_line] if time_line else []) + [f"· {label}" for label in labels])
+        return "\n".join(f"· {label}" for label in labels)
 
     # Legacy records contain a free-text meal plan such as
-    # ``07:30：燕麦75g、希腊酸奶150g``.  Preserve every timestamp as a
-    # heading and make every individual food its own bulleted line.
+    # ``07:30：燕麦75g、希腊酸奶150g``.  Times belong in the meal label;
+    # make every individual food its own bulleted line here.
     legacy = str(payload.get("legacy_title") or item.get("title") or "").strip()
     lines = []
     for raw_line in legacy.splitlines() or [legacy]:
@@ -3070,14 +3302,124 @@ def _weekly_recipe_plan_cell_text(connection, item):
             continue
         time_match = re.match(r"^(\d{1,2}:\d{2})\s*[：:]\s*(.*)$", raw_line)
         if time_match:
-            lines.append(time_match.group(1))
             raw_line = time_match.group(2).strip()
+        elif re.fullmatch(r"\d{1,2}:\d{2}", raw_line):
+            # The time is already shown in the left-hand meal label.  A
+            # standalone legacy time is therefore metadata, not cell text.
+            continue
         lines.extend(
             f"· {part.strip()}"
-            for part in re.split(r"[、，,；;]+", raw_line)
+            for part in re.split(r"[、，,；;·]+", raw_line)
             if part.strip()
         )
     return "\n".join(lines)
+
+
+def _weekly_recipe_slot_name(marker):
+    return _meal_slot_name(marker) if is_meal_slot(marker) else _meal_name(marker)
+
+
+def _weekly_recipe_slots(recipe_items):
+    """Return only saved numbered plan rows while retaining legacy weeks.
+
+    A blank next row used to be rendered automatically.  It looked like an
+    unwanted extra meal (for example ``餐9``), so new rows are now created
+    deliberately through the visible add-meal action below the table.
+    """
+    numbered = []
+    for item in recipe_items:
+        _, marker = _weekly_recipe_marker(item)
+        if marker and is_meal_slot(marker):
+            numbered.append(meal_slot_number(marker))
+    if not numbered:
+        return (
+            "breakfast", "morning_snack", "lunch", "afternoon_snack",
+            "dinner", "training_fuel", "bedtime_fuel", "free_snack",
+        )
+    return tuple(f"meal_{number}" for number in sorted(set(numbered)))
+
+
+def _delete_weekly_recipe_slot(connection, plan_id, meal_slot):
+    """Remove one numbered meal row from this plan week only."""
+    if not is_meal_slot(meal_slot):
+        return
+    with connection:
+        connection.execute(
+            """UPDATE user_weekly_plan_items
+               SET deleted_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+               WHERE plan_id=? AND category='meal' AND deleted_at IS NULL
+                 AND (notes LIKE ? OR notes LIKE ?)""",
+            (
+                plan_id,
+                f"{WEEKLY_RECIPE_MANUAL_MARKER}:{meal_slot}|%",
+                f"{WEEKLY_RECIPE_AUTO_MARKER}:{meal_slot}|%",
+            ),
+        )
+
+
+def _weekly_recipe_meal_label(meal_name, items):
+    """Show a meal's saved start time beneath its row label.
+
+    A weekly table has one shared left-hand label for all seven days, so use
+    the first scheduled instance in weekday order.  The value is read from the
+    saved item on every render, which keeps it synchronized after edits.
+    """
+    start_time = next(
+        (
+            str(item.get("start_time") or "").strip()
+            for item in items
+            if item and str(item.get("start_time") or "").strip()
+        ),
+        "",
+    )
+    if not start_time:
+        return meal_name
+    if LANGUAGE == "en":
+        return f"{meal_name} ({start_time})"
+    return f"{meal_name}（{start_time.replace(':', '：')}）"
+
+
+def _weekly_recipe_saved_preferences(connection, kind, limit=16):
+    """Return the latest values entered in meal plans for input reuse.
+
+    These values already belong to the user's local nutrition plan; no new
+    profile containing raw food or product names is created.  ``kind`` is
+    ``food``, ``supplement`` or ``medication``.
+    """
+    rows = connection.execute(
+        """SELECT notes FROM user_weekly_plan_items
+           WHERE category='meal' AND deleted_at IS NULL AND notes LIKE ?
+           ORDER BY updated_at DESC,created_at DESC""",
+        (f"{WEEKLY_RECIPE_MANUAL_MARKER}:%",),
+    ).fetchall()
+    food_by_id = food_catalog_by_id(connection)
+    products_by_id = {str(product["id"]): product for product in list_products(connection)}
+    preferences = []
+    seen = set()
+    for row in rows:
+        payload = _weekly_recipe_payload(dict(row))
+        values = payload.get("items", []) if kind == "food" else payload.get("supplements", [])
+        for value in values:
+            if kind == "food":
+                catalog = food_by_id.get(value.get("food_catalog_id"))
+                name = _display_food(catalog) if catalog else str(value.get("custom_food_name") or "").strip()
+            else:
+                if value.get("product_kind", "supplement") != kind:
+                    continue
+                product = products_by_id.get(str(value.get("supplement_product_id")))
+                name = (product or {}).get("product_name") or str(value.get("custom_product_name") or "").strip()
+            preference_key = name.casefold()
+            if not name or preference_key in seen:
+                continue
+            seen.add(preference_key)
+            preferences.append({
+                "name": name,
+                "quantity": value.get("quantity"),
+                "unit": value.get("unit"),
+            })
+            if len(preferences) >= limit:
+                return preferences
+    return preferences
 
 
 def _weekly_recipe_editor_state(connection, payload, editor_key):
@@ -3133,10 +3475,20 @@ def _render_weekly_recipe_plan_inputs(connection, payload, editor_key):
             for name in (item["canonical_name"], item["display_name_zh"], item["display_name_en"], _display_food(item))
             if name
         }
-        recent_names = [
-            _display_food(item.get("catalog")) if item.get("catalog") else item.get("custom_food_name")
-            for item in recent_foods(connection)
-        ]
+        recent_usage = {}
+        recent_names = []
+        for preference in _weekly_recipe_saved_preferences(connection, "food"):
+            preference_name = preference["name"]
+            recent_names.append(preference_name)
+            recent_usage.setdefault(preference_name, preference)
+        for recent_item in recent_foods(connection, limit=None):
+            recent_name = (
+                _display_food(recent_item.get("catalog"))
+                if recent_item.get("catalog") else recent_item.get("custom_food_name")
+            )
+            if recent_name:
+                recent_names.append(recent_name)
+                recent_usage.setdefault(recent_name, recent_item)
         catalog_names = [_display_food(item) for item in catalog_items]
         options = [""] + list(dict.fromkeys(name for name in recent_names + catalog_names if name))
         row_ids_key = f"nutrition_recipe_food_rows_{editor_key}"
@@ -3148,9 +3500,34 @@ def _render_weekly_recipe_plan_inputs(connection, payload, editor_key):
             name_key = f"nutrition_recipe_food_name_{editor_key}_{row_id}"
             quantity_key = f"nutrition_recipe_food_quantity_{editor_key}_{row_id}"
             unit_key = f"nutrition_recipe_food_unit_{editor_key}_{row_id}"
+
+            def apply_food_habit(
+                selected_key=name_key,
+                quantity_state=quantity_key,
+                unit_state=unit_key,
+            ):
+                """Reuse the latest locally saved amount and unit for a food."""
+                selected_name = str(st.session_state.get(selected_key) or "").strip()
+                catalog_item = by_display_name.get(selected_name)
+                usage = recent_usage.get(selected_name)
+                st.session_state[unit_state] = (
+                    (usage or {}).get("unit")
+                    or (catalog_item or {}).get("default_unit")
+                    or "g"
+                )
+                if (usage or {}).get("quantity") not in (None, ""):
+                    st.session_state[quantity_state] = float(usage["quantity"])
+                elif catalog_item:
+                    st.session_state[quantity_state] = float(
+                        catalog_item.get("serving_quantity") or 1.0
+                    )
+                else:
+                    st.session_state[quantity_state] = None
+
             name = row[0].selectbox(
                 _ui("食物/饮品", "Food / Beverage"), options,
-                key=name_key, label_visibility="collapsed", accept_new_options=True,
+                key=name_key, on_change=apply_food_habit,
+                label_visibility="collapsed", accept_new_options=True,
                 placeholder=_ui("选择或输入食物/饮品", "Select or enter food or beverage"),
             ) or ""
             catalog = by_display_name.get(name)
@@ -3178,7 +3555,26 @@ def _render_weekly_recipe_plan_inputs(connection, payload, editor_key):
         product_kind = "supplement" if section == "supplement" else "medication"
         products = [product for product in list_products(connection) if product.get("product_kind") == product_kind]
         by_name = {product["product_name"]: product for product in products if product.get("product_name")}
-        options = [""] + list(dict.fromkeys([product["product_name"] for product in products if product.get("product_name")]))
+        learned_intakes = [
+            item for item in recent_intake_preferences(connection)
+            if item.get("product_kind") in {None, product_kind}
+        ]
+        intake_by_name = {}
+        recent_names = []
+        for preference in _weekly_recipe_saved_preferences(connection, product_kind):
+            preference_name = preference["name"]
+            recent_names.append(preference_name)
+            intake_by_name.setdefault(preference_name, preference)
+        for intake in learned_intakes:
+            intake_name = str(
+                intake.get("product_name") or intake.get("custom_product_name") or ""
+            ).strip()
+            if intake_name:
+                recent_names.append(intake_name)
+                intake_by_name.setdefault(intake_name, intake)
+        options = [""] + list(dict.fromkeys(
+            recent_names + [product["product_name"] for product in products if product.get("product_name")]
+        ))
         row_ids_key = f"nutrition_recipe_{product_kind}_rows_{editor_key}"
         columns = st.columns((2.0, 1.0, .8, .8))
         type_label = _ui("补剂类型", "Supplement Type") if product_kind == "supplement" else _ui("药物类型", "Medication Type")
@@ -3189,7 +3585,38 @@ def _render_weekly_recipe_plan_inputs(connection, payload, editor_key):
             name_key = f"nutrition_recipe_{product_kind}_name_{editor_key}_{row_id}"
             quantity_key = f"nutrition_recipe_{product_kind}_quantity_{editor_key}_{row_id}"
             unit_key = f"nutrition_recipe_{product_kind}_unit_{editor_key}_{row_id}"
-            name = row[0].selectbox(type_label, options, key=name_key, label_visibility="collapsed", accept_new_options=True, placeholder=_ui("选择或输入补剂类型" if product_kind == "supplement" else "选择或输入药物类型", "Select or enter supplement" if product_kind == "supplement" else "Select or enter medication")) or ""
+
+            def apply_product_habit(
+                selected_key=name_key,
+                quantity_state=quantity_key,
+                unit_state=unit_key,
+            ):
+                """Reuse the latest locally saved dose for the selected product."""
+                selected_name = str(st.session_state.get(selected_key) or "").strip()
+                product_item = by_name.get(selected_name)
+                intake = intake_by_name.get(selected_name)
+                st.session_state[unit_state] = (
+                    (intake or {}).get("unit")
+                    or (product_item or {}).get("default_intake_unit")
+                    or "g"
+                )
+                if (intake or {}).get("quantity") not in (None, ""):
+                    st.session_state[quantity_state] = float(intake["quantity"])
+                elif product_item:
+                    st.session_state[quantity_state] = float(
+                        product_item.get("serving_quantity") or 1.0
+                    )
+                else:
+                    st.session_state[quantity_state] = None
+
+            name = row[0].selectbox(
+                type_label, options, key=name_key, on_change=apply_product_habit,
+                label_visibility="collapsed", accept_new_options=True,
+                placeholder=_ui(
+                    "选择或输入补剂类型" if product_kind == "supplement" else "选择或输入药物类型",
+                    "Select or enter supplement" if product_kind == "supplement" else "Select or enter medication",
+                ),
+            ) or ""
             product = by_name.get(name)
             if st.session_state.get(unit_key) not in SUPPLEMENT_UNITS:
                 st.session_state[unit_key] = (product or {}).get("default_intake_unit") or "g"
@@ -3420,6 +3847,7 @@ def _render_weekly_recipe(connection, records):
                     )
                 st.session_state["nutrition_weekly_recipe_cycle_notice"] = message
                 st.rerun()
+
         else:
             st.info(_ui("请选择或创建一个饮食周期。", "Select or create a nutrition cycle."))
             if st.button(_ui("创建周期", "Create Cycle"), key="nutrition_open_cycle_creator_empty"):
@@ -3464,8 +3892,8 @@ def _render_weekly_recipe(connection, records):
             '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
             'color:var(--text-color);opacity:.62;font-size:.875rem;line-height:1.5;">'
             + escape(_ui(
-                "计划内容由你手动填写；计划内容与实际饮食记录分开保存。",
-                "Plan contents are entered manually and are stored separately from actual dietary records.",
+                "会根据已保存的饮食习惯填充空白格；手动修改优先，计划内容与实际饮食记录分开保存。",
+                "Blank cells learn from saved dietary habits; manual edits take priority and plans remain separate from actual intake records.",
             ))
             + "</div>",
         )
@@ -3485,16 +3913,27 @@ def _render_weekly_recipe(connection, records):
         plan_id = _ensure_weekly_recipe_plan(
             connection, monday, cycle_id=selected_cycle_record["id"], title=selected_cycle_record["name"],
         )
-        connection.commit()
+        # Learn recurring meals from locally saved intake history.  Manual
+        # plan cells are protected by _save_weekly_recipe_item and therefore
+        # always take precedence over these automatic suggestions.
+        _learn_weekly_recipe(
+            connection, records, monday,
+            cycle_id=selected_cycle_record["id"],
+            cycle_title=selected_cycle_record["name"],
+        )
 
         recipe_items = [
             dict(item) for item in connection.execute(
                 """SELECT item_id, weekday, title, start_time, end_time, notes
                    FROM user_weekly_plan_items
                    WHERE plan_id=? AND category='meal' AND deleted_at IS NULL
-                     AND notes LIKE ?
+                     AND (notes LIKE ? OR notes LIKE ?)
                    ORDER BY weekday, start_time, sort_order, created_at""",
-                (plan_id, f"{WEEKLY_RECIPE_MANUAL_MARKER}:%"),
+                (
+                    plan_id,
+                    f"{WEEKLY_RECIPE_MANUAL_MARKER}:%",
+                    f"{WEEKLY_RECIPE_AUTO_MARKER}:%",
+                ),
             ).fetchall()
         ]
         recipe_by_slot = {}
@@ -3506,10 +3945,7 @@ def _render_weekly_recipe(connection, records):
                 slot = (int(item["weekday"]), marker)
                 if source == "manual" or slot not in recipe_by_slot:
                     recipe_by_slot[slot] = item
-        meal_types = (
-            "breakfast", "morning_snack", "lunch", "afternoon_snack",
-            "dinner", "training_fuel", "bedtime_fuel", "free_snack",
-        )
+        meal_types = _weekly_recipe_slots(recipe_items)
         weekday_labels = (_ui("周一", "Mon"), _ui("周二", "Tue"), _ui("周三", "Wed"),
                           _ui("周四", "Thu"), _ui("周五", "Fri"), _ui("周六", "Sat"), _ui("周日", "Sun"))
         with st.container():
@@ -3533,15 +3969,19 @@ def _render_weekly_recipe(connection, records):
                 )
             for meal_type in meal_types:
                 row = st.columns([1.15] + [1] * 7)
+                meal_label = _weekly_recipe_meal_label(
+                    _weekly_recipe_slot_name(meal_type),
+                    [recipe_by_slot.get((weekday, meal_type)) for weekday in range(7)],
+                )
                 _render_html(
-                    f'<div class="drc-recipe-plan-label">{escape(_meal_name(meal_type))}</div>',
+                    f'<div class="drc-recipe-plan-label">{escape(meal_label)}</div>',
                     row[0],
                 )
                 for weekday, column in enumerate(row[1:]):
                     item = recipe_by_slot.get((weekday, meal_type))
                     source, _ = _weekly_recipe_marker(item or {})
                     title = str(item.get("title") or "") if item else ""
-                    for prefix in (f"{_meal_name(meal_type)}：", f"{_meal_name(meal_type)}:"):
+                    for prefix in (f"{_weekly_recipe_slot_name(meal_type)}：", f"{_weekly_recipe_slot_name(meal_type)}:"):
                         if title.startswith(prefix):
                             title = title[len(prefix):].strip()
                             break
@@ -3578,6 +4018,8 @@ def _render_weekly_recipe(connection, records):
         if selected_slot:
             selected_weekday = int(selected_slot["weekday"])
             selected_meal_type = selected_slot["meal_type"]
+            if selected_meal_type not in meal_types:
+                meal_types = (*meal_types, selected_meal_type)
             selected_item = recipe_by_slot.get((selected_weekday, selected_meal_type))
             editor_key = (
                 f"{selected_cycle_record['id']}_{plan_id}_"
@@ -3587,17 +4029,29 @@ def _render_weekly_recipe(connection, records):
             with st.expander(editor_title, expanded=True):
                 _render_html('<span class="drc-recipe-editor-marker"></span>')
                 st.caption(_ui(
-                    f"{weekday_labels[selected_weekday]} · {_meal_name(selected_meal_type)}。请填写该餐次的计划内容。",
-                    f"{weekday_labels[selected_weekday]} · {_meal_name(selected_meal_type)}. Enter the planned meal content.",
+                    f"{weekday_labels[selected_weekday]} · {_weekly_recipe_slot_name(selected_meal_type)}。请填写该餐次的计划内容。",
+                    f"{weekday_labels[selected_weekday]} · {_weekly_recipe_slot_name(selected_meal_type)}. Enter the planned meal content.",
                 ))
                 payload = _weekly_recipe_payload(selected_item)
                 item_title = str(selected_item.get("title") or "") if selected_item else ""
-                for prefix in (f"{_meal_name(selected_meal_type)}：", f"{_meal_name(selected_meal_type)}:"):
+                for prefix in (f"{_weekly_recipe_slot_name(selected_meal_type)}：", f"{_weekly_recipe_slot_name(selected_meal_type)}:"):
                     if item_title.startswith(prefix):
                         item_title = item_title[len(prefix):].strip()
                         break
                 if not payload.get("legacy_title"):
                     payload["legacy_title"] = item_title
+                # Imported plans may still be stored as legacy text, while
+                # the editor expects structured rows.  Parse that same text
+                # here so the selected grid cell and editable food rows always
+                # represent the identical meal content.
+                if selected_item and not (payload.get("items") or payload.get("supplements")):
+                    legacy_item = dict(selected_item)
+                    legacy_item["title"] = item_title
+                    parsed_food_rows, parsed_supplement_rows = _plan_recipe_import_rows(
+                        connection, legacy_item,
+                    )
+                    payload["items"] = parsed_food_rows
+                    payload["supplements"] = parsed_supplement_rows
                 default_start = time.fromisoformat(str(selected_item.get("start_time") or "08:00")) if selected_item else time(8, 0)
                 default_end = time.fromisoformat(str(selected_item.get("end_time") or "09:00")) if selected_item else time(9, 0)
                 weekday_key = f"nutrition_recipe_weekday_{editor_key}"
@@ -3608,21 +4062,37 @@ def _render_weekly_recipe(connection, records):
                 st.session_state.setdefault(meal_type_key, selected_meal_type)
                 st.session_state.setdefault(start_key, default_start)
                 st.session_state.setdefault(end_key, default_end)
+
+                def _load_weekly_recipe_editor_selection():
+                    """Reload the exact grid cell after its weekday/meal changes."""
+                    target_weekday = int(st.session_state[weekday_key])
+                    target_meal_type = st.session_state[meal_type_key]
+                    target_item = recipe_by_slot.get((target_weekday, target_meal_type))
+                    st.session_state["nutrition_weekly_recipe_edit_slot"] = {
+                        "weekday": target_weekday,
+                        "meal_type": target_meal_type,
+                        "item_id": target_item.get("item_id") if target_item else None,
+                    }
+                    st.session_state["nutrition_weekly_recipe_editor_focus_nonce"] = (
+                        int(st.session_state.get("nutrition_weekly_recipe_editor_focus_nonce", 0)) + 1
+                    )
+
                 controls = st.columns((1, 1, 1.4, 1.4))
                 for control in controls:
                     _render_html('<span class="drc-recipe-schedule-control-marker"></span>', control)
                 edited_weekday = controls[0].selectbox(
                     _ui("星期", "Weekday"), range(7),
                     format_func=lambda value: weekday_labels[value], key=weekday_key,
+                    on_change=_load_weekly_recipe_editor_selection,
                 )
                 edited_meal_type = controls[1].selectbox(
                     _ui("餐次", "Meal"), meal_types,
-                    format_func=_meal_name, key=meal_type_key,
+                    format_func=_weekly_recipe_slot_name, key=meal_type_key,
+                    on_change=_load_weekly_recipe_editor_selection,
                 )
                 edited_start = controls[2].time_input(_ui("开始时间", "Start Time"), key=start_key)
                 edited_end = controls[3].time_input(_ui("结束时间", "End Time"), key=end_key)
                 _render_weekly_recipe_plan_inputs(connection, payload, editor_key)
-                st.text_input(_ui("备注（可选）", "Notes (optional)"), key=f"nutrition_recipe_notes_{editor_key}")
                 save_column, cancel_column = st.columns(2)
                 save_clicked = save_column.button(
                     _ui("保存计划", "Save Plan"), key=f"nutrition_recipe_save_{editor_key}", type="primary",
@@ -3637,6 +4107,24 @@ def _render_weekly_recipe(connection, records):
                     edited_payload = _weekly_recipe_editor_payload_from_state(
                         connection, payload, editor_key,
                     )
+                    # Make a manually typed food or beverage reusable in the
+                    # next editor.  An exact online reference match is saved
+                    # immediately; otherwise it remains nutrition-limited.
+                    for food_item in edited_payload["items"]:
+                        if food_item.get("food_catalog_id") is not None:
+                            continue
+                        custom_name = str(food_item.get("custom_food_name") or "").strip()
+                        if not custom_name:
+                            continue
+                        catalog_id = ensure_manual_food_option(
+                            connection, custom_name, food_item.get("item_type", "food"),
+                        )
+                        if catalog_id is not None:
+                            enrich_manual_food_from_chinanutri(
+                                connection, catalog_id, custom_name,
+                            )
+                            food_item["food_catalog_id"] = catalog_id
+                            food_item["custom_food_name"] = None
                     normalized_title = _weekly_recipe_payload_title(connection, edited_payload)
                     if not normalized_title:
                         st.warning(_ui("请至少添加一项食物、补剂或用药。", "Add at least one food, supplement, or medication."))
@@ -3649,6 +4137,36 @@ def _render_weekly_recipe(connection, records):
                             notes=json.dumps(edited_payload, ensure_ascii=False, separators=(",", ":")),
                             marker=edited_meal_type, source="manual",
                             existing_item_id=selected_item.get("item_id") if selected_item else None,
+                        )
+                        # The learning profile keeps only local aggregates;
+                        # food names and free-text notes are never copied into
+                        # it.  It can be disabled or cleared in Daily Log.
+                        record_input_habit(
+                            connection,
+                            "nutrition.weekly_recipe",
+                            fields=[
+                                "food_items" if edited_payload["items"] else "",
+                                "supplements" if edited_payload["supplements"] else "",
+                                "medication" if any(
+                                    item.get("product_kind") == "medication"
+                                    for item in edited_payload["supplements"]
+                                ) else "",
+                                "start_time",
+                                "end_time",
+                            ],
+                            choices={"nutrition.weekly_recipe.meal_type": edited_meal_type},
+                            numeric={
+                                "nutrition.weekly_recipe.item_count": (
+                                    len(edited_payload["items"])
+                                    + len(edited_payload["supplements"])
+                                ),
+                                "nutrition.weekly_recipe.start_minutes": (
+                                    edited_start.hour * 60 + edited_start.minute
+                                ),
+                                "nutrition.weekly_recipe.end_minutes": (
+                                    edited_end.hour * 60 + edited_end.minute
+                                ),
+                            },
                         )
                         connection.commit()
                         st.session_state["nutrition_weekly_recipe_keep_table_open"] = True
@@ -3666,10 +4184,70 @@ def _render_weekly_recipe(connection, records):
                     top_offset=80,
                 )
                 st.session_state["nutrition_weekly_recipe_editor_last_scrolled_nonce"] = editor_focus_nonce
-        st.caption(_ui(
-            "点选单元格即可填写或编辑计划内容；实际饮食仍以“编辑今日饮食数据”中保存的记录为准。",
-            "Select any cell to enter or edit plan content; saved entries in Edit Today's Dietary Data remain the source of truth for actual intake.",
-        ))
+        numbered_meal_slots = [slot for slot in meal_types if is_meal_slot(slot)]
+        if numbered_meal_slots:
+            meal_actions = st.columns((1.25, 1.25, 5.5))
+            if meal_actions[0].button(
+                _ui("编辑餐次", "Edit Meal"),
+                key=f"nutrition_weekly_recipe_edit_selected_{plan_id}",
+                use_container_width=True,
+            ):
+                # Reuse the full plan editor: it already exposes weekday,
+                # meal, timing, food, supplement, medication, and notes.
+                initial_meal_slot = numbered_meal_slots[0]
+                current_item = recipe_by_slot.get((0, initial_meal_slot))
+                st.session_state["nutrition_weekly_recipe_edit_slot"] = {
+                    "weekday": 0,
+                    "meal_type": initial_meal_slot,
+                    "item_id": current_item.get("item_id") if current_item else None,
+                }
+                st.session_state["nutrition_weekly_recipe_editor_focus_nonce"] = (
+                    int(st.session_state.get("nutrition_weekly_recipe_editor_focus_nonce", 0)) + 1
+                )
+                st.session_state["nutrition_weekly_recipe_keep_table_open"] = True
+                st.rerun()
+            if meal_actions[1].button(
+                _ui("删除餐次", "Delete Meal"),
+                key=f"nutrition_weekly_recipe_open_delete_selected_{plan_id}",
+                use_container_width=True,
+            ):
+                st.session_state[f"nutrition_weekly_recipe_show_delete_{plan_id}"] = True
+                st.rerun()
+            if st.session_state.get(f"nutrition_weekly_recipe_show_delete_{plan_id}"):
+                st.warning(_ui(
+                    "删除餐次会删除本周该餐次的全部计划内容。",
+                    "Deleting a meal removes all of that meal's planned content for this week.",
+                ))
+                st.markdown(
+                    f"**{_ui('选择要删除的餐次', 'Choose meal to delete')}**"
+                )
+                delete_slot_column, confirm_delete_column, cancel_delete_column = st.columns(
+                    3, vertical_alignment="bottom",
+                )
+                delete_meal_slot = delete_slot_column.selectbox(
+                    _ui("选择要删除的餐次", "Choose meal to delete"), numbered_meal_slots,
+                    format_func=_weekly_recipe_slot_name,
+                    key=f"nutrition_weekly_recipe_delete_slot_{plan_id}",
+                    label_visibility="collapsed",
+                )
+                if confirm_delete_column.button(
+                    _ui("确认删除餐次", "Confirm Delete Meal"),
+                    key=f"nutrition_weekly_recipe_confirm_delete_{plan_id}",
+                    use_container_width=True,
+                ):
+                    _delete_weekly_recipe_slot(connection, plan_id, delete_meal_slot)
+                    selected = st.session_state.get("nutrition_weekly_recipe_edit_slot") or {}
+                    if selected.get("meal_type") == delete_meal_slot:
+                        st.session_state.pop("nutrition_weekly_recipe_edit_slot", None)
+                    st.session_state.pop(f"nutrition_weekly_recipe_show_delete_{plan_id}", None)
+                    st.rerun()
+                if cancel_delete_column.button(
+                    _ui("取消", "Cancel"),
+                    key=f"nutrition_weekly_recipe_cancel_delete_{plan_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pop(f"nutrition_weekly_recipe_show_delete_{plan_id}", None)
+                    st.rerun()
     finally:
         cycle_details_directory.__exit__(None, None, None)
 
@@ -3797,9 +4375,9 @@ def _render_personal_nutrition_advice(connection, records, day):
 
 def main():
     st.title(TR("domain.nutrition.title")); st.caption(TR("domain.nutrition.intro"))
-    # Nutrition owns the template schema extension, so apply pending migrations
-    # before reading templates (existing databases receive template_type here).
-    connection = connect(migrate=True)
+    # The dashboard startup/pipeline owns schema migration. Re-checking it on
+    # every Streamlit rerun delays ordinary nutrition-page interactions.
+    connection = connect(migrate=False)
     try:
         records = list_meal_records(connection, limit=200)
         today_value = date.today().isoformat()
@@ -3818,30 +4396,36 @@ def main():
             pending_record = get_meal_record(connection, pending_selected) if pending_selected else None
             if deferred_next and returned_to_nutrition:
                 deferred_date = date.fromisoformat(deferred_next["date"])
-                st.session_state["simple_active_meal_type"] = _next_unrecorded_meal_type(
-                    records, deferred_date, deferred_next["meal_type"]
+                st.session_state["simple_active_meal_slot"] = _next_unrecorded_meal_slot(
+                    records, deferred_date, deferred_next["meal_slot"]
                 )
                 st.session_state["simple_active_meal_date"] = deferred_date
                 st.session_state.pop("simple_nutrition_advance_on_reentry", None)
             elif pending_record:
                 # The save rerun stays on the meal that was just saved. The next
                 # meal is selected only when the user returns from another page.
-                st.session_state["simple_active_meal_type"] = pending_record["meal_type"]
+                st.session_state["simple_active_meal_slot"] = (
+                    pending_record.get("meal_slot")
+                    or inferred_meal_slot(
+                        pending_record["meal_type"],
+                        pending_record.get("actual_meal_time") or pending_record.get("eaten_at"),
+                    )
+                )
                 st.session_state["simple_active_meal_date"] = date.fromisoformat(pending_record["date"])
 
             st.session_state.setdefault(
-                "simple_active_meal_type",
-                _next_unrecorded_meal_type(records, date.today()),
+                "simple_active_meal_slot",
+                _next_unrecorded_meal_slot(records, date.today()),
             )
             st.session_state.setdefault("simple_active_meal_date", date.today())
-            active_type = st.session_state["simple_active_meal_type"]
+            active_slot = st.session_state["simple_active_meal_slot"]
             active_date = st.session_state["simple_active_meal_date"]
             active_date_value = active_date.isoformat() if hasattr(active_date, "isoformat") else str(active_date)
-            active_record_id = find_meal_id(connection, active_type, active_date_value)
+            active_record_id = find_meal_id_for_slot(connection, active_slot, active_date_value)
             existing = get_meal_record(connection, active_record_id) if active_record_id else None
             with st.expander(_ui("编辑今日饮食数据", "Edit Today's Dietary Data"), expanded=False):
                 meal_state = _meal_form(connection, existing, records, targets, flash_key)
-            feedback_summary, resolved_targets = _render_current_nutrition_details(
+            _render_current_nutrition_details(
                 connection, records, meal_state, targets,
             )
             history_focus_nonce = st.session_state.get("nutrition_history_focus_nonce", 0)
@@ -3855,9 +4439,6 @@ def main():
             )
             if should_focus_history:
                 st.session_state["nutrition_history_last_scrolled_nonce"] = history_focus_nonce
-            _render_current_nutrition_advice(
-                connection, feedback_summary, resolved_targets, meal_state,
-            )
     finally:
         connection.close()
     st.caption(TR("safety.medical"))

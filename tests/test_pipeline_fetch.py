@@ -116,9 +116,24 @@ class PipelineFetchTests(unittest.TestCase):
                 {"polar_client": FakeClient()},
                 today=date(2026, 7, 10),
             )
-        self.assertEqual(summary["warning_count"], 2)
+        self.assertEqual(summary["warning_count"], 1)
         self.assertEqual(summary["items_fetched"], 6)
-        self.assertEqual(summary["endpoint_results"][-1]["status"], "warning")
+        self.assertEqual(summary["endpoint_results"][-2]["status"], "warning")
+        self.assertEqual(summary["endpoint_results"][-1]["status"], "unavailable")
+
+    def test_cardio_load_404_is_non_blocking_capability_unavailable(self):
+        results = [success_result([{"ok": True}]) for _ in range(7)] + [
+            failure_result(404),
+        ]
+        with patch("src.pipeline.fetch.fetch_and_save_result", side_effect=results):
+            summary = fetch.run(
+                {"polar_client": FakeClient()},
+                today=date(2026, 7, 10),
+            )
+        cardio = summary["endpoint_results"][-1]
+        self.assertEqual(cardio["endpoint"], "cardio_load")
+        self.assertEqual(cardio["status"], "unavailable")
+        self.assertEqual(summary["warning_count"], 0)
 
     def test_required_endpoint_failure_raises_safe_code(self):
         results = [failure_result(503)] + [success_result() for _ in range(7)]
@@ -130,6 +145,60 @@ class PipelineFetchTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, "FETCH_REQUIRED_ENDPOINT_FAILED")
         self.assertNotIn("payload", raised.exception.safe_message.lower())
+
+    def test_sleep_sync_requests_sixty_days_of_polar_sleep_and_nightly_data(self):
+        def execute_fetcher(_label, _filename, fetcher, **_kwargs):
+            return success_result(fetcher())
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch(
+                "src.pipeline.fetch.fetch_and_save_result", side_effect=execute_fetcher,
+            ), patch(
+                "src.pipeline.fetch.fetch_sleep_details",
+                return_value={"nightSleeps": [{"sleepDate": "2026-07-22"}]},
+            ) as sleep_details, patch(
+                "src.pipeline.fetch.fetch_nightly_recharge_with_samples",
+                return_value={"nightlyRechargeResults": []},
+            ) as nightly_recharge, patch(
+                "src.pipeline.fetch.fetch_continuous_heart_rate_for_dates",
+                return_value={"heartRateSamplesPerDay": []},
+            ):
+                fetch.run(
+                    {"polar_client": FakeClient()},
+                    today=date(2026, 7, 22),
+                    raw_dir=Path(directory),
+                )
+
+        expected_from = "2026-05-24"
+        self.assertEqual(sleep_details.call_args.kwargs["from_date"], expected_from)
+        self.assertEqual(nightly_recharge.call_args.kwargs["from_date"], expected_from)
+
+    def test_routine_sync_requests_only_recent_sleep_and_nightly_data(self):
+        def execute_fetcher(_label, _filename, fetcher, **_kwargs):
+            return success_result(fetcher())
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch(
+                "src.pipeline.fetch.fetch_and_save_result", side_effect=execute_fetcher,
+            ), patch(
+                "src.pipeline.fetch.fetch_sleep_details",
+                return_value={"nightSleeps": [{"sleepDate": "2026-07-22"}]},
+            ) as sleep_details, patch(
+                "src.pipeline.fetch.fetch_nightly_recharge_with_samples",
+                return_value={"nightlyRechargeResults": []},
+            ) as nightly_recharge, patch(
+                "src.pipeline.fetch.fetch_continuous_heart_rate_for_dates",
+                return_value={"heartRateSamplesPerDay": []},
+            ):
+                fetch.run(
+                    {"polar_client": FakeClient(), "trigger_type": "catch_up"},
+                    today=date(2026, 7, 22),
+                    raw_dir=Path(directory),
+                )
+
+        expected_from = "2026-07-15"
+        self.assertEqual(sleep_details.call_args.kwargs["from_date"], expected_from)
+        self.assertEqual(nightly_recharge.call_args.kwargs["from_date"], expected_from)
 
 
 if __name__ == "__main__":

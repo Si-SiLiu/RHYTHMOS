@@ -115,7 +115,7 @@ def _synthetic_input() -> dict[str, Any]:
         ],
         "presentation": {"locale": "zh-CN", "unit_system": "metric"},
         "contract_versions": {
-            "prompt_version": "1.3.0",
+            "prompt_version": "1.3.1",
             "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
         },
@@ -146,7 +146,7 @@ def _synthetic_output() -> dict[str, Any]:
         "safety_notice": "这不是医疗诊断。",
         "audit": {
             "model_version": "synthetic-model-snapshot",
-            "prompt_version": "1.3.0",
+            "prompt_version": "1.3.1",
             "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
             "input_snapshot_digest": "b" * 64,

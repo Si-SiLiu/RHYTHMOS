@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 from src import kubios_import
+from src.kubios_metrics.normalizer import rebuild as rebuild_kubios_normalized
 
 from .audit import mark_downstream_updated, mark_reviewed
 from .models import ImportResult
@@ -70,6 +71,10 @@ def import_reviewed_result(connection, audit_id, fields, user_confirmed=False, r
     ).fetchone()
     raw_record_id = raw_record[0]
     kubios_import.sync_daily_metrics(connection, [row])
+    # Build the selected normalized projection before returning success. Both
+    # the Recovery and Feedback tables read this projection, so deferring it
+    # to a background sync could briefly render a newly saved row as empty.
+    rebuild_kubios_normalized(connection, dates=[normalized["date"]])
     mark_reviewed(connection, audit_id, "imported", raw_record_id)
 
     downstream = {}

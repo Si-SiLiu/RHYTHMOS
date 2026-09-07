@@ -211,9 +211,15 @@ def calculate_food_values(catalog: dict | None, quantity: object, unit: object) 
     return result
 
 
-def recent_foods(connection: sqlite3.Connection, limit=8) -> list[dict]:
-    rows = connection.execute(
-        """WITH ranked AS (
+def recent_foods(connection: sqlite3.Connection, limit: int | None = 8) -> list[dict]:
+    """Return latest saved preference for each food.
+
+    ``limit=None`` deliberately has no database limit.  It is used by editors
+    when resolving learned amount/unit defaults, so an older learned food is
+    never forgotten merely because newer foods exist.  Callers that render a
+    compact recent list continue to use the default limit.
+    """
+    query = """WITH ranked AS (
                SELECT i.food_catalog_id,i.custom_food_name,i.item_type,i.quantity,i.unit,i.created_at,
                       COUNT(*) OVER (PARTITION BY i.food_catalog_id,i.custom_food_name) AS usage_count,
                       ROW_NUMBER() OVER (
@@ -223,9 +229,12 @@ def recent_foods(connection: sqlite3.Connection, limit=8) -> list[dict]:
                FROM meal_items i JOIN meal_records r ON r.id=i.meal_record_id
                WHERE i.deleted_at IS NULL AND r.deleted_at IS NULL
            ) SELECT * FROM ranked WHERE preference_rank=1
-             ORDER BY usage_count DESC,created_at DESC LIMIT ?""",
-        (int(limit),),
-    ).fetchall()
+             ORDER BY usage_count DESC,created_at DESC"""
+    parameters: tuple[int, ...] = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters = (max(0, int(limit)),)
+    rows = connection.execute(query, parameters).fetchall()
     catalog = food_catalog_by_id(connection)
     result = []
     for row in rows:

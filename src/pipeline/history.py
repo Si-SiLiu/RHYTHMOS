@@ -220,7 +220,19 @@ class SyncHistory:
                        h.baseline_updated, h.recovery_updated,
                        h.reports_generated, h.warning_count,
                        h.local_coach_records_updated, h.prospective_eligible_days,
-                       h.trigger_type
+                       h.trigger_type,
+                       COALESCE(
+                           (
+                               SELECT s.warning_count
+                               FROM sync_history s
+                               WHERE s.run_id = h.run_id
+                                 AND s.step = 'fetch'
+                                 AND s.success = 1
+                               ORDER BY s.id DESC
+                               LIMIT 1
+                           ),
+                           0
+                       ) AS source_warning_count
                 FROM sync_history h
                 WHERE h.step = 'pipeline'
                 ORDER BY h.id DESC

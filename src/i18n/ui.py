@@ -14,6 +14,7 @@ from ..ui_controls import render_app_shell_styles
 
 SESSION_LANGUAGE_KEY = "ui_language"
 LANGUAGE_SELECTOR_KEY = "ui_language_selector"
+STARTUP_CATCH_UP_SESSION_KEY = "drc_startup_catch_up_checked"
 
 
 # One coherent outlined icon family keeps navigation recognisable without
@@ -33,7 +34,6 @@ NAVIGATION_GROUPS = (
     (
         "navigation.performance_system",
         (
-            ("performance_planner", "pages/8_Performance_Planner.py", ":material/calendar_month:"),
             ("weekly_plan", "pages/9_Weekly_Plan.py", ":material/view_week:"),
             ("training_studio", "pages/6_Training_Studio.py", ":material/psychology:"),
         ),
@@ -56,8 +56,26 @@ def current_language(session_state: MutableMapping[str, object]) -> str:
     return language
 
 
+def _queue_startup_catch_up(st) -> None:
+    """Request a missed sync from every app entry page, once per session."""
+
+    if is_demo_mode() or st.session_state.get(STARTUP_CATCH_UP_SESSION_KEY):
+        return
+    try:
+        from src.scheduler.startup import start_catch_up_if_due
+
+        outcome = start_catch_up_if_due()
+    except Exception:
+        # Navigation must remain available even if the optional local scheduler
+        # is not installed yet. The Settings page exposes its detailed state.
+        return
+    if outcome.dispatched or outcome.state != "sync_running":
+        st.session_state[STARTUP_CATCH_UP_SESSION_KEY] = True
+
+
 def render_sidebar(st, active_page: str) -> tuple[str, object]:
     render_app_shell_styles(st)
+    _queue_startup_catch_up(st)
     # Track page transitions so forms can distinguish a normal Streamlit
     # rerun from returning to a page after visiting another section.
     st.session_state["drc_previous_page"] = st.session_state.get("drc_active_page")

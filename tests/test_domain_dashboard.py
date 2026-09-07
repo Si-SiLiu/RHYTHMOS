@@ -10,6 +10,7 @@ from src.domain_dashboard_data import (
     get_latest_recovery,
     get_recovery_baselines,
     get_latest_sleep,
+    get_sleep_history,
     get_latest_training,
     get_recent_nutrition,
     get_training_history,
@@ -142,6 +143,63 @@ class DomainDashboardTests(unittest.TestCase):
         self.assertEqual(result["rem_sleep_duration"], 5400)
         self.assertEqual(result["average_sleep_hr_bpm"], 55)
         self.assertEqual(result["minimum_sleep_hr_bpm"], 50)
+
+        compact = get_latest_sleep(self.path, include_continuous_hr=False)
+        self.assertIsNone(compact["average_sleep_hr_bpm"])
+        self.assertIsNone(compact["minimum_sleep_hr_bpm"])
+
+    def test_polar_only_sleep_history_uses_continuous_hr_and_never_manual_fill(self):
+        raw = {
+            "sleepResult": {
+                "hypnogram": {
+                    "sleepStart": "2026-07-01T23:00:00+08:00",
+                    "sleepEnd": "2026-07-02T07:00:00+08:00",
+                }
+            },
+            "sleepEvaluation": {"sleepSpan": "28800s"},
+        }
+        continuous = {
+            "date": "2026-07-02",
+            "samples": [
+                {"heartRate": 50, "offsetMillis": 60 * 60 * 1000},
+                {"heartRate": 60, "offsetMillis": 6 * 60 * 60 * 1000},
+            ],
+        }
+        self.connection.execute(
+            "INSERT INTO polar_sleep_raw(source,external_id,date,raw_json) VALUES('polar','sleep','2026-07-02',?)",
+            (json.dumps(raw),),
+        )
+        self.connection.execute(
+            "INSERT INTO polar_continuous_hr_raw(source,external_id,date,raw_json) VALUES('polar','hr','2026-07-02',?)",
+            (json.dumps(continuous),),
+        )
+        self.connection.execute(
+            """INSERT INTO manual_sleep_logs(
+                   sleep_date,average_sleep_hr_bpm,deep_sleep_duration_minutes
+               ) VALUES('2026-07-02',54,90)"""
+        )
+        self.connection.execute(
+            "INSERT INTO manual_sleep_logs(sleep_date,average_sleep_hr_bpm) VALUES('2026-07-03',53)"
+        )
+        self.connection.commit()
+
+        compact = get_sleep_history(
+            self.path, include_continuous_hr=False, polar_only=True,
+        )[0]
+        self.assertEqual(
+            [item["date"] for item in get_sleep_history(self.path, polar_only=True)],
+            ["2026-07-02"],
+        )
+        self.assertIsNone(compact["resolved_fields"]["average_sleep_hr_bpm"]["value"])
+        self.assertIsNone(compact["resolved_fields"]["deep_sleep_duration_minutes"]["value"])
+
+        record = get_sleep_history(
+            self.path, include_continuous_hr=True, polar_only=True,
+        )[0]
+        average_hr = record["resolved_fields"]["average_sleep_hr_bpm"]
+        self.assertEqual(average_hr["value"], 55)
+        self.assertEqual(average_hr["value_source"], "polar")
+        self.assertIsNone(record["resolved_fields"]["deep_sleep_duration_minutes"]["value"])
 
     def test_recovery_projection_uses_morning_fields(self):
         self.connection.execute("INSERT INTO daily_recovery_metrics(date,morning_rmssd,morning_mean_hr) VALUES('2026-07-01',42,58)")

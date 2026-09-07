@@ -206,6 +206,24 @@ class SimplifiedTrainingEntryTests(unittest.TestCase):
         self.assertIn("except Exception as exc:", failure_block)
         self.assertNotIn("session_state.clear", failure_block)
 
+    def test_37a_historical_training_details_reuse_today_action_editor(self):
+        history_block = DASHBOARD.split("def _details(connection, session", 1)[1]
+        self.assertIn("_today_action_input_table(", history_block)
+        self.assertIn("periodic_import_date=session.get(\"date\")", history_block)
+        self.assertIn("notes_key=notes_key", history_block)
+        self.assertIn(
+            "with st.expander(historical_details_title, expanded=auto_expand):",
+            history_block,
+        )
+
+    def test_37b_current_and_historical_editors_share_import_ui(self):
+        self.assertIn(
+            'TR("training_logging.import_matching_periodic_plan")', DASHBOARD
+        )
+        self.assertNotIn(
+            'else "training_logging.import_periodic_plan"', DASHBOARD
+        )
+
     # Regression and safety (38–47)
     def test_38_training_volume_formula_unchanged(self):
         result = summarize_training([{"primary_muscle_group": "legs", "sets": [self._set()]}])

@@ -97,6 +97,11 @@ def run_triggered_pipeline(
             pipeline_summary = pipeline_runner.run(
                 dry_run=dry_run,
                 trigger_type=trigger_type,
+                # Scheduled and app-open refreshes only need to regenerate
+                # deterministic and Codex feedback when their source snapshot
+                # changed. Manual saves remain full runs because the change can
+                # be local (for example, a reviewed recovery record).
+                if_new_data=trigger_type in {"scheduled", "catch_up"},
                 acquire_lock=acquire_lock,
             )
         except Exception as exc:

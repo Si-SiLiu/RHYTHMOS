@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Faster history loading (2026-09-07)
+
+- Nutrition history loads meals, food details and supplements in bounded
+  batches, resolving the food catalog once per call.
+- Training history loads sessions, current Polar values, exercises and sets
+  in bounded batches, preserving existing result structures and ordering.
+- Added equivalence, multi-batch and freshness regression tests; pages and
+  controls remain unchanged.
+
+## Unreleased — Runtime optimization (2026-09-07)
+
+- Current database connections avoid repeated migration writes while retaining
+  ledger/checksum checks, pending-migration backups and legacy repairs.
+- Full baseline rebuilds reuse per-run source reads without changing formulas,
+  stored outputs, page layouts or features.
+- Launcher restart detection covers all component frontend assets.
+- Added isolated concurrency, compatibility and numerical-equivalence tests.
+
 ## Unreleased — Cognitive Training Studio MVP
 
 - Added browser-based Focus & Alertness and Working Memory training plans with
@@ -791,17 +809,17 @@
 ### Latest Local Pipeline Sync
 
 <!-- PIPELINE_SYNC_START -->
-- Last Pipeline Sync: 2026-08-08T22:04:36+08:00
+- Last Pipeline Sync: 2026-09-07T09:37:50+08:00
 - Result: completed through report generation
-- Records Imported: 0
-- Metrics Updated: 51
-- Baselines Updated: 1020
-- Recovery Scores Updated: 51
+- Records Imported: 2
+- Metrics Updated: 81
+- Baselines Updated: 1620
+- Recovery Scores Updated: 74
 - Reports Generated: 1
 - Endpoint Warnings: 0
-- Confidence Updated: 51
-- Local Coach Records Updated: 51
-- Prospective Eligible Days: 19 / 14
+- Confidence Updated: 81
+- Local Coach Records Updated: 74
+- Prospective Eligible Days: 40 / 14
 <!-- PIPELINE_SYNC_END -->
 
 ## 0.10.0 — 2026-07-10 — Governance Finalization & Release Readiness

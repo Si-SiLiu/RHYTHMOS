@@ -98,10 +98,40 @@ def sleep_dates(payload):
     return dates
 
 
+def _bounded_date_ranges(from_date=None, to_date=None, *, max_span_days):
+    """Split an inclusive Polar date range into API-supported spans.
+
+    Polar validates the difference between the two date arguments rather than
+    the number of calendar dates.  A 28-day maximum therefore permits both
+    endpoints to receive ``start`` through ``start + 28 days`` inclusively.
+    """
+    if not from_date or not to_date:
+        return [(from_date, to_date)]
+    start = date.fromisoformat(str(from_date)[:10])
+    end = date.fromisoformat(str(to_date)[:10])
+    if start > end:
+        return [(from_date, to_date)]
+
+    ranges = []
+    while start <= end:
+        chunk_end = min(start + timedelta(days=max_span_days), end)
+        ranges.append((start.isoformat(), chunk_end.isoformat()))
+        start = chunk_end + timedelta(days=1)
+    return ranges
+
+
 def fetch_sleep_details(client, from_date=None, to_date=None, ensure_date=None):
     """Expand the v4 sleep date listing into complete per-night records."""
-    listing = client.get_sleep(from_date=from_date, to_date=to_date)
-    dates = sleep_dates(listing)
+    dates = []
+    # The v4 sleeps endpoint accepts at most a 30-day range. Keep one day of
+    # headroom so this and Nightly Recharge use the same safe range policy.
+    for chunk_from, chunk_to in _bounded_date_ranges(
+        from_date, to_date, max_span_days=28,
+    ):
+        listing = client.get_sleep(from_date=chunk_from, to_date=chunk_to)
+        for date_value in sleep_dates(listing):
+            if date_value not in dates:
+                dates.append(date_value)
     if ensure_date and str(ensure_date) not in dates:
         dates.append(str(ensure_date))
     if not dates:
@@ -148,14 +178,19 @@ def fetch_nightly_recharge_with_samples(
     client, from_date=None, to_date=None, sample_dates=None,
 ):
     """Fetch range summaries, then merge samples fetched one exclusive day at a time."""
-    listing = client.get_nightly_recharge(
-        from_date=from_date, to_date=to_date, samples=False,
-    )
     grouped = {}
-    for item in _nightly_recharge_items(listing):
-        item_date = _nightly_recharge_date(item)
-        if item_date:
-            grouped[item_date] = dict(item)
+    # Polar's Nightly Recharge range endpoint permits a maximum 28-day
+    # difference between from/to, so history has to be fetched in segments.
+    for chunk_from, chunk_to in _bounded_date_ranges(
+        from_date, to_date, max_span_days=28,
+    ):
+        listing = client.get_nightly_recharge(
+            from_date=chunk_from, to_date=chunk_to, samples=False,
+        )
+        for item in _nightly_recharge_items(listing):
+            item_date = _nightly_recharge_date(item)
+            if item_date:
+                grouped[item_date] = dict(item)
 
     dates = set(grouped)
     dates.update(str(value) for value in (sample_dates or []) if value)

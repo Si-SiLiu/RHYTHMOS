@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import signal
 import socket
@@ -86,11 +87,13 @@ def runtime_fingerprint(project_root: Path = BASE_DIR) -> str:
     # Streamlit's custom component files are served as static frontend assets.
     # Include them so a rebuilt app never reuses a process that still serves an
     # older training component after an HTML, JavaScript, or CSS-only fix.
-    component_root = root / "src" / "cognitive_component_frontend"
-    for pattern in ("*.html", "*.js", "*.css"):
-        paths.extend(sorted(component_root.rglob(pattern)))
+    for component_root in sorted((root / "src").glob("*_frontend")):
+        for pattern in ("*.html", "*.js", "*.css"):
+            paths.extend(sorted(component_root.rglob(pattern)))
     paths.extend(sorted((root / "locales").glob("*.json")))
     digest = hashlib.sha256()
+    # A native launch must not reuse a dashboard still running under Rosetta.
+    digest.update(platform.machine().encode("ascii"))
     try:
         for path in paths:
             digest.update(str(path.relative_to(root)).encode("utf-8"))
@@ -181,6 +184,10 @@ def streamlit_command(
         f"--server.address={host}",
         f"--server.port={port}",
         "--server.headless=true",
+        # Packaged RHYTHMOS is restarted for source updates, so polling the
+        # whole workspace for developer hot-reload changes only adds startup
+        # and background filesystem work for end users.
+        "--server.fileWatcherType=none",
         "--browser.gatherUsageStats=false",
     ]
 

@@ -403,6 +403,7 @@ def _today_feedback_tables(today_value: str, *, sleep: dict | None,
             "hf_power_nu": advanced_value("hf_power_nu"),
             "lf_hf_ratio": advanced_value("lf_hf_ratio"),
             "measurement_quality": advanced_value("measurement_quality", (recovery or {}).get("measurement_quality")),
+            "mood_code": advanced_value("mood_code"),
         },
         tr=TR, language=LANGUAGE, format_date=format_date, ui=_ui,
     )
@@ -531,6 +532,7 @@ def _load_feedback_page_inputs(database_revision, today_value, language):
 
 def main() -> None:
     today_value = date.today().isoformat()
+    prior_value = (date.today() - timedelta(days=1)).isoformat()
     # This is a same-day report. Each card and table uses today's date only;
     # a domain with no completed record remains empty rather than borrowing a
     # prior day's data.
@@ -542,8 +544,8 @@ def main() -> None:
 
     st.title(TR("navigation.feedback"))
     st.caption(_ui(
-        "将最近的恢复、睡眠、训练和营养记录放在一起，帮助你确定今天最值得优先处理的事。",
-        "Bring recent recovery, sleep, training, and nutrition records together to identify today's clearest priority.",
+        "晨练建议以今天的睡眠与晨间恢复为主，结合昨天的训练和营养，帮助你确定今天最值得优先处理的事。",
+        "Morning training guidance uses today's sleep and morning recovery together with yesterday's training and nutrition to identify today's clearest priority.",
     ))
     st.markdown(FEEDBACK_CSS, unsafe_allow_html=True)
 
@@ -566,25 +568,27 @@ def main() -> None:
             status=_status_for_sleep(sleep),
         )
     with cards[2]:
-        duration = (today_training or {}).get("duration_minutes")
+        prior_training = _training_data_for_date(prior_value)
+        duration = (prior_training or {}).get("duration_minutes")
         _card(
-            _ui("今日训练", "Today's training"),
+            _ui("昨日训练", "Yesterday's training"),
             minutes_to_hms(duration) if duration not in (None, "") else TR("common.no_data"),
-            _ui("目标日期：", "Target date: ") + format_date(today_value, LANGUAGE),
+            _ui("记录日期：", "Record date: ") + format_date(prior_value, LANGUAGE),
         )
     with cards[3]:
+        prior_nutrition = _today_nutrition_snapshot(prior_value)
         _card(
-            _ui("营养记录完整度", "Nutrition completeness"),
-            _completion((nutrition.get("summary") or {}).get("data_completeness")),
-            _ui("今日记录：", "Today's record: ") + format_date(nutrition.get("date"), LANGUAGE),
+            _ui("昨日营养记录完整度", "Yesterday's nutrition completeness"),
+            _completion((prior_nutrition.get("summary") or {}).get("data_completeness")),
+            _ui("记录日期：", "Record date: ") + format_date(prior_nutrition.get("date") or prior_value, LANGUAGE),
         )
 
     if st.button(
-        _ui("生成 Codex 综合反馈", "Generate Codex feedback"),
+        _ui("生成 Codex 晨练建议", "Generate Codex morning training guidance"),
         key=f"generate_codex_feedback_{today_value}",
         type="primary",
     ):
-        with st.spinner(_ui("Codex 正在分析今日综合数据…", "Codex is analyzing today's data…")):
+        with st.spinner(_ui("Codex 正在生成今日晨练建议…", "Codex is generating today's morning training guidance…")):
             try:
                 generate_feedback_for_date(today_value, language=LANGUAGE)
             except AIFeedbackError as exc:

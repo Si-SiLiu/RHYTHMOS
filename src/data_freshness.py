@@ -1,6 +1,7 @@
 """Aggregate-only source-to-database freshness diagnostics."""
 
 import argparse
+from functools import lru_cache
 import json
 import re
 import sqlite3
@@ -46,9 +47,12 @@ def _collect_dates(value, dates):
             _collect_dates(child, dates)
 
 
-def latest_raw_date(path):
+@lru_cache(maxsize=len(ENDPOINT_FILES) * 2)
+def _latest_raw_date_for_revision(path_text, modified_at_ns, size):
+    """Parse a raw endpoint file once for each observed file revision."""
+    del modified_at_ns, size  # Revision fields intentionally participate in the cache key.
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = json.loads(Path(path_text).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if isinstance(value, dict) and value.get("ok") is False:
@@ -56,6 +60,18 @@ def latest_raw_date(path):
     dates = []
     _collect_dates(value, dates)
     return max(dates) if dates else None
+
+
+def latest_raw_date(path):
+    """Return an endpoint's latest date without reparsing unchanged raw JSON."""
+    target = Path(path)
+    try:
+        stat = target.stat()
+    except OSError:
+        return None
+    return _latest_raw_date_for_revision(
+        str(target.resolve()), stat.st_mtime_ns, stat.st_size,
+    )
 
 
 def _max_date(connection, table):

@@ -35,6 +35,7 @@ from src.personal_profile import (
     save_personal_goals,
     save_personal_profile,
 )
+from src.input_habits import record_input_habit
 from src.ui_controls import render_manual_input_styles
 
 
@@ -487,6 +488,12 @@ def main():
         if profile_submitted:
             try:
                 save_personal_profile(connection, profile_data)
+                record_input_habit(
+                    connection, "personal.profile",
+                    fields=("height_cm",),
+                    choices={"personal.gender": profile_data.get("gender")},
+                    numeric={"personal.height_cm": profile_data.get("height_cm")},
+                )
                 st.session_state["personal_save_notice"] = TR("personal_info.profile_saved"); st.rerun()
             except ValueError:
                 st.error(TR("personal_info.invalid_profile"))
@@ -499,6 +506,15 @@ def main():
             else:
                 try:
                     create_body_measurement(connection, body_data)
+                    record_input_habit(
+                        connection, "personal.body",
+                        fields=("weight_kg", "body_fat_percent", "waist_cm"),
+                        numeric={
+                            "personal.weight_kg": body_data.get("weight_kg"),
+                            "personal.body_fat_percent": body_data.get("body_fat_percent"),
+                            "personal.waist_cm": body_data.get("waist_cm"),
+                        },
+                    )
                     st.session_state["personal_save_notice"] = TR("personal_info.body_saved"); st.rerun()
                 except ValueError:
                     st.error(TR("personal_info.invalid_body"))
@@ -508,6 +524,17 @@ def main():
         if goals_submitted:
             try:
                 save_personal_goals(connection, goals_data)
+                record_input_habit(
+                    connection, "personal.goals",
+                    fields=("target_weight_kg", "target_body_fat_percent", "target_waist_cm"),
+                    choices={"personal.training_goal": goals_data.get("training_goal")},
+                    numeric={
+                        "personal.target_weight_kg": goals_data.get("target_weight_kg"),
+                        "personal.target_body_fat_percent": goals_data.get("target_body_fat_percent"),
+                        "personal.target_waist_cm": goals_data.get("target_waist_cm"),
+                        "personal.daily_calorie_adjustment_kcal": goals_data.get("daily_calorie_adjustment_kcal"),
+                    },
+                )
                 st.session_state["personal_save_notice"] = TR("personal_info.goals_saved"); st.rerun()
             except ValueError:
                 st.error(TR("personal_info.invalid_goals"))

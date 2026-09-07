@@ -1,7 +1,7 @@
 import re
 import sqlite3
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -426,6 +426,10 @@ def _ai_feedback_is_stale(connection, feedback):
     if generated_at is None or not feedback_date:
         return True
     try:
+        prior_date = (date.fromisoformat(str(feedback_date)) - timedelta(days=1)).isoformat()
+    except ValueError:
+        return True
+    try:
         from src.ai_coach_contract import load_contract
 
         audit = feedback.get("audit") or {}
@@ -445,9 +449,16 @@ def _ai_feedback_is_stale(connection, feedback):
             UNION ALL SELECT MAX(updated_at) FROM baseline_metrics WHERE date=?
             UNION ALL SELECT MAX(updated_at) FROM recovery_scores WHERE date=?
             UNION ALL SELECT MAX(updated_at) FROM recovery_confidence WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM daily_recovery_metrics WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM daily_training_summary WHERE date=?
             UNION ALL SELECT MAX(updated_at) FROM daily_nutrition_summary WHERE date=?
+            UNION ALL SELECT MAX(updated_at) FROM meal_records
+                             WHERE date=? AND deleted_at IS NULL
             """,
-            (feedback_date, feedback_date, feedback_date, feedback_date, feedback_date),
+            (
+                feedback_date, feedback_date, feedback_date, feedback_date,
+                prior_date, prior_date, prior_date, prior_date,
+            ),
         ).fetchall()
     except sqlite3.OperationalError:
         return True

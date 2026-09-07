@@ -17,6 +17,11 @@ class AIFeedbackTests(unittest.TestCase):
         connection = connect(self.path)
         connection.execute(
             """INSERT INTO daily_recovery_metrics(
+                   date,training_count,training_duration,active_calories
+               ) VALUES ('2026-08-23',1,'PT45M',420)"""
+        )
+        connection.execute(
+            """INSERT INTO daily_recovery_metrics(
                    date,sleep_duration,sleep_score,nightly_hrv_rmssd,
                    nightly_resting_hr,respiration_rate,training_count,
                    training_duration,active_calories,kubios_readiness
@@ -63,6 +68,30 @@ class AIFeedbackTests(unittest.TestCase):
         self.assertNotIn("56", serialized)
         self.assertNotIn("PT7H30M", serialized)
         self.assertNotIn("raw_json", serialized)
+
+    def test_modern_saved_meals_drive_nutrition_bands(self):
+        connection = connect(self.path)
+        try:
+            connection.execute(
+                """INSERT INTO meal_records(
+                       uuid,date,meal_type,eaten_at,status,source
+                   ) VALUES ('meal-1','2026-08-23','breakfast','08:00:00','completed','manual')"""
+            )
+            connection.commit()
+            source = ai_feedback.build_feedback_source(connection, "2026-08-24")
+        finally:
+            connection.close()
+        self.assertEqual(source["nutrition"]["recording_band"], "partial")
+        self.assertEqual(source["nutrition"]["coverage_band"], "limited")
+
+    def test_morning_feedback_uses_previous_day_training_context(self):
+        connection = connect(self.path)
+        try:
+            source = ai_feedback.build_feedback_source(connection, "2026-08-24")
+        finally:
+            connection.close()
+        self.assertEqual(source["daily_metrics"]["training_count_band"], "single")
+        self.assertEqual(source["daily_metrics"]["training_duration_band"], "moderate")
 
     def test_generated_output_is_stored_for_the_feedback_page(self):
         output = valid_output()

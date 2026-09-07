@@ -14,13 +14,6 @@ from src.db import connect
 
 WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 PLAN_CATEGORIES = ("work", "study", "training", "meal", "recovery", "personal", "other")
-EVENT_COLOR_KEYS = ("blue", "green", "amber", "rose", "purple", "teal", "slate", "coral")
-EVENT_COLOR_OVERRIDES = {
-    # Keep listening lessons visually distinct from the indoor-strength
-    # training cards even when their title hashes collide.
-    "听力": "purple",
-    "listening": "purple",
-}
 NUTRITION_RECIPE_MARKERS = (
     "__nutrition_auto_recipe__:",
     "__nutrition_manual_recipe__:",
@@ -28,13 +21,35 @@ NUTRITION_RECIPE_MARKERS = (
 
 
 def event_color_key(title: object) -> str:
-    """Return a deterministic, title-based colour key for weekly plan cards."""
+    """Return a collision-resistant, title-based colour key for plan cards."""
     normalized = " ".join(str(title or "").casefold().split())
-    for token, color_key in EVENT_COLOR_OVERRIDES.items():
-        if token in normalized:
-            return color_key
-    digest = sha256(normalized.encode("utf-8")).digest()
-    return EVENT_COLOR_KEYS[int.from_bytes(digest[:4], "big") % len(EVENT_COLOR_KEYS)]
+    return sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def event_colour_slots(titles: list[object]) -> dict[str, int]:
+    """Assign a distinct, deterministic colour slot to every visible event.
+
+    A title hash supplies a stable starting point. Linear probing prevents two
+    different titles in the same weekly table from sharing a colour slot.
+    """
+    normalized_titles = {
+        " ".join(str(title or "").casefold().split())
+        for title in titles
+    }
+    occupied_slots: set[int] = set()
+    slots: dict[str, int] = {}
+    for normalized in sorted(normalized_titles, key=lambda value: event_color_key(value)):
+        slot = int(event_color_key(normalized)[:8], 16) % 360
+        while slot in occupied_slots:
+            slot += 1
+        occupied_slots.add(slot)
+        slots[normalized] = slot
+    return slots
+
+
+def event_colour_slot(title: object, slots: dict[str, int]) -> int:
+    normalized = " ".join(str(title or "").casefold().split())
+    return slots[normalized]
 
 
 def _time_ranges_overlap(left: tuple[str, str], right: tuple[str, str]) -> bool:

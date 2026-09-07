@@ -12,7 +12,7 @@ from .food_catalog import (
     NUTRIENT_COLUMNS, calculate_food_values, food_catalog_by_id, food_display_name,
 )
 from .supplements import summarize_supplements, validate_supplement
-from .validation import MEAL_TYPES
+from .validation import MEAL_TYPES, inferred_meal_slot, is_meal_slot, meal_type_for_slot
 from src.supplements import normalize_intake, product_by_id
 
 
@@ -36,16 +36,24 @@ def _normalize_meal(meal: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise ValueError("INVALID_MEAL_DATE_OR_TIME") from exc
     meal_type = meal.get("meal_type")
+    meal_slot = str(meal.get("meal_slot") or "").strip()
     status = meal.get("status", "completed")
     source = meal.get("source", "manual")
     if meal_type not in MEAL_TYPES:
         raise ValueError("INVALID_MEAL_TYPE")
+    if meal_slot and not is_meal_slot(meal_slot):
+        raise ValueError("INVALID_MEAL_SLOT")
+    if meal_slot:
+        meal_type = meal_type_for_slot(meal_slot, actual_meal_time)
+    else:
+        meal_slot = inferred_meal_slot(meal_type, actual_meal_time)
     if status not in MEAL_STATUSES:
         raise ValueError("INVALID_MEAL_STATUS")
     if source not in MEAL_SOURCES:
         raise ValueError("INVALID_MEAL_SOURCE")
     return {
-        "date": meal_date, "meal_type": meal_type, "eaten_at": actual_meal_time,
+        "date": meal_date, "meal_type": meal_type, "meal_slot": meal_slot,
+        "eaten_at": actual_meal_time,
         "planned_meal_time": planned_meal_time, "actual_meal_time": actual_meal_time,
         "status": status, "source": source,
         "notes": str(meal.get("notes") or "").strip() or None,
@@ -154,10 +162,10 @@ def save_meal_record(
             ).lastrowid
             record_id = connection.execute(
                 """INSERT INTO meal_records(
-                       uuid,date,meal_type,eaten_at,planned_meal_time,actual_meal_time,
+                       uuid,date,meal_type,meal_slot,eaten_at,planned_meal_time,actual_meal_time,
                        status,source,notes,legacy_meal_event_id
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (_uuid(), values["date"], values["meal_type"], values["eaten_at"],
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (_uuid(), values["date"], values["meal_type"], values["meal_slot"], values["eaten_at"],
                  values["planned_meal_time"], values["actual_meal_time"], values["status"],
                  values["source"], values["notes"], legacy_id),
             ).lastrowid
@@ -170,10 +178,10 @@ def save_meal_record(
                 raise ValueError("MEAL_RECORD_NOT_FOUND")
             legacy_id = row[0]
             connection.execute(
-                """UPDATE meal_records SET date=?,meal_type=?,eaten_at=?,planned_meal_time=?,
+                """UPDATE meal_records SET date=?,meal_type=?,meal_slot=?,eaten_at=?,planned_meal_time=?,
                        actual_meal_time=?,status=?,source=?,notes=?,updated_at=CURRENT_TIMESTAMP
                    WHERE id=?""",
-                (values["date"], values["meal_type"], values["eaten_at"],
+                (values["date"], values["meal_type"], values["meal_slot"], values["eaten_at"],
                  values["planned_meal_time"], values["actual_meal_time"], values["status"],
                  values["source"], values["notes"], record_id),
             )
@@ -265,17 +273,7 @@ def _record_supplements(connection, legacy_id: int) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def get_meal_record(connection: sqlite3.Connection, record_id: int) -> dict | None:
-    row = connection.execute(
-        "SELECT * FROM meal_records WHERE id=? AND deleted_at IS NULL", (record_id,)
-    ).fetchone()
-    if not row:
-        return None
-    record = dict(row)
-    record["items"] = [dict(item) for item in connection.execute(
-        """SELECT * FROM meal_items WHERE meal_record_id=? AND deleted_at IS NULL
-           ORDER BY id""", (record_id,)
-    ).fetchall()]
+def _food_name_lookup(connection):
     # Older records may have stored a branded catalog display name as
     # custom_food_name before branded labels were accepted by the selector.
     # Resolve those names on read so historical totals immediately use the
@@ -290,6 +288,12 @@ def get_meal_record(connection: sqlite3.Connection, record_id: int) -> dict | No
             normalized = str(name or "").strip().casefold()
             if normalized:
                 name_lookup[normalized] = item
+    return name_lookup
+
+
+def _hydrate_meal(record, items, supplements, name_lookup):
+    record = dict(record)
+    record["items"] = items
     for item in record["items"]:
         if item.get("food_catalog_id") is not None:
             continue
@@ -303,9 +307,25 @@ def get_meal_record(connection: sqlite3.Connection, record_id: int) -> dict | No
             item[nutrient] = calculated.get(nutrient)
         if calculated.get("_ocr_profile_applied"):
             item["nutrition_source"] = "label_ocr_confirmed"
-    record["supplements"] = _record_supplements(connection, record["legacy_meal_event_id"])
+    record["supplements"] = supplements
     record["summary"] = summarize_meal(record["items"])
     return record
+
+
+def get_meal_record(connection: sqlite3.Connection, record_id: int) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM meal_records WHERE id=? AND deleted_at IS NULL", (record_id,)
+    ).fetchone()
+    if not row:
+        return None
+    items = [dict(item) for item in connection.execute(
+        """SELECT * FROM meal_items WHERE meal_record_id=? AND deleted_at IS NULL
+           ORDER BY id""", (record_id,)
+    ).fetchall()]
+    return _hydrate_meal(
+        row, items, _record_supplements(connection, row["legacy_meal_event_id"]),
+        _food_name_lookup(connection),
+    )
 
 
 def summarize_meal(items: list[dict]) -> dict:
@@ -323,11 +343,44 @@ def summarize_meal(items: list[dict]) -> dict:
 def list_meal_records(connection: sqlite3.Connection, limit=100) -> list[dict]:
     if limit < 1:
         raise ValueError("INVALID_LIST_LIMIT")
-    ids = [row[0] for row in connection.execute(
-        """SELECT id FROM meal_records WHERE deleted_at IS NULL
+    rows = connection.execute(
+        """SELECT * FROM meal_records WHERE deleted_at IS NULL
            ORDER BY date DESC,eaten_at DESC,id DESC LIMIT ?""", (limit,)
-    ).fetchall()]
-    return [get_meal_record(connection, record_id) for record_id in ids]
+    ).fetchall()
+    if not rows:
+        return []
+    names = _food_name_lookup(connection)
+    records = []
+    for offset in range(0, len(rows), 400):
+        batch = rows[offset:offset + 400]
+        ids = [row["id"] for row in batch]
+        placeholders = ",".join("?" for _ in ids)
+        items_by_id = {identifier: [] for identifier in ids}
+        supplements_by_id = {identifier: [] for identifier in ids}
+        for item in connection.execute(
+            f"SELECT * FROM meal_items WHERE meal_record_id IN ({placeholders}) "
+            "AND deleted_at IS NULL ORDER BY id", ids,
+        ):
+            items_by_id[item["meal_record_id"]].append(dict(item))
+        for item in connection.execute(
+            f"""SELECT i.*,p.brand_name,p.product_name,p.product_variant,
+                      p.verification_status,p.user_confirmed,p.product_kind,
+                      l.active_amount,l.active_unit,l.active_component_name,
+                      l.position,l.timing,l.item_notes,
+                      COALESCE(p.product_name,i.custom_product_name,l.item_name) AS item_name
+               FROM supplement_intake_records i
+               LEFT JOIN supplement_products p ON p.id=i.supplement_product_id
+               LEFT JOIN meal_event_items l ON l.id=i.legacy_meal_event_item_id
+               JOIN meal_records r ON r.id=i.meal_record_id
+               WHERE i.meal_record_id IN ({placeholders}) AND i.deleted_at IS NULL
+                 AND r.legacy_meal_event_id IS NOT NULL
+               ORDER BY COALESCE(l.position,i.id),i.id""", ids,
+        ):
+            supplements_by_id[item["meal_record_id"]].append(dict(item))
+        records.extend(_hydrate_meal(
+            row, items_by_id[row["id"]], supplements_by_id[row["id"]], names,
+        ) for row in batch)
+    return records
 
 
 def recent_meal_times(
@@ -421,6 +474,7 @@ def copy_meal_record(
     } for item in original["supplements"]]
     return create_meal_record(connection, {
         "date": new_date, "meal_type": original["meal_type"],
+        "meal_slot": original.get("meal_slot"),
         "eaten_at": new_eaten_at, "status": "completed", "source": source,
     }, items, supplements)
 
@@ -453,6 +507,23 @@ def find_meal_id(connection, meal_type: str, meal_date: str) -> int | None:
            WHERE deleted_at IS NULL AND date=? AND meal_type=?
            ORDER BY updated_at DESC,id DESC LIMIT 1""",
         (meal_date, meal_type),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+def find_meal_id_for_slot(connection, meal_slot: str, meal_date: str) -> int | None:
+    """Return the newest active record for one numbered meal on a date."""
+    if not is_meal_slot(meal_slot):
+        return None
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(meal_records)")}
+    if "meal_slot" not in columns:
+        default_time = "08:00" if meal_slot == "meal_1" else "12:30" if meal_slot == "meal_2" else "18:30" if meal_slot == "meal_3" else "00:00"
+        return find_meal_id(connection, meal_type_for_slot(meal_slot, default_time), meal_date)
+    row = connection.execute(
+        """SELECT id FROM meal_records
+           WHERE deleted_at IS NULL AND date=? AND meal_slot=?
+           ORDER BY updated_at DESC,id DESC LIMIT 1""",
+        (meal_date, meal_slot),
     ).fetchone()
     return int(row[0]) if row else None
 

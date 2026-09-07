@@ -30,7 +30,6 @@ class SidebarNavigationTests(unittest.TestCase):
                 "recovery": ":material/favorite:",
                 "nutrition": ":material/eco:",
                 "feedback": ":material/summarize:",
-                "performance_planner": ":material/calendar_month:",
                 "weekly_plan": ":material/view_week:",
                 "training_studio": ":material/psychology:",
                 "personal": ":material/person:",

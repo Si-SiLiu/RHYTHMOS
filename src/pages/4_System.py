@@ -19,7 +19,13 @@ from pathlib import Path
 import streamlit as st
 
 from src.branding import browser_page_title, load_page_icon
-from src.dashboard_data import connect_readonly, get_data_freshness, get_latest_confidence
+from src.dashboard_data import (
+    connect_readonly,
+    get_current_db_path,
+    get_data_freshness,
+    get_latest_confidence,
+)
+from src.data_freshness import ENDPOINT_FILES, RAW_DIR
 from src.demo_sandbox import configure_demo_runtime, is_demo_mode
 from src.i18n import format_date, get_translator
 from src.i18n.traditional import traditionalize
@@ -27,12 +33,14 @@ from src.i18n.ui import current_language, render_sidebar
 from src.system_status import load_system_status
 from src.scheduler.config import load_scheduler_config, save_scheduler_config
 from src.scheduler.history import SchedulerHistory
+from src.pipeline.history import HISTORY_PATH
 from src.scheduler.launch_agent import (
     get_launch_agent_status,
     install_launch_agent,
     uninstall_launch_agent,
 )
 from src.scheduler.runner import SchedulerRunError, run_triggered_pipeline
+from src.scheduler.lock import pipeline_is_running
 from src.scheduler.status import evaluate_catch_up, get_daily_scheduler_status
 from src.ui_controls import render_manual_input_styles
 
@@ -43,6 +51,43 @@ st.set_page_config(page_title=browser_page_title(get_translator(PAGE_LANGUAGE)("
 LANGUAGE, TR = render_sidebar(st, "system")
 render_manual_input_styles(st)
 BASE_DIR = Path(__file__).resolve().parents[2]
+
+
+def _system_page_revision():
+    """Invalidate expensive diagnostics only when one of their inputs changes."""
+    paths = (
+        BASE_DIR / "project_state.json",
+        BASE_DIR / "config" / "versions.json",
+        get_current_db_path(),
+        get_current_db_path().with_name(f"{get_current_db_path().name}-wal"),
+        HISTORY_PATH,
+        *(RAW_DIR / filename for filename in ENDPOINT_FILES.values()),
+    )
+    revision = []
+    for path in paths:
+        try:
+            stat = path.stat()
+            revision.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            revision.append((str(path), None, None))
+    return tuple(revision)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _load_system_page_inputs(revision):
+    """Load all read-only diagnostics once per real source-data revision."""
+    del revision  # It is deliberately part of Streamlit's cache key.
+    freshness = get_data_freshness() or {}
+    status = load_system_status(freshness=freshness)
+    confidence = get_latest_confidence()
+    connection = connect_readonly()
+    try:
+        # quick_check is read-only and covers SQLite's structural checks without
+        # re-scanning every page-sized database on every System-page visit.
+        integrity = connection.execute("PRAGMA quick_check(1)").fetchone()[0]
+    finally:
+        connection.close()
+    return status, freshness, confidence, integrity
 
 
 def _ui(zh, en):
@@ -131,9 +176,9 @@ def _health_reason_copy(reason):
     if reason.endswith(" active P1 issue(s) remain."):
         count = reason.split(" ", 1)[0]
         return _ui(f"仍有 {count} 项 P1 待处理", f"{count} active P1 issues remain")
-    if reason.startswith("Last sync completed with ") and reason.endswith(" endpoint warning(s)."):
-        count = reason.removeprefix("Last sync completed with ").removesuffix(" endpoint warning(s).")
-        return _ui(f"上次同步有 {count} 项端点警告", f"Last sync has {count} endpoint warnings")
+    if reason.startswith("Last Polar sync completed with ") and reason.endswith(" optional data warning(s)."):
+        count = reason.removeprefix("Last Polar sync completed with ").removesuffix(" optional data warning(s).")
+        return _ui(f"Polar 源数据同步有 {count} 项可选数据未更新", f"Last Polar sync has {count} optional data update(s) pending")
     return reason
 
 
@@ -201,8 +246,8 @@ def _scheduler_section():
         st.warning(TR("scheduler_ui.config_fallback"))
     st.subheader(TR("scheduler_ui.title"))
     st.caption(_ui(
-        "睡眠、运动或恢复数据写入后优先同步；每天 12:00、18:00、23:00 固定同步。错过后会在下次打开应用时立即补同步。",
-        "Sleep, training, and recovery saves sync first; fixed syncs run at 12:00, 18:00, and 23:00. A missed run catches up when the app next opens.",
+        "睡眠、运动或恢复数据写入后优先同步；固定同步时间为 12:00、18:00、23:00。错过后会在下次打开应用时立即补同步。",
+        "Sleep, training, and recovery saves sync first; fixed sync times are 12:00, 18:00, and 23:00. A missed run catches up when the app next opens.",
     ))
     agent_label = TR(
         "scheduler_ui.installed" if agent.state == "installed"
@@ -220,7 +265,7 @@ def _scheduler_section():
                 "positive" if config.enabled else "neutral",
             ),
             _system_card(
-                _ui("更新频率", "Refresh cadence"), _ui("数据变更优先；12:00、18:00、23:00", "Data-change priority; 12:00, 18:00, 23:00"),
+                _ui("更新频率", "Refresh cadence"), _ui("数据变更优先；12:00、18:00、23:00", "Data-change priority; 12:00, 18:00, and 23:00"),
                 _ui("睡眠、运动与恢复数据", "Sleep, training, and recovery data"),
             ),
             _system_card(
@@ -248,8 +293,8 @@ def _scheduler_section():
             _system_card(
                 TR("scheduler_ui.result"), result,
                 _ui(
-                    f"今日{'已' if daily.today_synced else '尚未'}同步 · {warnings if warnings is not None else 0} 项端点警告",
-                    f"Today {'synced' if daily.today_synced else 'not synced'} · {warnings if warnings is not None else 0} endpoint warnings",
+                    f"今日{'已' if daily.today_synced else '尚未'}同步 · {warnings if warnings is not None else 0} 项可选更新待处理",
+                    f"Today {'synced' if daily.today_synced else 'not synced'} · {warnings if warnings is not None else 0} optional update(s) pending",
                 ),
                 result_tone,
             ),
@@ -265,23 +310,21 @@ def _scheduler_section():
     st.caption(TR("scheduler_ui.sleep_caveat"))
 
     catch_up = evaluate_catch_up(config, scheduler_history=scheduler_history)
-    if catch_up.should_prompt or (catch_up.eligible and not config.prompt_before_catch_up):
-        st.warning(TR("scheduler_ui.missing_today"))
-        sync_column, later_column = st.columns(2)
-        if sync_column.button(TR("scheduler_ui.sync_now"), type="primary", key="catch_up_now"):
-            try:
-                run_triggered_pipeline("catch_up")
-                st.success(TR("scheduler_ui.sync_finished")); st.rerun()
-            except SchedulerRunError as exc:
-                st.error(TR("scheduler_ui.sync_failed", message=exc.error_code))
-        if later_column.button(TR("scheduler_ui.later"), key="catch_up_later"):
-            scheduler_history.defer_catch_up(datetime.now().astimezone())
-            st.info(TR("scheduler_ui.deferred")); st.rerun()
+    if catch_up.state == "sync_running":
+        st.info(_ui(
+            "检测到补同步正在后台运行；完成后本页会显示最新状态。",
+            "A catch-up sync is running in the background; this page will show its latest status when it finishes.",
+        ))
+    elif catch_up.eligible:
+        st.info(_ui(
+            "打开应用时会自动补同步；若尚未开始，可使用下方“立即同步”。",
+            "Opening the app automatically queues a catch-up sync. If it has not started yet, use “Sync now” below.",
+        ))
 
     with st.expander(TR("scheduler_ui.settings"), expanded=False):
         with st.form("scheduler_settings_form"):
             enabled = st.checkbox(TR("scheduler_ui.enabled"), value=config.enabled)
-            st.caption(_ui("固定同步时间：12:00、18:00、23:00。", "Fixed sync times: 12:00, 18:00, 23:00."))
+            st.caption(_ui("固定同步时间：12:00、18:00、23:00。", "Fixed sync times: 12:00, 18:00, and 23:00."))
             submitted = st.form_submit_button(TR("scheduler_ui.save_settings"), type="primary")
         if submitted:
             try:
@@ -317,7 +360,9 @@ def main():
         unsafe_allow_html=True,
     )
     save_notice = st.session_state.pop("system_save_notice", None)
-    status = load_system_status()
+    status, freshness, confidence, integrity = _load_system_page_inputs(
+        _system_page_revision(),
+    )
     health = status["system_health"].lower()
     _render_system_health(status)
 
@@ -338,7 +383,6 @@ def main():
         version_grid=True,
     )
 
-    freshness = get_data_freshness() or {}
     source_lag = freshness.get("source_data_lag_days")
     source_date = format_date(freshness.get("latest_source_data_date"), LANGUAGE)
     aligned = bool(freshness.get("database_aligned_with_source"))
@@ -372,10 +416,6 @@ def main():
         ],
     )
 
-    confidence = get_latest_confidence()
-    connection = connect_readonly()
-    try: integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-    finally: connection.close()
     test_value = TR("common.unavailable") if status.get("test_total") is None else f"{status.get('test_passed')} / {status.get('test_total')}"
     confidence_level = confidence.get("confidence_level") if confidence else None
     confidence_label = (
@@ -404,10 +444,23 @@ def main():
     )
 
     last_sync_success = status.get("last_sync_success")
+    source_sync_warnings = int(status.get("last_sync_source_warning_count") or 0)
+    auxiliary_sync_warnings = int(status.get("last_sync_auxiliary_warning_count") or 0)
     sync_success_value = (
         TR("common.not_run") if last_sync_success is None
         else TR("common.yes") if last_sync_success else TR("common.no")
     )
+    sync_success_detail = _ui("最近一次核心数据同步结果", "Most recent core-data sync result")
+    if last_sync_success and source_sync_warnings == 0 and auxiliary_sync_warnings:
+        sync_success_detail = _ui(
+            f"核心数据已完成 · {auxiliary_sync_warnings} 项可选更新将在下次同步重试",
+            f"Core data completed · {auxiliary_sync_warnings} optional update(s) will retry next sync",
+        )
+    elif last_sync_success and source_sync_warnings:
+        sync_success_detail = _ui(
+            f"{source_sync_warnings} 项可选 Polar 数据暂不可用",
+            f"{source_sync_warnings} optional Polar data update(s) are unavailable",
+        )
     _render_system_section(
         TR("domain.system.sync_status"),
         _ui("按需更新本地数据", "Update local data when needed"),
@@ -418,8 +471,8 @@ def main():
             ),
             _system_card(
                 TR("sync.success"), sync_success_value,
-                _ui("最近一次同步结果", "Most recent sync result"),
-                "positive" if last_sync_success else "caution" if last_sync_success is False else "neutral",
+                sync_success_detail,
+                "positive" if last_sync_success and source_sync_warnings == 0 else "caution" if last_sync_success is False or source_sync_warnings else "neutral",
             ),
             _system_card(
                 TR("sync.records"),
@@ -441,21 +494,37 @@ def main():
     else:
         with st.container(key="system_sync_action", border=False):
             copy_column, action_column = st.columns([3.2, 1], vertical_alignment="center")
+            sync_running = pipeline_is_running()
             with copy_column:
                 st.markdown(f"**{_ui('立即更新本地数据', 'Update local data now')}**")
-                st.caption(_ui(
-                    "手动同步会重新读取 Polar 数据并更新本地计算。",
-                    "Manual sync refreshes Polar data and local calculations.",
-                ))
+                if sync_running:
+                    st.caption(_ui(
+                        "后台同步正在进行中；完成后本页会自动显示最新状态。",
+                        "A background sync is in progress. This page will show the latest status when it finishes.",
+                    ))
+                else:
+                    st.caption(_ui(
+                        "手动同步会重新读取 Polar 数据并更新本地计算。",
+                        "Manual sync refreshes Polar data and local calculations.",
+                    ))
             with action_column:
-                if st.button(TR("scheduler_ui.sync_now"), key="manual_sync_now", type="primary", use_container_width=True):
+                if st.button(
+                    TR("scheduler_ui.sync_now"), key="manual_sync_now", type="primary",
+                    use_container_width=True, disabled=sync_running,
+                ):
                     try:
                         with st.spinner(TR("scheduler_ui.running")):
                             run_triggered_pipeline("manual")
                         st.success(TR("scheduler_ui.sync_finished"))
                         st.rerun()
                     except SchedulerRunError as exc:
-                        st.error(TR("scheduler_ui.sync_failed", message=exc.error_code))
+                        if exc.error_code == "SYNC_ALREADY_RUNNING":
+                            st.info(_ui(
+                                "同步仍在后台运行，请等待完成后再试。",
+                                "A sync is already running in the background. Please wait for it to finish.",
+                            ))
+                        else:
+                            st.error(TR("scheduler_ui.sync_failed", message=exc.error_code))
     with st.expander(_ui("自动同步设置", "Automatic sync settings"), expanded=False):
         _scheduler_section()
     if save_notice:

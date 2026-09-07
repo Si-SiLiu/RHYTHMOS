@@ -175,6 +175,33 @@ def get_current_training_cycle(connection, *, on_date=None, training_domain="ind
     return dict(row) if row else None
 
 
+def get_training_cycle_for_date(connection, *, on_date, training_domain="indoor_strength"):
+    """Return the most relevant cycle covering a date, including history.
+
+    Actual-training corrections can happen after a cycle has been completed or
+    archived, so historical plan import must not be limited to active cycles.
+    """
+    if training_domain not in TRAINING_DOMAINS:
+        raise ValueError("INVALID_TRAINING_DOMAIN")
+    target_date = _iso_date(on_date)
+    row = connection.execute(
+        """SELECT * FROM training_cycles
+             WHERE training_domain=?
+               AND start_date<=? AND end_date>=?
+             ORDER BY CASE status
+                          WHEN 'active' THEN 0
+                          WHEN 'planned' THEN 1
+                          WHEN 'completed' THEN 2
+                          WHEN 'archived' THEN 3
+                          ELSE 4
+                      END,
+                      start_date DESC,id DESC
+             LIMIT 1""",
+        (training_domain, target_date, target_date),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def update_training_cycle(connection, cycle_id, *, start_date, end_date, name=None):
     """Update a cycle's name and dates while preserving the one-week minimum."""
     cycle = connection.execute(

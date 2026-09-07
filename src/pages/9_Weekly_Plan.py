@@ -1,7 +1,9 @@
 """Weekly user-intent plan, kept separate from daily execution records."""
 
+import runpy
 from datetime import date, datetime, time, timedelta
 from html import escape
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -18,7 +20,8 @@ from src.user_plan import (
     create_plan_item,
     create_week_plan,
     delete_plan_item,
-    event_color_key,
+    event_colour_slot,
+    event_colour_slots,
     get_week_plan,
     group_plan_items_for_display,
     list_plan_items,
@@ -33,7 +36,7 @@ configure_demo_runtime(st)
 LANGUAGE = current_language(st.session_state)
 TR = get_translator(LANGUAGE)
 st.set_page_config(
-    page_title=browser_page_title(TR("weekly_plan.title")),
+    page_title=browser_page_title(TR("performance_planner.title")),
     page_icon=load_page_icon(),
     layout="wide",
 )
@@ -76,14 +79,6 @@ PLAN_CSS = """
 --weekly-plan-recovery:#eaf7f8;
 --weekly-plan-personal:#f8ecf5;
 --weekly-plan-other:#f1f2f4;
---weekly-plan-event-blue:#eaf2fd;
---weekly-plan-event-green:#e8f6ed;
---weekly-plan-event-amber:#fff3dc;
---weekly-plan-event-rose:#fbeaec;
---weekly-plan-event-purple:#f3ebf8;
---weekly-plan-event-teal:#e5f4f3;
---weekly-plan-event-slate:#eef1f5;
---weekly-plan-event-coral:#fcece6;
 }
 /* Night palette: preserve category meaning without placing white text on
    luminous pastel cards. Each surface is deliberately darkened first. */
@@ -102,14 +97,6 @@ PLAN_CSS = """
 --weekly-plan-recovery:#19464a;
 --weekly-plan-personal:#482b42;
 --weekly-plan-other:#363a42;
---weekly-plan-event-blue:#213d5e;
---weekly-plan-event-green:#1d4938;
---weekly-plan-event-amber:#4d3c18;
---weekly-plan-event-rose:#572f3b;
---weekly-plan-event-purple:#482b42;
---weekly-plan-event-teal:#19464a;
---weekly-plan-event-slate:#363a42;
---weekly-plan-event-coral:#5a352c;
 }
 }
 .weekly-plan-table{border:1px solid rgba(117,130,148,.24);border-radius:14px;overflow:hidden}
@@ -141,14 +128,6 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stElementContainer"]:has(.weekly-plan-entry-marker){display:none!important}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker) [data-testid="stButton"] button{min-height:3.5rem;border:0;border-radius:9px;background:var(--weekly-plan-entry-color,#dbeafe);color:var(--weekly-plan-card-text);-webkit-text-fill-color:var(--weekly-plan-card-text);font-size:.78rem;line-height:1.35;white-space:pre-wrap;padding:.35rem .25rem;transform:scale(.82);transform-origin:center}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker) [data-testid="stButton"] button:hover{filter:brightness(.97);box-shadow:0 0 0 2px var(--weekly-plan-card-hover)}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-blue) [data-testid="stButton"] button{background:var(--weekly-plan-event-blue)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-green) [data-testid="stButton"] button{background:var(--weekly-plan-event-green)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-amber) [data-testid="stButton"] button{background:var(--weekly-plan-event-amber)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-rose) [data-testid="stButton"] button{background:var(--weekly-plan-event-rose)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-purple) [data-testid="stButton"] button{background:var(--weekly-plan-event-purple)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-teal) [data-testid="stButton"] button{background:var(--weekly-plan-event-teal)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-slate) [data-testid="stButton"] button{background:var(--weekly-plan-event-slate)!important}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .weekly-plan-grid-marker) div[data-testid="stColumn"]:has(.weekly-plan-entry-marker-event-coral) [data-testid="stButton"] button{background:var(--weekly-plan-event-coral)!important}
 div[data-testid="stExpander"]:has(.weekly-plan-add-marker) [data-testid="stElementContainer"]:has(.weekly-plan-add-marker),
 div[data-testid="stExpander"]:has(.weekly-plan-edit-marker) [data-testid="stElementContainer"]:has(.weekly-plan-edit-marker){display:none!important}
 div[data-testid="stExpander"]:has(.weekly-plan-add-marker) label,
@@ -201,18 +180,45 @@ def _parse_time_text(value: str, field: str) -> time:
         raise ValueError(f"{field} must use HH:MM") from exc
 
 
-def _render_matrix(items: list[dict]) -> None:
+def _event_colour_css(colour_slots: dict[str, int]) -> str:
+    """Generate high-contrast day/night card colours for distinct event slots."""
+    selector_prefix = (
+        'div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] '
+        '.weekly-plan-grid-marker) div[data-testid="stColumn"]:has('
+    )
+    selector_suffix = ') [data-testid="stButton"] button'
+    rules = []
+    for slot in sorted(set(colour_slots.values())):
+        # The golden-angle sequence keeps adjacent collision-resolution slots
+        # far apart on the colour wheel instead of producing near-identical hues.
+        hue = round((205 + slot * 137.508) % 360)
+        selector = f"{selector_prefix}.weekly-plan-entry-marker-event-{slot}{selector_suffix}"
+        rules.append(
+            f"{selector}{{background:hsl({hue}deg 58% 91%)!important}}"
+        )
+        rules.append(
+            "@media (prefers-color-scheme: dark){"
+            f"{selector}{{background:hsl({hue}deg 36% 27%)!important}}"
+            "}"
+        )
+    return "<style>" + "".join(rules) + "</style>"
+
+
+def _render_matrix(items: list[dict], *, show_title: bool = True) -> None:
     # Keep the full weekly canvas visible even before the user has filled it.
     # User-defined intervals are added without losing the reference rows.
     display_items = group_plan_items_for_display(items)
     slots = merge_plan_slots(DEFAULT_PLAN_SLOTS, display_items)
+    colour_slots = event_colour_slots([item["title"] for item in display_items])
+    st.markdown(_event_colour_css(colour_slots), unsafe_allow_html=True)
 
     with st.container():
         st.markdown(WEEKLY_PLAN_GRID_MARKER, unsafe_allow_html=True)
-        st.markdown(
-            f"<div class='weekly-plan-table-title'>{escape(TR('weekly_plan.title'))}</div>",
-            unsafe_allow_html=True,
-        )
+        if show_title:
+            st.markdown(
+                f"<div class='weekly-plan-table-title'>{escape(TR('weekly_plan.title'))}</div>",
+                unsafe_allow_html=True,
+            )
         header = st.columns([1.05] + [1] * 7)
         header[0].markdown(
             f"<div class='weekly-plan-header-cell'>{escape(TR('weekly_plan.time'))}</div>",
@@ -252,12 +258,13 @@ def _render_matrix(items: list[dict]) -> None:
                             st.session_state.get("weekly_plan_add_focus_nonce", 0) + 1
                         )
                         st.session_state["weekly_plan_add_form_expanded"] = True
+                        st.session_state["weekly_plan_section_expand_once"] = True
                         st.rerun()
                     continue
                 for item in cells:
-                    color_key = event_color_key(item["title"])
+                    colour_slot = event_colour_slot(item["title"], colour_slots)
                     column.markdown(
-                        f"{WEEKLY_PLAN_ENTRY_MARKER_PREFIX}event-{color_key}{WEEKLY_PLAN_ENTRY_MARKER_SUFFIX}",
+                        f"{WEEKLY_PLAN_ENTRY_MARKER_PREFIX}event-{colour_slot}{WEEKLY_PLAN_ENTRY_MARKER_SUFFIX}",
                         unsafe_allow_html=True,
                     )
                     label = "\n".join(
@@ -273,6 +280,7 @@ def _render_matrix(items: list[dict]) -> None:
                         st.session_state["weekly_plan_edit_focus_nonce"] = (
                             st.session_state.get("weekly_plan_edit_focus_nonce", 0) + 1
                         )
+                        st.session_state["weekly_plan_section_expand_once"] = True
                         st.rerun()
 
     legend = "".join(
@@ -332,6 +340,7 @@ def _render_add_form(plan: dict, items: list[dict]) -> None:
                 else:
                     st.session_state["weekly_plan_notice"] = "weekly_plan.item_added"
                     st.session_state["weekly_plan_add_form_expanded"] = True
+                    st.session_state["weekly_plan_section_expand_once"] = True
                     st.rerun()
 
 
@@ -385,6 +394,7 @@ def _render_edit_form(plan: dict, items: list[dict], *, expanded: bool = False) 
                 delete_plan_item(selected_id)
                 st.session_state.pop("weekly_plan_selected_item_id", None)
                 st.session_state["weekly_plan_notice"] = "weekly_plan.item_deleted"
+                st.session_state["weekly_plan_section_expand_once"] = True
                 st.rerun()
             if save_clicked:
                 try:
@@ -399,6 +409,7 @@ def _render_edit_form(plan: dict, items: list[dict], *, expanded: bool = False) 
                 else:
                     st.session_state.pop("weekly_plan_selected_item_id", None)
                     st.session_state["weekly_plan_notice"] = "weekly_plan.item_updated"
+                    st.session_state["weekly_plan_section_expand_once"] = True
                     st.rerun()
 
 
@@ -421,6 +432,7 @@ def _render_copy_previous_week(plan: dict, monday: date) -> None:
             st.session_state["weekly_plan_notice"] = (
                 "weekly_plan.copy_success", copied,
             )
+            st.session_state["weekly_plan_section_expand_once"] = True
             st.rerun()
 
 
@@ -450,54 +462,67 @@ def _render_comparison(plan: dict) -> None:
     st.dataframe(display_rows, hide_index=True, use_container_width=True)
 
 
-st.title(TR("weekly_plan.title"))
+st.title(TR("performance_planner.title"))
 st.caption(TR("weekly_plan.intro"))
 
-selected_date = st.date_input(
-    TR("weekly_plan.week"),
-    value=st.session_state.get("weekly_plan_selected_date", date.today()),
-    key="weekly_plan_selected_date",
-)
-monday = week_start(selected_date)
-st.caption(TR("weekly_plan.week_range", start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat()))
+selected_date = st.session_state.get("weekly_plan_selected_date", date.today())
+expanded_once = st.session_state.pop("weekly_plan_section_expand_once", False)
+with st.expander(TR("weekly_plan.title"), expanded=expanded_once):
+    selected_date = st.date_input(
+        TR("weekly_plan.week"),
+        value=selected_date,
+        key="weekly_plan_selected_date",
+    )
+    monday = week_start(selected_date)
+    st.caption(TR("weekly_plan.week_range", start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat()))
 
-plan = get_week_plan(monday)
-if plan is None:
-    title = st.text_input(TR("weekly_plan.plan_title"), value=TR("weekly_plan.default_title"))
-    if st.button(TR("weekly_plan.create"), type="primary"):
-        try:
-            create_week_plan(monday, title, _timezone_name())
-        except ValueError as exc:
-            st.error(TR("weekly_plan.create_error") + f"：{exc}")
-        else:
-            st.rerun()
-    st.info(TR("weekly_plan.not_created"))
-else:
-    notice = st.session_state.pop("weekly_plan_notice", None)
-    if notice:
-        if isinstance(notice, tuple):
-            st.success(TR(notice[0], count=notice[1]))
-        else:
-            st.success(TR(notice))
-    items = list_plan_items(plan["plan_id"])
-    _render_matrix(items)
-    focus_nonce = st.session_state.pop("weekly_plan_add_focus_nonce", None)
-    st.markdown(WEEKLY_PLAN_ADD_ANCHOR, unsafe_allow_html=True)
-    if focus_nonce is not None:
-        render_interaction_focus(
-            components,
-            target_id="weekly-plan-add-item-anchor",
-            nonce=focus_nonce,
-        )
-    _render_copy_previous_week(plan, monday)
-    edit_focus_nonce = st.session_state.pop("weekly_plan_edit_focus_nonce", None)
-    st.markdown(WEEKLY_PLAN_EDIT_ANCHOR, unsafe_allow_html=True)
-    if edit_focus_nonce is not None:
-        render_interaction_focus(
-            components,
-            target_id="weekly-plan-edit-item-anchor",
-            nonce=edit_focus_nonce,
-        )
-    _render_edit_form(plan, items, expanded=edit_focus_nonce is not None)
-    _render_add_form(plan, items)
-    _render_comparison(plan)
+    plan = get_week_plan(monday)
+    if plan is None:
+        title = st.text_input(TR("weekly_plan.plan_title"), value=TR("weekly_plan.default_title"))
+        if st.button(TR("weekly_plan.create"), type="primary"):
+            try:
+                create_week_plan(monday, title, _timezone_name())
+            except ValueError as exc:
+                st.error(TR("weekly_plan.create_error") + f"：{exc}")
+            else:
+                st.session_state["weekly_plan_section_expand_once"] = True
+                st.rerun()
+        st.info(TR("weekly_plan.not_created"))
+    else:
+        notice = st.session_state.pop("weekly_plan_notice", None)
+        if notice:
+            if isinstance(notice, tuple):
+                st.success(TR(notice[0], count=notice[1]))
+            else:
+                st.success(TR(notice))
+        items = list_plan_items(plan["plan_id"])
+        _render_matrix(items, show_title=False)
+        focus_nonce = st.session_state.pop("weekly_plan_add_focus_nonce", None)
+        st.markdown(WEEKLY_PLAN_ADD_ANCHOR, unsafe_allow_html=True)
+        if focus_nonce is not None:
+            render_interaction_focus(
+                components,
+                target_id="weekly-plan-add-item-anchor",
+                nonce=focus_nonce,
+            )
+        _render_copy_previous_week(plan, monday)
+        edit_focus_nonce = st.session_state.pop("weekly_plan_edit_focus_nonce", None)
+        st.markdown(WEEKLY_PLAN_EDIT_ANCHOR, unsafe_allow_html=True)
+        if edit_focus_nonce is not None:
+            render_interaction_focus(
+                components,
+                target_id="weekly-plan-edit-item-anchor",
+                nonce=edit_focus_nonce,
+            )
+        _render_edit_form(plan, items, expanded=edit_focus_nonce is not None)
+        _render_add_form(plan, items)
+        _render_comparison(plan)
+
+runpy.run_path(
+    str(Path(__file__).with_name("8_Performance_Planner.py")),
+    init_globals={
+        "__weekly_plan_embed__": True,
+        "__weekly_plan_hide_heading__": True,
+        "__weekly_plan_date__": selected_date,
+    },
+)

@@ -10,6 +10,7 @@ from src.training_plan_actual import (
     cycle_week_segments,
     delete_training_cycle,
     get_current_training_cycle,
+    get_training_cycle_for_date,
     list_training_cycles,
     list_planned_sessions,
     update_training_cycle,
@@ -181,6 +182,18 @@ class TrainingPlanActualInputLearningTests(unittest.TestCase):
         current = get_current_training_cycle(self.connection, on_date="2026-08-09")
 
         self.assertEqual(current["id"], active_id)
+
+    def test_historical_cycle_lookup_includes_completed_cycles(self):
+        completed_id = create_training_cycle(
+            self.connection, "completed", "2026-07-01", "2026-07-31",
+            status="completed",
+        )
+
+        historical = get_training_cycle_for_date(
+            self.connection, on_date="2026-07-14"
+        )
+
+        self.assertEqual(historical["id"], completed_id)
 
     def test_training_domains_keep_outdoor_cycles_and_plans_separate(self):
         indoor_id = create_training_cycle(

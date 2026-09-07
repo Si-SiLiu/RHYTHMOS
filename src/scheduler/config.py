@@ -13,6 +13,8 @@ import tomllib
 BASE_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = BASE_DIR / "config" / "scheduler.toml"
 SYNC_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# Fixed routine updates. Data saves still start their own higher-priority
+# refresh, so extra two-hour jobs only create avoidable contention.
 SCHEDULED_SYNC_TIMES = ("12:00", "18:00", "23:00")
 EXPECTED_KEYS = {
     "enabled",

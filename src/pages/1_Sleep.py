@@ -74,7 +74,9 @@ def _load_sleep_page_inputs(database_revision, today_value):
     return (
         get_latest_sleep(),
         get_latest_sleep(log_date=today_value),
-        get_sleep_history(limit=60),
+        # Fill historical gaps from the full Polar sleep window. Fields that
+        # Polar did not provide remain missing instead of being estimated.
+        get_sleep_history(limit=60, include_continuous_hr=True, polar_only=True),
         get_domain_baselines((
             "sleep_duration", "sleep_score", "nightly_hrv_rmssd",
             "nightly_resting_hr", "respiration_rate",
@@ -1136,6 +1138,9 @@ def _historical_sleep_situation(history, persisted_baselines, *, auto_expand=Fal
         elif not selected.get("has_observed_data"):
             st.info(TR("common.no_data"))
         else:
+            # The historical table and its detail view are both Polar-only:
+            # unavailable Polar fields must remain unavailable here.
+            selected = get_latest_sleep(log_date=selected_date, polar_only=True) or selected
             valid_history = [item for item in history if _is_complete_sleep_record(item)]
             historical_baselines = _synchronized_sleep_baselines(
                 valid_history,
@@ -1408,7 +1413,6 @@ def _personal_baseline(data, history):
 
 def main():
     intro = TR("domain.sleep.intro")
-    intro = intro.replace("确定性建议", "睡眠建议").replace("deterministic guidance", "sleep guidance")
     st.title(TR("domain.sleep.title")); st.caption(intro)
     today_value = date.today().isoformat()
     latest, today_data, history, persisted_baselines = _load_sleep_page_inputs(
@@ -1452,11 +1456,6 @@ def main():
     _render_historical_sleep_interaction(history, persisted_baselines)
 
     st.info(TR("domain.sleep.missing_notice"))
-    st.subheader(_ui("睡眠建议", "Sleep Guidance"))
-    _render_sleep_guidance(
-        detail_data,
-        today_detail_baseline_data if detail_data else None,
-    )
     st.caption(TR("safety.medical"))
 
 

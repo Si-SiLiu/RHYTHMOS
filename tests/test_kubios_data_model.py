@@ -5,7 +5,8 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from src import db, dashboard_data, report
+from src import db, dashboard_data, kubios_import, report
+from src.domain_dashboard_data import get_recovery_history
 from src.ai_context.builder import build_ai_context
 from src.ai_context.exporter import render_markdown
 from src.kubios_metrics import derived, normalizer, selector, trends
@@ -215,6 +216,17 @@ class KubiosDataModelTests(unittest.TestCase):
     def test_dashboard_advanced_query_returns_raw_metrics(self):
         self.raw(rmssd_ms=40, mean_rr_ms=900); self.rebuild(); derived.rebuild(self.connection)
         self.assertEqual(dashboard_data.get_kubios_advanced_metrics(self.path)[0]["mean_rr_ms"], 900)
+
+    def test_recovery_history_includes_saved_mood(self):
+        kubios_import.upsert_kubios_rows(self.connection, [{
+            "date": "2026-07-01", "measurement_time": "2026-07-01T07:00:00",
+            "rmssd": 40, "mean_hr": 60, "readiness": None, "raw": {}, "source_type": "screenshot_ocr",
+            "source_file_sha256": "history-mood", "reviewed": True,
+            "is_daily_preferred": True, "mood_code": "Moderate stress, lowered readiness",
+        }])
+        self.rebuild()
+        history = get_recovery_history(self.path)
+        self.assertEqual(history[0]["mood_code"], "moderate stress, lowered readiness")
 
     def test_dashboard_advanced_query_merges_confirmed_group(self):
         a, b = self.audit("a"), self.audit("b")

@@ -1,5 +1,19 @@
 # Architecture
 
+## Runtime optimization (2026-09-07)
+
+Bulk baseline rebuilds load each metric's source series once for the required
+date range and use binary search to select the existing historical window.
+Normalization, current-day exclusion, primary Kubios selection, numerical
+formulas, and per-day commits remain unchanged. Series exist only within one
+rebuild; subsequent runs read corrections afresh. Single-date callers retain
+their existing query path.
+
+The macOS launcher fingerprints every `src/*_frontend` component, including
+PVT and region calibration, so reopening after a frontend update detects a
+stale local server. The existing canonical app loads the updated Python source
+from this workspace; these changes do not require recompiling the Swift shell.
+
 The presentation layer is branded **RHYTHMOS｜律衡** (Personal Performance OS / 个人表现与恢复系统); this does not change service, database, API, or route contracts.
 
 ## Sleep Regularity Engine 2.0 boundary (2026-07-22)

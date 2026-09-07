@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from datetime import date
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -55,6 +56,32 @@ def start_priority_data_sync() -> int:
         raise RuntimeError("同步运行环境不完整")
     process = subprocess.Popen(
         [str(python), str(runner), "--trigger-type", "manual"],
+        cwd=BASE_DIR,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    return process.pid
+
+
+def start_codex_feedback_refresh(analysis_date: str) -> int:
+    """Queue a focused morning-feedback refresh after recovery is confirmed.
+
+    It runs independently from the longer Polar fetch so a 06:30 recovery save
+    can update the training recommendation without waiting for historical data.
+    """
+    try:
+        normalized_date = date.fromisoformat(str(analysis_date)[:10]).isoformat()
+    except ValueError as exc:
+        raise RuntimeError("反馈日期无效") from exc
+    python = BASE_DIR / ".venv" / "bin" / "python"
+    runner = BASE_DIR / "scripts" / "generate_codex_feedback.py"
+    if not python.is_file() or not runner.is_file():
+        raise RuntimeError("Codex 反馈运行环境不完整")
+    process = subprocess.Popen(
+        [str(python), str(runner), "--date", normalized_date],
         cwd=BASE_DIR,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

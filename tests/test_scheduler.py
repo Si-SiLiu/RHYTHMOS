@@ -52,10 +52,13 @@ def make_runtime(root: Path):
 
 
 class SchedulerConfigTests(unittest.TestCase):
-    def test_default_time_is_strictly_0600(self):
+    def test_default_time_is_the_final_fixed_slot(self):
         self.assertEqual(DEFAULT_CONFIG.sync_time, "23:00")
         self.assertEqual((DEFAULT_CONFIG.hour, DEFAULT_CONFIG.minute), (23, 0))
-        self.assertEqual(DEFAULT_CONFIG.scheduled_times, ("12:00", "18:00", "23:00"))
+        self.assertEqual(
+            DEFAULT_CONFIG.scheduled_times,
+            ("12:00", "18:00", "23:00"),
+        )
 
     def test_time_and_fields_are_strictly_validated(self):
         valid = {
@@ -409,7 +412,12 @@ class TriggeredRunnerTests(unittest.TestCase):
             )
             self.assertEqual(
                 calls,
-                [{"dry_run": True, "trigger_type": "scheduled", "acquire_lock": True}],
+                [{
+                    "dry_run": True,
+                    "trigger_type": "scheduled",
+                    "if_new_data": True,
+                    "acquire_lock": True,
+                }],
             )
             self.assertEqual(summary["trigger_type"], "scheduled")
             self.assertTrue(summary["pipeline_invoked"])
@@ -437,7 +445,12 @@ class TriggeredRunnerTests(unittest.TestCase):
                 pipeline_factory=lambda: self.FakeRunner(calls),
                 now_provider=lambda: now,
             )
-            self.assertEqual(calls, [{"dry_run": False, "trigger_type": "scheduled", "acquire_lock": True}])
+            self.assertEqual(calls, [{
+                "dry_run": False,
+                "trigger_type": "scheduled",
+                "if_new_data": True,
+                "acquire_lock": True,
+            }])
             self.assertTrue(summary["pipeline_invoked"])
             self.assertEqual(summary["status"], "success")
 
@@ -457,6 +470,10 @@ class TriggeredRunnerTests(unittest.TestCase):
                 )
                 self.assertEqual(summary["trigger_type"], trigger_type)
                 self.assertEqual(calls[0]["trigger_type"], trigger_type)
+                self.assertEqual(
+                    calls[0]["if_new_data"],
+                    trigger_type in {"scheduled", "catch_up"},
+                )
 
 
 if __name__ == "__main__":

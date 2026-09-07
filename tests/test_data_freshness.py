@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date
 from pathlib import Path
 
@@ -88,6 +89,14 @@ class DataFreshnessTests(unittest.TestCase):
         path.write_text("not-json", encoding="utf-8")
         self.assertIsNone(latest_raw_date(path))
         self.assertEqual(self.collect()["prospective_collection_blocker"], "source_data_unavailable")
+
+    def test_unchanged_raw_file_is_parsed_once_per_revision(self):
+        path = self.raw_dir / "cached.json"
+        path.write_text('{"rows":[{"date":"2026-08-26"}]}', encoding="utf-8")
+        with mock.patch("src.data_freshness.json.loads", wraps=json.loads) as loads:
+            self.assertEqual(latest_raw_date(path), "2026-08-26")
+            self.assertEqual(latest_raw_date(path), "2026-08-26")
+        self.assertEqual(loads.call_count, 1)
 
     def test_output_declares_no_health_values(self):
         self.write_source("2026-07-08")

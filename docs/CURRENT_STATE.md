@@ -70,7 +70,7 @@ new unvalidated 0–100 score. No database schema change was made.
 - Data Resolution Version: 1.1.0
 - Scheduler Version: 1.1.0
 - Scheduled Sync Enabled: true
-- Scheduled Sync Time: 23:00
+- Scheduled Sync Time: 22:00
 - LaunchAgent Installed: true
 - Latest Scheduled Sync At: 2026-08-09T08:02:04+08:00
 - Latest Scheduled Sync Success: false

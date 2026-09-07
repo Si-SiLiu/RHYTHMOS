@@ -16,6 +16,8 @@ from src.user_plan import (
     create_week_plan,
     delete_plan_item,
     event_color_key,
+    event_colour_slot,
+    event_colour_slots,
     get_week_plan,
     group_plan_items_for_display,
     list_plan_items,
@@ -72,6 +74,20 @@ class UserPlanTests(unittest.TestCase):
     def test_same_event_title_uses_a_stable_colour_key(self):
         self.assertEqual(event_color_key("课1:室内力量训练"), event_color_key("课1:室内力量训练"))
         self.assertEqual(event_color_key("  餐1:早餐  "), event_color_key("餐1:早餐"))
+        self.assertNotEqual(event_color_key("课2:听力主课"), event_color_key("课2:口语主课"))
+
+    def test_different_visible_events_receive_distinct_colour_slots(self):
+        titles = [
+            "课2:听力主课", "课2:口语主课", "课3:听力专项训练", "课3:口语专项训练",
+            "餐1:早餐", "餐2:午餐", "餐3:晚餐", "午睡",
+        ]
+        slots = event_colour_slots(titles)
+        assigned = [event_colour_slot(title, slots) for title in titles]
+        self.assertEqual(len(set(assigned)), len(titles))
+        self.assertEqual(
+            event_colour_slot("课2:听力主课", slots),
+            event_colour_slot("  课2:听力主课  ", slots),
+        )
 
     def test_legacy_auto_recipe_is_not_displayed_as_actual_intake(self):
         items = [
@@ -177,6 +193,7 @@ class UserPlanTests(unittest.TestCase):
             app = AppTest.from_file(str(page)).run(timeout=20)
         self.assertEqual(list(app.exception), [])
         self.assertTrue(app.title)
+        self.assertFalse(app.expander[0].proto.expanded)
 
     def test_empty_slot_click_prefills_add_form(self):
         page = Path(__file__).parents[1] / "src" / "pages" / "9_Weekly_Plan.py"
@@ -188,6 +205,11 @@ class UserPlanTests(unittest.TestCase):
         ), patch("streamlit.page_link", return_value=None):
             app = AppTest.from_file(str(page)).run(timeout=20)
             next(button for button in app.button if button.label == "Create weekly plan").click().run(timeout=20)
+            self.assertEqual(app.title[0].value, "Performance Planner｜表现计划")
+            self.assertNotIn(
+                "Performance Planner｜表现计划",
+                [element.value for element in app.subheader],
+            )
             slot = next(button for button in app.button if button.key == "weekly_plan_slot_0_06:00_08:00")
             slot.click().run(timeout=20)
         self.assertEqual(list(app.exception), [])

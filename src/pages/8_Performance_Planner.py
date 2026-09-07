@@ -69,16 +69,23 @@ PLANNER_OPERATION_ERRORS = (
 
 
 configure_demo_runtime(st)
-page_language = current_language(st.session_state)
-page_translator = get_translator(page_language)
-st.set_page_config(
-    page_title=browser_page_title(
-        page_translator("navigation.performance_planner")
-    ),
-    page_icon=load_page_icon(),
-    layout="wide",
-)
-LANGUAGE, TR = render_sidebar(st, "performance_planner")
+EMBEDDED_IN_WEEKLY_PLAN = bool(globals().get("__weekly_plan_embed__", False))
+HIDE_EMBEDDED_HEADING = bool(globals().get("__weekly_plan_hide_heading__", False))
+
+if EMBEDDED_IN_WEEKLY_PLAN:
+    LANGUAGE = current_language(st.session_state)
+    TR = get_translator(LANGUAGE)
+else:
+    page_language = current_language(st.session_state)
+    page_translator = get_translator(page_language)
+    st.set_page_config(
+        page_title=browser_page_title(
+            page_translator("navigation.performance_planner")
+        ),
+        page_icon=load_page_icon(),
+        layout="wide",
+    )
+    LANGUAGE, TR = render_sidebar(st, "performance_planner")
 
 PLANNER_STYLE = """
 <style>
@@ -238,6 +245,17 @@ def _neural_fatigue_band(score: float) -> str:
     return "high"
 
 
+def _neural_fatigue_source_label(source: str | None) -> str:
+    source_keys = {
+        "cognitive_training": "cognitive_training",
+        "recovery_scores": "recovery_scores",
+        "daily_recovery_metrics.sleep_score": "sleep_score",
+        "training_baseline": "training_baseline",
+    }
+    key = source_keys.get(source or "")
+    return TR(f"performance_planner.neural_fatigue_source_{key}") if key else "—"
+
+
 def _render_neural_fatigue_status(selected_date: date) -> None:
     st.subheader(TR("performance_planner.neural_fatigue_section"))
     st.caption(TR("performance_planner.neural_fatigue_boundary"))
@@ -253,29 +271,79 @@ def _render_neural_fatigue_status(selected_date: date) -> None:
         return
 
     band = _neural_fatigue_band(result.burden_score)
-    metrics = st.columns(4)
-    metrics[0].metric(
-        TR("performance_planner.neural_fatigue_burden"),
-        format_number(result.burden_score, LANGUAGE),
+    latest_observation = view["latest_observation"]
+    st.subheader(TR("performance_planner.neural_fatigue_today_data"))
+    st.dataframe(
+        [
+            {
+                TR("performance_planner.neural_fatigue_metric"): TR("performance_planner.neural_fatigue_burden"),
+                TR("performance_planner.neural_fatigue_value"): format_number(result.burden_score, LANGUAGE),
+            },
+            {
+                TR("performance_planner.neural_fatigue_metric"): TR("performance_planner.neural_fatigue_level"),
+                TR("performance_planner.neural_fatigue_value"): TR(f"performance_planner.neural_fatigue_{band}"),
+            },
+            {
+                TR("performance_planner.neural_fatigue_metric"): TR("performance_planner.neural_fatigue_confidence"),
+                TR("performance_planner.neural_fatigue_value"): format_percent(result.confidence * 100, LANGUAGE),
+            },
+            {
+                TR("performance_planner.neural_fatigue_metric"): TR("performance_planner.neural_fatigue_components"),
+                TR("performance_planner.neural_fatigue_value"): format_number(len(result.available_components), LANGUAGE),
+            },
+            {
+                TR("performance_planner.neural_fatigue_metric"): TR("performance_planner.neural_fatigue_latest"),
+                TR("performance_planner.neural_fatigue_value"): (
+                    format_datetime(latest_observation, LANGUAGE)
+                    if latest_observation is not None
+                    else "—"
+                ),
+            },
+        ],
+        hide_index=True,
+        use_container_width=True,
     )
-    metrics[1].metric(
-        TR("performance_planner.neural_fatigue_level"),
-        TR(f"performance_planner.neural_fatigue_{band}"),
+
+    st.subheader(TR("performance_planner.neural_fatigue_today_details"))
+    st.dataframe(
+        [
+            {
+                TR("performance_planner.neural_fatigue_component"): TR(
+                    f"performance_planner.neural_fatigue_component_{row['name']}"
+                ),
+                TR("performance_planner.neural_fatigue_score"): (
+                    format_number(row["score"], LANGUAGE) if row["score"] is not None else "—"
+                ),
+                TR("performance_planner.neural_fatigue_weight"): (
+                    format_percent(row["weight"] * 100, LANGUAGE)
+                    if row["weight"] is not None
+                    else "—"
+                ),
+                TR("performance_planner.neural_fatigue_source"): _neural_fatigue_source_label(row["source"]),
+                TR("performance_planner.neural_fatigue_observed_at"): (
+                    format_datetime(row["observed_at"], LANGUAGE)
+                    if row["observed_at"] is not None
+                    else "—"
+                ),
+                TR("performance_planner.neural_fatigue_freshness"): (
+                    TR(
+                        "performance_planner.neural_fatigue_hours",
+                        value=format_number(row["freshness_hours"], LANGUAGE),
+                    )
+                    if row["freshness_hours"] is not None
+                    else "—"
+                ),
+                TR("performance_planner.neural_fatigue_status_label"): TR(
+                    "performance_planner.neural_fatigue_included"
+                    if row["included"]
+                    else "performance_planner.neural_fatigue_not_included"
+                ),
+            }
+            for row in view["component_rows"]
+        ],
+        hide_index=True,
+        use_container_width=True,
     )
-    metrics[2].metric(
-        TR("performance_planner.neural_fatigue_confidence"),
-        format_percent(result.confidence * 100, LANGUAGE),
-    )
-    metrics[3].metric(
-        TR("performance_planner.neural_fatigue_components"),
-        format_number(len(result.available_components), LANGUAGE),
-    )
-    if view["latest_observation"] is not None:
-        st.caption(
-            TR("performance_planner.neural_fatigue_latest")
-            + ": "
-            + format_datetime(view["latest_observation"], LANGUAGE)
-        )
 
 
 def _render_neural_readiness_summary(selected_date: date) -> None:
@@ -393,45 +461,43 @@ def _render_cognitive_check_suggestions(plan_id: str) -> None:
                     _flash("performance_planner.cognitive_check_skipped")
 
 
-st.title(TR("performance_planner.title"))
-st.subheader(TR("performance_planner.subtitle"))
-st.caption(TR("performance_planner.intro"))
-st.info(TR("performance_planner.local_notice"))
+if not (EMBEDDED_IN_WEEKLY_PLAN and HIDE_EMBEDDED_HEADING):
+    if EMBEDDED_IN_WEEKLY_PLAN:
+        st.subheader(TR("performance_planner.title"))
+    else:
+        st.title(TR("performance_planner.title"))
 _show_flash()
 
-selected_date = st.date_input(
-    TR("performance_planner.plan_date"),
-    value=date.today(),
-    key="performance_planner_date",
-)
-
-_render_neural_readiness_summary(selected_date)
+selected_date = globals().get("__weekly_plan_date__", date.today())
+if st.button(
+    TR("performance_planner.complete_neural_readiness"),
+    key="performance_planner_start_neural_readiness",
+    type="primary",
+    width="content",
+):
+    _open_neural_readiness()
 _render_neural_fatigue_status(selected_date)
 plan = get_plan_for_date(selected_date)
 
 if plan is None:
     st.info(TR("performance_planner.no_plan"))
-    with st.form("performance_planner_create"):
-        st.subheader(TR("performance_planner.new_plan"))
-        new_title = st.text_input(
-            TR("performance_planner.plan_title"),
-            value=TR("performance_planner.default_plan_title"),
-        )
-        new_timezone = st.text_input(
-            TR("performance_planner.timezone"),
-            value=_local_timezone_name(),
-        )
-        submitted = st.form_submit_button(
-            TR("performance_planner.create"),
-            type="primary",
-        )
-        if submitted:
-            try:
-                create_plan(selected_date, new_title, new_timezone)
-            except PLANNER_OPERATION_ERRORS as exc:
-                _error(exc)
-            else:
-                _flash("performance_planner.plan_saved")
+    with st.expander(TR("performance_planner.new_plan"), expanded=False):
+        with st.form("performance_planner_create"):
+            new_title = st.text_input(
+                TR("performance_planner.plan_title"),
+                value="",
+            )
+            submitted = st.form_submit_button(
+                TR("performance_planner.create"),
+                type="primary",
+            )
+            if submitted:
+                try:
+                    create_plan(selected_date, new_title, _local_timezone_name())
+                except PLANNER_OPERATION_ERRORS as exc:
+                    _error(exc)
+                else:
+                    _flash("performance_planner.plan_saved")
     st.stop()
 
 blocks = list_blocks(plan["plan_id"])
@@ -904,10 +970,6 @@ with settings_tab:
             TR("performance_planner.plan_title"),
             value=plan["title"],
         )
-        settings_timezone = st.text_input(
-            TR("performance_planner.timezone"),
-            value=plan["timezone"],
-        )
         settings_status = st.selectbox(
             TR("performance_planner.status"),
             PLAN_STATUSES,
@@ -922,7 +984,6 @@ with settings_tab:
                 update_plan(
                     plan["plan_id"],
                     title=settings_title,
-                    timezone=settings_timezone,
                     status=settings_status,
                 )
             except PLANNER_OPERATION_ERRORS as exc:

@@ -1,15 +1,25 @@
 import unittest
 
 from src.dashboard import (
+    DEVELOPMENT_STRENGTH_OPTIONS,
     DEVELOPMENT_STRENGTH_ACTION_NAMES,
     _add_development_action,
+    _action_options_with_current_rows,
+    _clear_development_action_type,
     _clone_development_action_rows,
+    _compact_action_rows_to_exercises,
     _development_action_rows,
+    _development_rows_from_saved_training,
+    _ensure_action_row_module_keys,
     _is_strength_training_session,
+    _plan_actual_matrix_cell_text,
     _historical_action_summary,
     _historical_action_rows,
+    _first_populated_development_type,
     _infer_development_type_for_rows,
     _normalize_development_action_rows,
+    _planned_sessions_for_development_type,
+    _periodic_plan_action_rows,
     _plan_module_action_options,
     _polar_training_data_row,
     _recommended_action_name,
@@ -61,6 +71,240 @@ class DevelopmentActionControlsTests(unittest.TestCase):
         actions = _plan_module_action_options("main_strength", "下肢拉力")
 
         self.assertIn("杠铃抓举硬拉", actions)
+
+    def test_periodic_plan_rows_are_imported_with_editable_targets(self):
+        imported = _periodic_plan_action_rows([{
+            "training_type": "lower_pull",
+            "exercises": [{
+                "exercise_display_name": "杠铃抓举硬拉",
+                "target_sets": 3,
+                "target_reps": 8,
+                "target_weight": 40,
+            }],
+        }])
+
+        self.assertEqual(
+            [{field: row[field] for field in ("name", "sets", "reps", "load")} for row in imported["下肢拉力"]],
+            [{"name": "杠铃抓举硬拉", "sets": 3, "reps": 8, "load": 40.0}],
+        )
+        self.assertEqual(sum(len(rows) for rows in imported.values()), 1)
+        self.assertEqual(imported["下肢拉力"][0]["module_key"], "main_strength")
+
+    def test_periodic_plan_import_is_scoped_to_the_selected_development_type(self):
+        planned_sessions = [
+            {
+                "training_type": "upper_push",
+                "exercises": [{
+                    "exercise_display_name": "杠铃卧推",
+                    "target_sets": 3,
+                    "target_reps": 8,
+                    "target_weight": 70,
+                }],
+            },
+            {
+                "training_type": "upper_pull",
+                "exercises": [{
+                    "exercise_display_name": "正手引体向上",
+                    "target_sets": 3,
+                    "target_reps": 6,
+                    "target_weight": 0,
+                }],
+            },
+        ]
+
+        imported = _periodic_plan_action_rows(
+            _planned_sessions_for_development_type(planned_sessions, "上肢推力")
+        )
+
+        self.assertEqual([row["name"] for row in imported["上肢推力"]], ["杠铃卧推"])
+        self.assertEqual(imported["上肢拉力"], [])
+
+    def test_periodic_plan_import_uses_the_selected_type_from_the_current_plan_week(self):
+        planned_sessions = [
+            {"planned_date": "2026-09-02", "training_type": "lower_pull"},
+            {"planned_date": "2026-09-03", "training_type": "upper_push"},
+            {"planned_date": "2026-09-10", "training_type": "upper_push"},
+        ]
+
+        imported = _planned_sessions_for_development_type(
+            planned_sessions,
+            "上肢推力",
+            week_segment={"start_date": "2026-09-01", "end_date": "2026-09-07"},
+        )
+
+        self.assertEqual(
+            [session["planned_date"] for session in imported],
+            ["2026-09-03"],
+        )
+
+    def test_saved_training_rows_are_loaded_into_their_saved_strength_type(self):
+        rows = _development_rows_from_saved_training(
+            [{
+                "module_key": "下肢推力",
+                "custom_exercise_name": "杠铃后蹲",
+                "sets": [
+                    {"reps": 6, "load_value": 85},
+                    {"reps": 6, "load_value": 85},
+                    {"reps": 6, "load_value": 85},
+                ],
+            }],
+            {},
+        )
+
+        self.assertEqual(rows["上肢拉力"], [])
+        self.assertEqual(
+            [{field: row[field] for field in ("name", "sets", "reps", "load")}
+             for row in rows["下肢推力"]],
+            [{"name": "杠铃后蹲", "sets": 3, "reps": 6, "load": 85.0}],
+        )
+
+    def test_periodic_plan_import_uses_the_same_latest_values_as_plan_matrix(self):
+        planned_sessions = [
+            {
+                "training_type": "lower_push",
+                "exercises": [{
+                    "exercise_display_name": "杠铃后蹲",
+                    "target_sets": 3,
+                    "target_reps": 5,
+                    "target_weight": 60,
+                }],
+            },
+            {
+                "training_type": "lower_push",
+                "exercises": [{
+                    "exercise_display_name": "杠铃后蹲",
+                    "target_sets": 4,
+                    "target_reps": 3,
+                    "target_weight": 70,
+                }],
+            },
+        ]
+        imported = _periodic_plan_action_rows(planned_sessions)
+        matrix_text = _plan_actual_matrix_cell_text([
+            exercise
+            for session in planned_sessions
+            for exercise in session["exercises"]
+        ])
+
+        self.assertEqual(len(imported["下肢推力"]), 1)
+        self.assertEqual(imported["下肢推力"][0]["sets"], 4)
+        self.assertEqual(imported["下肢推力"][0]["reps"], 3)
+        self.assertEqual(imported["下肢推力"][0]["load"], 70.0)
+        self.assertIn("• 杠铃后蹲 · 70kg · 4×3", matrix_text)
+
+    def test_imported_action_order_and_names_are_preserved_in_editor_options(self):
+        planned_sessions = [{
+            "training_type": "upper_pull",
+            "exercises": [
+                {
+                    "exercise_display_name": "计划新增动作一",
+                    "module_key": "mobility",
+                    "target_sets": 1,
+                    "target_reps": 8,
+                    "target_weight": 0,
+                },
+                {
+                    "exercise_display_name": "计划新增动作二",
+                    "module_key": "main_strength",
+                    "target_sets": 3,
+                    "target_reps": 6,
+                    "target_weight": 20,
+                },
+            ],
+        }]
+        imported = _periodic_plan_action_rows(planned_sessions)
+
+        self.assertEqual(
+            [row["name"] for row in imported["上肢拉力"]],
+            ["计划新增动作一", "计划新增动作二"],
+        )
+        self.assertEqual(
+            [row["module_key"] for row in imported["上肢拉力"]],
+            ["mobility", "main_strength"],
+        )
+        self.assertEqual(
+            _action_options_with_current_rows(
+                ["跪姿胸椎伸展"], imported["上肢拉力"]
+            ),
+            ["跪姿胸椎伸展", "计划新增动作一", "计划新增动作二"],
+        )
+
+    def test_history_rows_and_saved_payload_follow_plan_module_order(self):
+        planned_sessions = [{
+            "training_type": "upper_pull",
+            "exercises": [
+                {
+                    "exercise_display_name": "主项动作",
+                    "module_key": "main_strength",
+                    "target_sets": 3,
+                },
+                {
+                    "exercise_display_name": "关节活动动作",
+                    "module_key": "mobility",
+                    "target_sets": 1,
+                },
+            ],
+        }]
+
+        rows = _periodic_plan_action_rows(planned_sessions)
+        payload = _compact_action_rows_to_exercises(rows, {})
+
+        self.assertEqual(
+            [row["module_key"] for row in rows["上肢拉力"]],
+            ["mobility", "main_strength"],
+        )
+        self.assertEqual(
+            [exercise["module_key"] for exercise in payload],
+            ["mobility", "main_strength"],
+        )
+
+    def test_deleting_a_development_type_clears_only_that_type(self):
+        rows_by_development = {
+            "上肢拉力": [{"id": "upper", "name": "跪姿胸椎伸展"}],
+            "下肢推力": [{"id": "lower", "name": "杠铃后蹲"}],
+        }
+
+        self.assertTrue(
+            _clear_development_action_type(rows_by_development, "上肢拉力")
+        )
+        self.assertEqual(rows_by_development["上肢拉力"], [])
+        self.assertEqual(
+            rows_by_development["下肢推力"],
+            [{"id": "lower", "name": "杠铃后蹲"}],
+        )
+        self.assertFalse(
+            _clear_development_action_type(rows_by_development, "上肢拉力")
+        )
+
+    def test_legacy_rows_receive_their_matching_plan_module(self):
+        rows_by_development = {
+            "上肢拉力": [
+                {"id": "upper-1", "name": "正手引体向上"},
+            ],
+            "下肢推力": [{"id": "lower-1", "name": "杠铃后蹲"}],
+        }
+
+        normalized = _ensure_action_row_module_keys(rows_by_development)
+
+        self.assertEqual(
+            normalized["上肢拉力"][0]["module_key"], "main_strength"
+        )
+        self.assertEqual(
+            normalized["下肢推力"][0]["module_key"], "main_strength"
+        )
+
+    def test_first_populated_type_skips_an_empty_stale_selection(self):
+        rows_by_development = {
+            "上肢拉力": [],
+            "下肢推力": [{"id": "lower", "name": "杠铃后蹲"}],
+        }
+
+        self.assertEqual(
+            _first_populated_development_type(
+                rows_by_development, DEVELOPMENT_STRENGTH_OPTIONS
+            ),
+            "下肢推力",
+        )
 
     def test_injury_prevention_actions_follow_their_strength_modules(self):
         development_type = "伤病预防类训练"

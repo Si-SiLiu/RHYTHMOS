@@ -330,6 +330,24 @@ class KubiosScreenshotTests(unittest.TestCase):
         self.assertEqual(row["import_method"], "screenshot_ocr")
         self.assertEqual(row["reviewed"], 1)
 
+    def test_confirmed_import_immediately_builds_the_table_projection(self):
+        audit_id = self.insert_audit()
+        fields = {
+            "date": "2026-07-08", "rmssd": 55, "mean_hr": 59,
+            "pns_index": 0.13, "sns_index": -0.07, "sdnn": 38.57,
+            "mean_rr_ms": 979.38, "measurement_quality": "GOOD",
+            "mood_code": "Moderate stress, lowered readiness",
+        }
+        outcome = importer.import_reviewed_result(self.connection, audit_id, fields, True)
+        projected = self.connection.execute(
+            "SELECT n.rmssd_ms,n.mean_hr_bpm,n.pns_index,n.sdnn_ms,r.mean_rr_ms,r.mood_code "
+            "FROM kubios_hrv_normalized n JOIN kubios_hrv_measurements_raw r ON r.id=n.source_raw_id "
+            "WHERE n.date=? AND n.selected_as_primary=1",
+            ("2026-07-08",),
+        ).fetchone()
+        self.assertTrue(outcome.success)
+        self.assertEqual(tuple(projected), (55.0, 59.0, 0.13, 38.57, 979.38, "moderate stress, lowered readiness"))
+
     def test_duplicate_confirmed_import_is_idempotent(self):
         audit_id = self.insert_audit()
         fields = {"date": "2026-07-08", "rmssd": 55, "mean_hr": 59}

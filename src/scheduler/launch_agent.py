@@ -78,13 +78,20 @@ def render_launch_agent(
         raise LaunchAgentError("SCHEDULER_RUNNER_NOT_FOUND")
     try:
         template = Template(Path(template_path).read_text(encoding="utf-8"))
+        schedule_intervals = "".join(
+            "<dict><key>Hour</key><integer>"
+            f"{int(value[:2])}"
+            "</integer><key>Minute</key><integer>"
+            f"{int(value[3:])}"
+            "</integer></dict>"
+            for value in config.scheduled_times
+        )
         rendered = template.substitute(
             LABEL=escape(LABEL),
             LAUNCHER_EXECUTABLE=escape(str(paths["launcher"])),
             PYTHON_EXECUTABLE=escape(str(paths["python"])),
             RUNNER_SCRIPT=escape(str(paths["runner"])),
-            HOUR=str(config.hour),
-            MINUTE=str(config.minute),
+            SCHEDULE_INTERVALS=schedule_intervals,
             STANDARD_OUT_PATH=escape(str(paths["stdout"])),
             STANDARD_ERROR_PATH=escape(str(paths["stderr"])),
         )

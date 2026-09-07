@@ -13,11 +13,7 @@
         <string>scheduled</string>
     </array>
     <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
-    </array>
+    <array>$SCHEDULE_INTERVALS</array>
     <key>RunAtLoad</key>
     <false/>
     <key>ProcessType</key>

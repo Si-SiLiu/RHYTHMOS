@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Any
 import math
+import re
 
 from .supplements import validate_supplement
 
@@ -17,6 +18,60 @@ MEAL_TYPES = (
     "breakfast", "morning_snack", "lunch", "afternoon_snack", "dinner",
     "training_fuel", "bedtime_fuel", "free_snack",
 )
+# The editor is organised by the user's ordinal meals. ``meal_type`` remains
+# a nutritional classification so historical summaries remain compatible.
+INITIAL_MEAL_SLOTS = ("meal_1", "meal_2", "meal_3")
+_MEAL_SLOT_RE = re.compile(r"^meal_([1-9]\d*)$")
+
+
+def is_meal_slot(value: str) -> bool:
+    """A numbered meal has no upper bound: meal_1, meal_2, …"""
+    return bool(_MEAL_SLOT_RE.fullmatch(str(value or "")))
+
+
+def meal_slot_number(value: str) -> int:
+    match = _MEAL_SLOT_RE.fullmatch(str(value or ""))
+    if not match:
+        raise ValueError("INVALID_MEAL_SLOT")
+    return int(match.group(1))
+
+
+def meal_type_for_slot(meal_slot: str, actual_meal_time: str) -> str:
+    """Classify a numbered meal from its actual time."""
+    if not is_meal_slot(meal_slot):
+        raise ValueError("INVALID_MEAL_SLOT")
+    try:
+        clock = time.fromisoformat(str(actual_meal_time))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("INVALID_MEAL_DATE_OR_TIME") from exc
+    minute = clock.hour * 60 + clock.minute
+    if meal_slot == "meal_1" and minute < 9 * 60:
+        return "breakfast"
+    if 12 * 60 <= minute < 14 * 60:
+        return "lunch"
+    if 17 * 60 <= minute < 20 * 60:
+        return "dinner"
+    return {1: "breakfast", 2: "lunch", 3: "dinner"}.get(
+        meal_slot_number(meal_slot), "free_snack",
+    )
+
+
+def inferred_meal_slot(meal_type: str, actual_meal_time: str | None = None) -> str:
+    """Give historical records a stable numbered-meal slot on first read."""
+    if meal_type == "breakfast":
+        return "meal_1"
+    if meal_type == "lunch":
+        return "meal_2"
+    if meal_type == "dinner":
+        return "meal_3"
+    if actual_meal_time:
+        try:
+            return next(slot for slot in INITIAL_MEAL_SLOTS if meal_type_for_slot(slot, actual_meal_time) == meal_type)
+        except (ValueError, StopIteration):
+            pass
+    # Historical snacks and fuel entries do not have a numbered equivalent;
+    # retain them as the first extensible slot after the three core meals.
+    return "meal_4"
 CORE_CATEGORIES = (
     "carbohydrate", "protein", "fat", "vegetable", "fruit", "dairy", "nuts",
 )

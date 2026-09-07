@@ -26,7 +26,7 @@ from src.neural_readiness import (CALIBRATION_PROTOCOL_VERSION, DAILY_SHORT_PROT
                                   save_assessment, save_condition_preferences)
 from src.pvt_component import render_pvt
 from src.post_save_sync import refresh_local_coach_for_date
-from src.input_habits import record_input_habit
+from src.input_habits import get_input_habit_defaults, record_input_habit
 
 
 configure_language = current_language(st.session_state)
@@ -196,11 +196,18 @@ if phase == "instructions":
 
 elif phase == "scales":
     st.subheader(_ui("2. 主观状态量表", "2. Subjective state scales"))
+    with connect() as connection:
+        learned_defaults = get_input_habit_defaults(connection)
+
+    def _learned_scale(name: str) -> int:
+        value = learned_defaults.get(name)
+        return min(10, max(0, int(round(float(value)))) if value is not None else 5)
+
     with st.form("neural_subjective_state_form"):
-        mental_fatigue = st.slider(_ui("脑力疲劳：0＝完全没有脑力疲劳；10＝极度脑力疲劳", "Mental fatigue: 0 = none; 10 = extreme"), 0, 10, 5)
-        mental_clarity = st.slider(_ui("思维清晰度：0＝思维非常模糊；10＝思维非常清晰", "Mental clarity: 0 = very foggy; 10 = very clear"), 0, 10, 5)
-        task_motivation = st.slider(_ui("困难任务动力：0＝完全不愿处理；10＝非常愿意处理", "Task motivation: 0 = not willing; 10 = very willing"), 0, 10, 5)
-        physical_heaviness = st.slider(_ui("身体沉重感：0＝身体轻快；10＝非常沉重或迟钝", "Physical heaviness: 0 = light; 10 = very heavy or sluggish"), 0, 10, 5)
+        mental_fatigue = st.slider(_ui("脑力疲劳：0＝完全没有脑力疲劳；10＝极度脑力疲劳", "Mental fatigue: 0 = none; 10 = extreme"), 0, 10, _learned_scale("neural_mental_fatigue"))
+        mental_clarity = st.slider(_ui("思维清晰度：0＝思维非常模糊；10＝思维非常清晰", "Mental clarity: 0 = very foggy; 10 = very clear"), 0, 10, _learned_scale("neural_mental_clarity"))
+        task_motivation = st.slider(_ui("困难任务动力：0＝完全不愿处理；10＝非常愿意处理", "Task motivation: 0 = not willing; 10 = very willing"), 0, 10, _learned_scale("neural_task_motivation"))
+        physical_heaviness = st.slider(_ui("身体沉重感：0＝身体轻快；10＝非常沉重或迟钝", "Physical heaviness: 0 = light; 10 = very heavy or sluggish"), 0, 10, _learned_scale("neural_physical_heaviness"))
         submitted = st.form_submit_button(_ui("进入练习模式", "Start practice mode"), type="primary")
     if submitted:
         st.session_state["neural_scale_values"] = {"mental_fatigue": mental_fatigue, "mental_clarity": mental_clarity, "task_motivation": task_motivation, "physical_heaviness": physical_heaviness}
@@ -282,7 +289,13 @@ elif phase == "formal":
                         "interrupted" if payload.get("interrupted") else "",
                         "mental_fatigue", "mental_clarity", "task_motivation", "physical_heaviness",
                     ],
-                    choices={"neural.test_mode": mode},
+                    choices={"neural.test_mode": mode, "neural.work_phase": work_phase},
+                    numeric={
+                        "neural.mental_fatigue": payload.get("mental_fatigue"),
+                        "neural.mental_clarity": payload.get("mental_clarity"),
+                        "neural.task_motivation": payload.get("task_motivation"),
+                        "neural.physical_heaviness": payload.get("physical_heaviness"),
+                    },
                 )
             refresh_local_coach_for_date(today)
             st.session_state["neural_phase"] = "complete"; st.rerun()

@@ -27,7 +27,7 @@ class AICoachContextTests(unittest.TestCase):
         source = valid_source()
         result = ai_coach_context.build_context(source)
         self.assertEqual(result["contract_versions"], {
-            "prompt_version": "1.3.0",
+            "prompt_version": "1.3.1",
             "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
         })

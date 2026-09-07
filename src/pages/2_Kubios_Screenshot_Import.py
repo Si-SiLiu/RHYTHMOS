@@ -36,7 +36,6 @@ from src.kubios_screenshot.service import batch_summary, process_batch, recogniz
 from src.kubios_screenshot.storage import BASE_DIR, delete_import
 from src.kubios_screenshot.templates import get_template, list_templates
 from src.kubios_metrics.selector import create_measurement_group
-from src.post_save_sync import start_priority_data_sync
 from src.ui_controls import render_manual_input_styles
 
 
@@ -198,14 +197,8 @@ def _show_review(result, *, embedded=False):
                     # action: persist it and immediately refresh Recovery.
                     run_analysis=True,
                     downstream_runner=run_downstream,
-                )
+            )
             if imported.success:
-                try:
-                    start_priority_data_sync()
-                except RuntimeError:
-                    # The reviewed measurement is already stored and analysed
-                    # locally; a missing background runtime must not undo it.
-                    pass
                 downstream_ok = imported.status != "imported" or imported.downstream.get("success")
                 message = TR(
                     "kubios_screenshot.downstream_success"

@@ -46,6 +46,7 @@ SCHEDULED_DATASETS = (
     "continuous_heart_rate",
 )
 SCHEDULED_HOURS = (12, 18, 23)
+ROUTINE_SLEEP_HISTORY_DAYS = 7
 
 SNAPSHOT_FILES = tuple(
     f"polar_{name}.json"
@@ -85,6 +86,15 @@ def _item_count(value):
 def run(context, dry_run=False, today=None, raw_dir=RAW_DIR):
     current_day = today or date.today()
     from_date = (current_day - timedelta(days=27)).isoformat()
+    # Initial/manual runs rebuild the full baseline window. Scheduled and
+    # app-open runs only need recent nights to capture late Polar updates;
+    # historical rows already imported locally remain intact.
+    sleep_history_days = (
+        ROUTINE_SLEEP_HISTORY_DAYS
+        if context.get("trigger_type") in {"scheduled", "catch_up"}
+        else 59
+    )
+    sleep_history_from_date = (current_day - timedelta(days=sleep_history_days)).isoformat()
     to_date = current_day.isoformat()
     if dry_run:
         return {"datasets_checked": len(DATASETS), "items_fetched": 0}
@@ -98,7 +108,10 @@ def run(context, dry_run=False, today=None, raw_dir=RAW_DIR):
 
     def sleep_fetcher():
         payload = fetch_sleep_details(
-            client, from_date=from_date, to_date=to_date, ensure_date=to_date,
+            client,
+            from_date=sleep_history_from_date,
+            to_date=to_date,
+            ensure_date=to_date,
         )
         fetched_sleep_dates[:] = sleep_dates(payload)
         return payload
@@ -132,7 +145,7 @@ def run(context, dry_run=False, today=None, raw_dir=RAW_DIR):
             "Nightly Recharge",
             "polar_nightly_recharge.json",
             lambda: fetch_nightly_recharge_with_samples(
-                client, from_date=from_date, to_date=to_date,
+                client, from_date=sleep_history_from_date, to_date=to_date,
                 sample_dates=fetched_sleep_dates,
             ),
             True, False,
@@ -167,6 +180,13 @@ def run(context, dry_run=False, today=None, raw_dir=RAW_DIR):
             status = "success"
         elif required:
             status = "failure"
+        elif name == "cardio_load" and result["status_code"] == 404:
+            # Polar's Cardio Load endpoint is not available to this account and
+            # its raw response is not consumed by any current RHYTHMOS metric.
+            # Preserve the capability result without reporting each routine
+            # sync as degraded. Other optional endpoint failures still remain
+            # explicit warnings for review.
+            status = "unavailable"
         else:
             status = "warning"
         endpoint_results.append(

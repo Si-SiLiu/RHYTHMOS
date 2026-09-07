@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+# Backward-compatible export for maintenance tooling.  Routine syncs below do
+# not invoke it because it executes the repository-wide test suite.
 try:
     from scripts.update_project_state import update_project_state
 except ImportError:
@@ -89,12 +91,26 @@ def sync_runtime_documents(context, changelog_path=CHANGELOG_PATH, handoff_path=
 def run(context, dry_run=False):
     if dry_run:
         return {"state_updated": False, "state_check": "planned"}
-    state = update_project_state()
-    synchronized_at = sync_runtime_documents(context)
+    # A health-data sync must never be held hostage by the repository-wide
+    # governance check.  That check discovers and runs the full test suite,
+    # which is intentionally a separate maintenance operation and can take
+    # minutes.  Keeping only the small generated sync regions here preserves
+    # the operational handoff without delaying data, recovery, or Codex
+    # feedback updates.
+    try:
+        synchronized_at = sync_runtime_documents(context)
+    except (OSError, RuntimeError):
+        # Documentation maintenance cannot invalidate a completed health-data
+        # and Codex-feedback refresh. The next pipeline can retry it.
+        return {
+            "state_updated": False,
+            "state_check": "deferred",
+            "warning_count": 1,
+            "warnings": ["GOVERNANCE_DOCUMENTS_NOT_UPDATED"],
+        }
     return {
         "state_updated": True,
-        "state_check": "passed",
-        "test_total": state["test_total"],
+        "state_check": "deferred",
         "phase_documents_updated": True,
         "documents_updated_at": synchronized_at,
     }

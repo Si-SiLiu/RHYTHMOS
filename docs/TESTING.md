@@ -1,5 +1,21 @@
 # Testing
 
+## Batch history loading
+
+`tests/test_batch_history_loading.py` verifies exact batch/single-record
+equivalence for nutrition and training, bounded query counts across more than
+400 records, supplement joins, deleted children, legacy food names, empty
+results, limits and fresh Polar values after edits.
+
+## Runtime optimization coverage
+
+`tests/test_runtime_optimization.py` checks opening a current database while
+another connection holds a write transaction, ledger tampering, legacy column
+and meal repair, exact bulk-versus-single-day baseline equivalence, source-query
+counts, fresh reads after corrections, and frontend fingerprint invalidation.
+Fixtures include missing dates, zeroes, missing values, outliers, duplicate
+Kubios dates, and non-primary measurements. Tests use temporary databases.
+
 ## Sleep Regularity Engine 2.0
 
 `tests/test_sleep_regularity.py` covers maturity gates, missing-data semantics,

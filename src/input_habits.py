@@ -1,8 +1,9 @@
-"""Local aggregate learning for repeated input habits.
+"""Local learning for repeated structured input habits.
 
-Only low-sensitivity aggregates are retained: event counts, field usage,
-categorical choices, and numeric means. Raw names, notes, questions, and
-device payloads are deliberately excluded.
+Learning stays on-device.  It records completed forms, commonly selected
+structured names (such as food or exercise), categorical choices, and numeric
+means so the next matching form can be pre-filled.  Free-text notes, symptom
+descriptions, questions, and device payloads are never used as defaults.
 """
 
 from __future__ import annotations
@@ -89,10 +90,12 @@ def record_input_habit(
     for field in fields:
         _increment(habits["fields"], str(field).strip())
     for name, value in (choices or {}).items():
-        if value in (None, ""):
-            continue
+        values = value if isinstance(value, (list, tuple, set)) else (value,)
         choice_bucket = habits["choices"].setdefault(str(name).strip(), {})
-        _increment(choice_bucket, str(value).strip())
+        for choice in values:
+            if choice in (None, ""):
+                continue
+            _increment(choice_bucket, str(choice).strip())
     for name, value in (numeric or {}).items():
         try:
             number = float(value)
@@ -188,11 +191,30 @@ def get_input_habit_defaults(connection: sqlite3.Connection) -> dict[str, Any]:
     for key, target in (
         ("training.duration_minutes", "training_duration_minutes"),
         ("training.session_rpe", "training_session_rpe"),
+        ("training.weight_kg", "training_weight_kg"),
+        ("training.reps", "training_reps"),
+        ("training.set_count", "training_set_count"),
+        ("nutrition.amount", "nutrition_amount"),
+        ("neural.mental_fatigue", "neural_mental_fatigue"),
+        ("neural.mental_clarity", "neural_mental_clarity"),
+        ("neural.task_motivation", "neural_task_motivation"),
+        ("neural.physical_heaviness", "neural_physical_heaviness"),
     ):
         bucket = habits.get("numeric", {}).get(key) or {}
         count = int(bucket.get("count", 0))
         if count >= 2:
             defaults[target] = round(float(bucket.get("sum", 0.0)) / count, 1)
+    for key, target in (
+        ("nutrition.food_name", "nutrition_food_name"),
+        ("nutrition.unit", "nutrition_unit"),
+        ("training.exercise_name", "training_exercise_name"),
+        ("training.exercise_category", "training_exercise_category"),
+        ("neural.work_phase", "neural_work_phase"),
+        ("personal.training_goal", "personal_training_goal"),
+    ):
+        value = _most_common(habits, key)
+        if value:
+            defaults[target] = value
     defaults["event_count"] = profile["event_count"]
     return defaults
 

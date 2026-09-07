@@ -139,6 +139,13 @@ APP_SHELL_CSS = """
 [data-testid="stSidebar"] .rh-sidebar-brand {
     margin: .1rem .5rem 1rem;
 }
+/* A page rerun can briefly retain an earlier sidebar markdown block while an
+   embedded editor is replaced. Only one product wordmark belongs in the
+   navigation rail. */
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.rh-sidebar-brand)
+~ [data-testid="stElementContainer"]:has(.rh-sidebar-brand) {
+    display: none !important;
+}
 [data-testid="stSidebar"] .rh-sidebar-brand-name {
     color: inherit;
     font-size: 1rem;

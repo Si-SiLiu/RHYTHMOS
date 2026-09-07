@@ -13,7 +13,7 @@ class RecoveryMetricsTableTests(unittest.TestCase):
             format_date=lambda value, language: value,
             ui=lambda zh, en: en,
         )
-        self.assertEqual(len(row), 18)
+        self.assertEqual(len(row), 19)
         self.assertIn("kubios_metrics.sdnn.name (ms)", row)
         self.assertEqual(row["domain.recovery.measurement_quality"], "domain.recovery.quality_good")
 

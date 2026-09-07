@@ -180,9 +180,21 @@ with tabs[1]:
         c1, c2, c3 = st.columns(3)
         meal_index = MEAL_TYPES.index(input_habit_defaults["meal_type"]) if input_habit_defaults.get("meal_type") in MEAL_TYPES else 0
         meal_type = c1.selectbox(TR("personal_logging.meal_type"), MEAL_TYPES, index=meal_index, format_func=meal_name, key="nutrition_meal_type")
-        food_name = c2.text_input(TR("personal_logging.food"), key="nutrition_food")
-        amount = c3.number_input(TR("personal_logging.amount"), min_value=0.0, key="nutrition_amount")
-        unit = st.text_input(TR("personal_logging.unit"), key="nutrition_unit")
+        food_name = c2.text_input(
+            TR("personal_logging.food"),
+            value=str(input_habit_defaults.get("nutrition_food_name") or ""),
+            key="nutrition_food",
+        )
+        amount = c3.number_input(
+            TR("personal_logging.amount"), min_value=0.0,
+            value=float(input_habit_defaults.get("nutrition_amount") or 0.0),
+            key="nutrition_amount",
+        )
+        unit = st.text_input(
+            TR("personal_logging.unit"),
+            value=str(input_habit_defaults.get("nutrition_unit") or ""),
+            key="nutrition_unit",
+        )
         nutrient_cols = st.columns(7)
         label_keys = ("calories", "protein", "carbs", "fat", "fiber", "water", "sodium")
         nutrient_values = [column.number_input(TR(f"personal_logging.{key}"), min_value=0.0, key=f"nutrition_{key}") for column, key in zip(nutrient_cols, label_keys)]
@@ -196,7 +208,11 @@ with tabs[1]:
                         connection,
                         "daily_log.nutrition",
                         fields=[key for key, value in zip(keys, nutrient_values) if value not in (None, 0.0)],
-                        choices={"nutrition.meal_type": meal_type, "nutrition.unit": unit},
+                        choices={
+                            "nutrition.meal_type": meal_type,
+                            "nutrition.food_name": food_name,
+                            "nutrition.unit": unit,
+                        },
                         numeric={"nutrition.amount": amount},
                     )
                 refresh_local_coach_for_date(selected_date)
@@ -220,12 +236,32 @@ with tabs[2]:
         c1, c2, c3, c4 = st.columns(4)
         duration = c1.number_input(TR("personal_logging.duration"), min_value=0.0, value=float(input_habit_defaults.get("training_duration_minutes") or 0.0), key="strength_duration")
         session_rpe = c2.number_input(TR("personal_logging.session_rpe"), min_value=0.0, max_value=10.0, value=float(input_habit_defaults.get("training_session_rpe") or 0.0), key="strength_rpe")
-        exercise_name = c3.text_input(TR("personal_logging.exercise"), key="strength_exercise")
-        category = c4.text_input(TR("personal_logging.category"), key="strength_category")
+        exercise_name = c3.text_input(
+            TR("personal_logging.exercise"),
+            value=str(input_habit_defaults.get("training_exercise_name") or ""),
+            key="strength_exercise",
+        )
+        category = c4.text_input(
+            TR("personal_logging.category"),
+            value=str(input_habit_defaults.get("training_exercise_category") or ""),
+            key="strength_category",
+        )
         s1, s2, s3 = st.columns(3)
-        weight = s1.number_input(TR("personal_logging.weight_kg"), min_value=0.0, key="strength_weight")
-        reps = s2.number_input(TR("personal_logging.reps"), min_value=0, step=1, key="strength_reps")
-        set_count = s3.number_input(TR("personal_logging.sets"), min_value=1, step=1, key="strength_sets")
+        weight = s1.number_input(
+            TR("personal_logging.weight_kg"), min_value=0.0,
+            value=float(input_habit_defaults.get("training_weight_kg") or 0.0),
+            key="strength_weight",
+        )
+        reps = s2.number_input(
+            TR("personal_logging.reps"), min_value=0,
+            value=int(round(float(input_habit_defaults.get("training_reps") or 0))),
+            step=1, key="strength_reps",
+        )
+        set_count = s3.number_input(
+            TR("personal_logging.sets"), min_value=1,
+            value=max(1, int(round(float(input_habit_defaults.get("training_set_count") or 1)))),
+            step=1, key="strength_sets",
+        )
         if st.form_submit_button(TR("personal_logging.save_strength")):
             try:
                 with connect() as connection:
@@ -239,8 +275,18 @@ with tabs[2]:
                             ("exercise_name", exercise_name), ("weight_kg", weight),
                             ("reps", reps), ("set_count", set_count),
                         ) if value not in (None, "", 0, 0.0)],
-                        choices={"training.session_type": "strength"},
-                        numeric={"training.duration_minutes": duration, "training.session_rpe": session_rpe},
+                        choices={
+                            "training.session_type": "strength",
+                            "training.exercise_name": exercise_name,
+                            "training.exercise_category": category,
+                        },
+                        numeric={
+                            "training.duration_minutes": duration,
+                            "training.session_rpe": session_rpe,
+                            "training.weight_kg": weight,
+                            "training.reps": reps,
+                            "training.set_count": set_count,
+                        },
                     )
                 refresh_local_coach_for_date(selected_date)
                 _queue_priority_data_sync()

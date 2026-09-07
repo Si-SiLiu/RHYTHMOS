@@ -6,6 +6,7 @@ import json
 import os
 from uuid import uuid4
 
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -36,12 +37,16 @@ from src.training_plan_actual import (
     create_planned_session, create_training_cycle, current_cycle_week_segment,
     cycle_end_date_for_weeks, cycle_week_segments,
     delete_planned_exercise, delete_training_cycle,
-    get_current_training_cycle, list_planned_sessions,
+    get_current_training_cycle, get_training_cycle_for_date, list_planned_sessions,
     list_training_cycles, update_planned_exercise,
     recent_outdoor_action_defaults, recent_planned_action_defaults,
     update_planned_session, update_training_cycle,
 )
 from src.training_plan_actual_i18n import plan_actual_text
+from src.training_progress import (
+    filter_strength_progress_records,
+    strength_progress_records,
+)
 from src.ui.components.training_entry import (
     ENTRY_MODES, EXERTION_PREFERENCES, apply_catalog_defaults,
     copied_set_for_entry, default_load_unit, visible_set_fields,
@@ -335,7 +340,6 @@ def _selected_cycle_week_segment(cycle_record, *, state_key):
     selected_index = st.session_state.get(state_key)
     if selected_index not in options:
         selected_index = default_index
-        st.session_state[state_key] = selected_index
     return next(segment for segment in segments if segment["index"] == selected_index)
 
 
@@ -349,7 +353,7 @@ def _cycle_week_selector(cycle_record, *, state_key, container=None):
     options = [segment["index"] for segment in segments]
     selected_segment = _selected_cycle_week_segment(cycle_record, state_key=state_key)
     chosen_index = container.selectbox(
-        "计划周",
+        TR("weekly_plan.week"),
         options,
         index=options.index(selected_segment["index"]),
         format_func=lambda index: _cycle_period_label(cycle_record["name"], index),
@@ -367,17 +371,39 @@ def _plan_training_type_label(value):
     return PLAN_TRAINING_TYPE_LABELS.get(value, (value, value))[1 if LANGUAGE == "en" else 0]
 
 
+def _dedupe_actions_last_value(items, name_getter):
+    """Keep one action per normalized name, using its latest plan values.
+
+    This is deliberately shared by the periodic-plan cards and the execution
+    importer.  Both views must resolve duplicate plan entries identically.
+    """
+    order = []
+    latest_by_action = {}
+    for item in items or []:
+        name = str(name_getter(item) or "").strip()
+        action_key = _action_name_key(name)
+        if not action_key:
+            continue
+        if action_key not in latest_by_action:
+            order.append(action_key)
+        latest_by_action[action_key] = item
+    return [latest_by_action[action_key] for action_key in order]
+
+
 def _plan_actual_matrix_cell_text(exercises):
     if not exercises:
         return "+"
     rows = []
-    unique_items = {}
-    for item in exercises:
+    for item in _dedupe_actions_last_value(
+        exercises,
+        lambda exercise: (
+            exercise.get("exercise_display_name")
+            or exercise.get("exercise_canonical_name")
+        ),
+    ):
         name = item.get("exercise_display_name") or item.get("exercise_canonical_name")
         if not name:
             continue
-        unique_items[name] = item
-    for name, item in unique_items.items():
         details = []
         if item.get("target_weight") is not None:
             details.append(f"{item['target_weight']:g}kg")
@@ -412,8 +438,8 @@ def _render_training_history_tab(connection, sessions, training_notice=None, sel
             _details(
                 connection,
                 selected_session,
+                sessions,
                 auto_expand=should_focus,
-                readonly=selected_session.get("date") < date.today().isoformat(),
             )
             if training_notice:
                 st.success(training_notice)
@@ -715,9 +741,7 @@ def _render_plan_actual_v1(connection, sessions, *, training_notice=None):
         for module_key in PLAN_MODULES:
             row = plan_directory.columns([1.35] + [1] * 7)
             color = PLAN_ACTUAL_MODULE_COLORS[module_key]
-            label = escape(
-                f"{text('strength_training_prefix')}{text(f'module_{module_key}')}"
-            )
+            label = escape(text(f"module_{module_key}"))
             row[0].markdown(
                 f"<div class='drc-plan-actual-label drc-plan-actual-module' style='--module-color:{color}'>{label}</div>",
                 unsafe_allow_html=True,
@@ -1001,8 +1025,8 @@ def _render_plan_actual_v1(connection, sessions, *, training_notice=None):
 
     with execution_tab:
         _render_training_history_tab(connection, sessions, training_notice, selected_cycle)
+        _render_strength_progress(connection, sessions)
         _render_training_baseline()
-        _render_training_guidance()
 
 
 def _polar_sport_type(session):
@@ -1836,6 +1860,53 @@ def _action_name_key(name):
     return str(name or "").replace("－", "-").replace("—", "-").replace("–", "-").replace(" ", "")
 
 
+def _strength_plan_module_label(module_key):
+    """Display the concise module name used in strength plan tables."""
+    module_key = str(module_key or "").strip()
+    if module_key not in PLAN_MODULE_ACTION_TYPES:
+        return module_key or TR("common.no_data")
+    return _plan_actual_text(f"module_{module_key}")
+
+
+def _plan_module_for_action(name, development_type=None):
+    """Choose a valid plan module for legacy rows that did not store one."""
+    action_key = _action_name_key(name)
+    allowed_keys = {
+        _action_name_key(candidate)
+        for candidate in DEVELOPMENT_STRENGTH_ACTION_NAMES.get(
+            development_type, ()
+        )
+    }
+    for module_key in PLAN_MODULES:
+        module_actions = ACTION_NAME_OPTIONS.get(
+            PLAN_MODULE_ACTION_TYPES[module_key], ()
+        )
+        if action_key not in {_action_name_key(candidate) for candidate in module_actions}:
+            continue
+        if not allowed_keys or action_key in allowed_keys:
+            return module_key
+    return "main_strength"
+
+
+def _ensure_action_row_module_keys(rows_by_development):
+    """Backfill plan-module keys and plan-table order for editor rows."""
+    for development_type, rows in (rows_by_development or {}).items():
+        for row in rows or []:
+            module_key = str(row.get("module_key") or "").strip()
+            if module_key not in PLAN_MODULE_ACTION_TYPES:
+                row["module_key"] = _plan_module_for_action(
+                    row.get("name"), development_type
+                )
+        # The periodic plan is arranged by strength module. Preserve each
+        # module's own action order while making the historical editor follow
+        # that same vertical plan-table order.
+        rows.sort(
+            key=lambda row: PLAN_MODULES.index(row["module_key"])
+            if row.get("module_key") in PLAN_MODULES else len(PLAN_MODULES)
+        )
+    return rows_by_development
+
+
 def _plan_module_action_options(module_key, development_type, stored_names=(), learned_defaults=None):
     """Return actions matching both the strength module and development type."""
     action_type = PLAN_MODULE_ACTION_TYPES[module_key]
@@ -1876,6 +1947,27 @@ def _action_name_options(
         if name and name not in names:
             names.append(name)
     return names, saved_key
+
+
+def _action_options_with_current_rows(base_names, rows):
+    """Keep imported/saved row names selectable without changing row order.
+
+    A periodic plan can contain an action that was added after the static
+    development-type catalogue. Its row must remain selectable in the editor;
+    otherwise Streamlit resets it to the first catalogue option and destroys
+    both the planned name and the plan-table sequence.
+    """
+    names, seen = [], set()
+    for candidate in [
+        *(base_names or []),
+        *(row.get("name") for row in (rows or [])),
+    ]:
+        name = str(candidate or "").strip()
+        key = _action_name_key(name)
+        if name and key not in seen:
+            names.append(name)
+            seen.add(key)
+    return names
 
 
 def _development_action_rows(rows_by_development, development_type):
@@ -1990,6 +2082,26 @@ def _remove_development_action(rows):
     return True
 
 
+def _clear_development_action_type(rows_by_development, development_type):
+    """Remove every draft action under one development-strength type."""
+    rows = rows_by_development.setdefault(development_type, [])
+    had_actions = bool(rows)
+    rows.clear()
+    return had_actions
+
+
+def _first_populated_development_type(rows_by_development, candidates, *, exclude=None):
+    """Return the first selectable strength type that still has actions."""
+    return next(
+        (
+            candidate
+            for candidate in candidates or []
+            if candidate != exclude and rows_by_development.get(candidate)
+        ),
+        None,
+    )
+
+
 def _recommended_action_name(rows, action_names):
     """Recommend the first catalog action, then the action after the last one."""
     names = [str(name).strip() for name in (action_names or []) if str(name).strip()]
@@ -2003,13 +2115,93 @@ def _recommended_action_name(rows, action_names):
     return names[0]
 
 
+def _periodic_plan_action_rows(planned_sessions, catalog=None):
+    """Convert today's periodic strength plan into editable action rows."""
+    catalog = catalog or {}
+    rows_by_development = {
+        development_type: []
+        for development_type in DEVELOPMENT_STRENGTH_OPTIONS
+    }
+    allowed_by_name = {
+        _action_name_key(name): development_type
+        for development_type, names in DEVELOPMENT_STRENGTH_ACTION_NAMES.items()
+        for name in names
+    }
+    for planned_session in planned_sessions or []:
+        planned_type = planned_session.get("training_type")
+        development_type = PLAN_TRAINING_TYPE_LABELS.get(
+            planned_type, (planned_type, planned_type)
+        )[0]
+        if development_type not in DEVELOPMENT_STRENGTH_OPTIONS:
+            development_type = None
+        for exercise in planned_session.get("exercises") or []:
+            catalog_item = catalog.get(exercise.get("exercise_catalog_id"))
+            name = (
+                exercise.get("exercise_display_name")
+                or exercise.get("exercise_canonical_name")
+                or (_catalog_name(catalog_item) if catalog_item else "")
+            )
+            name = str(name or "").strip()
+            if not name:
+                continue
+            # Prefer the plan's explicit type. If a legacy plan has no usable
+            # type, recover it from the action catalog so imported actions do
+            # not land in an unrelated development-strength bucket.
+            row_type = development_type or allowed_by_name.get(
+                _action_name_key(name), DEVELOPMENT_STRENGTH_OPTIONS[0]
+            )
+            row = {
+                "id": _uuid(),
+                "name": name,
+                "module_key": (
+                    exercise.get("module_key")
+                    if exercise.get("module_key") in PLAN_MODULE_ACTION_TYPES
+                    else _plan_module_for_action(name, row_type)
+                ),
+                "sets": max(int(exercise.get("target_sets") or 1), 1),
+                "reps": max(int(exercise.get("target_reps") or 0), 0),
+                "load": max(float(exercise.get("target_weight") or 0.0), 0.0),
+            }
+            rows_by_development[row_type].append(row)
+    return _ensure_action_row_module_keys({
+        development_type: _dedupe_actions_last_value(
+            rows,
+            lambda row: (row.get("module_key"), row.get("name")),
+        )
+        for development_type, rows in rows_by_development.items()
+    })
+
+
+def _planned_sessions_for_development_type(
+    planned_sessions,
+    development_type,
+    *,
+    week_segment=None,
+):
+    """Keep a periodic import scoped to the selected type and cycle week."""
+    selected_type = str(development_type or "").strip()
+    week_start = str((week_segment or {}).get("start_date") or "")
+    week_end = str((week_segment or {}).get("end_date") or "")
+    return [
+        session for session in (planned_sessions or [])
+        if PLAN_TRAINING_TYPE_LABELS.get(
+            session.get("training_type"), (session.get("training_type"), "")
+        )[0] == selected_type
+        and (
+            not week_start
+            or week_start <= str(session.get("planned_date") or "") <= week_end
+        )
+    ]
+
+
 def _clone_development_action_rows(rows_by_development):
     """Copy the complete development-type/action model with fresh row ids."""
-    return {
+    return _ensure_action_row_module_keys({
         development_type: [
             {
                 "id": _uuid(),
                 "name": row.get("name") or "",
+                "module_key": row.get("module_key"),
                 "sets": int(row.get("sets") or 1),
                 "reps": int(row.get("reps") or 0),
                 "load": float(row.get("load") or 0.0),
@@ -2017,28 +2209,56 @@ def _clone_development_action_rows(rows_by_development):
             for row in rows
         ]
         for development_type, rows in (rows_by_development or {}).items()
+    })
+
+
+def _development_rows_from_saved_training(exercises, catalog):
+    """Load saved exercises into the editor, grouped by their real type.
+
+    The action editor is an editable view of one saved Polar training session.
+    Its initial state must come from the persisted exercises, rather than from
+    a default action or an old draft retained in Streamlit session state.
+    """
+    rows_by_development = {
+        development_type: []
+        for development_type in DEVELOPMENT_STRENGTH_OPTIONS
     }
-
-
-def _action_rows_from_training_exercises(exercises, development_type, catalog):
-    """Convert legacy structured exercises into the current compact row model."""
-    rows = []
     for exercise in exercises or []:
         catalog_item = catalog.get(exercise.get("exercise_catalog_id"))
         name = (
-            _catalog_name(catalog_item) if catalog_item else
-            exercise.get("custom_exercise_name") or ""
+            _catalog_name(catalog_item) if catalog_item
+            else exercise.get("custom_exercise_name") or ""
         )
+        name = str(name).strip()
+        if not name:
+            continue
+        saved_module_key = str(exercise.get("module_key") or "").strip()
+        inferred_type = _infer_development_type_for_rows(
+            [{"name": name}], saved_module_key
+        )
+        development_type = inferred_type or (
+            saved_module_key
+            if saved_module_key in DEVELOPMENT_STRENGTH_OPTIONS else ""
+        )
+        if not development_type:
+            development_type = DEVELOPMENT_STRENGTH_OPTIONS[0]
         sets = exercise.get("sets") or []
-        first_set = next((item for item in sets if isinstance(item, dict)), {})
-        rows.append({
+        first_set = next(
+            (item for item in sets if isinstance(item, dict)), {}
+        )
+        rows_by_development.setdefault(development_type, []).append({
             "id": _uuid(),
             "name": name,
+            "module_key": (
+                saved_module_key
+                if saved_module_key in PLAN_MODULE_ACTION_TYPES
+                else _plan_module_for_action(name, development_type)
+            ),
             "sets": max(len(sets), 1),
             "reps": int(first_set.get("reps") or 0),
             "load": float(first_set.get("load_value") or 0.0),
         })
-    return rows
+    return _ensure_action_row_module_keys(rows_by_development)
 
 
 def _polar_training_data_row(sessions, *, include_count=True):
@@ -2205,14 +2425,13 @@ def _today_training_details(connection, sessions):
             str(item.get("id") or item.get("uuid") or ""),
         ),
     )
-    plan = get_weekly_training_plan(connection, date.today())
-    today_day = plan_day_for_date(plan, date.today())
-    st.subheader(TR("training_logging.today_details"))
     if not polar:
+        st.subheader(TR("training_logging.today_details"))
         st.info(TR("training_logging.today_no_data"))
         return
     if not today_sessions:
         return
+    st.subheader(TR("training_logging.today_details"))
     for index, session in enumerate(today_sessions, start=1):
         sport_type = _polar_sport_type(session)
         label = f"{index}. {sport_type}"
@@ -2220,8 +2439,9 @@ def _today_training_details(connection, sessions):
         # explicitly opens it, so the daily overview stays compact.
         with st.expander(label, expanded=False):
             # The aggregate Polar fields are already shown in 今日训练数据.
-            # Only strength sessions have structured action input and action
-            # summaries; other Polar sports keep their Polar-only view.
+            # Strength sessions additionally expose the editable action
+            # module; every other Polar session still keeps a useful,
+            # non-empty read-only detail card here.
             if _is_strength_training_session(session):
                 with st.container(border=True):
                     st.markdown(f"### {TR('training_logging.exercise_details')}")
@@ -2229,6 +2449,9 @@ def _today_training_details(connection, sessions):
                 with st.container(border=True):
                     st.markdown(f"### {TR('training_logging.summary')}")
                     _today_training_summary(session, today_action_rows)
+            else:
+                st.caption(TR("training_logging.polar_only_details"))
+                _session_header(session)
 
 
 def _compact_action_rows_to_exercises(rows_by_development, catalog):
@@ -2240,14 +2463,22 @@ def _compact_action_rows_to_exercises(rows_by_development, catalog):
     }
     exercises = []
     sequence_order = 0
-    for development_type, rows in (rows_by_development or {}).items():
-        for row in rows or []:
-            name = str(row.get("name") or "").strip()
-            if not name:
-                continue
-            catalog_item = catalog_by_name.get(name)
-            set_count = max(1, int(row.get("sets") or 1))
-            exercises.append({
+    ordered_rows = [
+        (development_type, row)
+        for development_type, rows in (rows_by_development or {}).items()
+        for row in (rows or [])
+    ]
+    ordered_rows.sort(
+        key=lambda item: PLAN_MODULES.index(item[1].get("module_key"))
+        if item[1].get("module_key") in PLAN_MODULES else len(PLAN_MODULES)
+    )
+    for development_type, row in ordered_rows:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        catalog_item = catalog_by_name.get(name)
+        set_count = max(1, int(row.get("sets") or 1))
+        exercises.append({
                 "uuid": _uuid(),
                 "exercise_catalog_id": catalog_item.get("id") if catalog_item else None,
                 "custom_exercise_name": None if catalog_item else name,
@@ -2261,7 +2492,12 @@ def _compact_action_rows_to_exercises(rows_by_development, catalog):
                 "is_unilateral": bool(catalog_item.get("is_unilateral")) if catalog_item else False,
                 "skill_proficiency": None,
                 "notes": None,
-                "module_key": str(development_type or "").strip() or None,
+                "module_key": (
+                    str(row.get("module_key") or "").strip()
+                    if str(row.get("module_key") or "").strip()
+                    in PLAN_MODULE_ACTION_TYPES
+                    else _plan_module_for_action(name, development_type)
+                ),
                 "sets": [{
                     "uuid": _uuid(),
                     "set_type": "working",
@@ -2279,8 +2515,8 @@ def _compact_action_rows_to_exercises(rows_by_development, catalog):
                     "completed": True,
                     "notes": None,
                 } for _ in range(set_count)],
-            })
-            sequence_order += 1
+        })
+        sequence_order += 1
     return exercises
 
 
@@ -2355,60 +2591,97 @@ def _today_exercise_details(connection, session):
             centered_dataframe(rows)
 
 
-def _today_action_input_table(connection, session, sessions):
-    """Render an independent action-type group and its action rows."""
+def _today_action_input_table(
+    connection,
+    session,
+    sessions,
+    *,
+    allow_periodic_import=True,
+    periodic_import_date=None,
+    notes_key=None,
+    editor_scope="today",
+):
+    """Render the shared compact strength-action editor for any session."""
     load_label = f"{TR('training_logging.load')}（{'kg'.upper()}）"
     sets_label = TR("training_logging.total_sets").replace("总", "", 1)
     action_name_label = TR("training_logging.exercise")
     reps_label = TR("training_logging.reps")
     session_id = session["id"]
-    repaint_key = f"today_action_v3_repaint_{session_id}"
-
-    # An action callback sets this flag before the body is rendered.  Abort
-    # that intermediate interaction run and immediately start one clean run,
-    # so removed widgets cannot survive as frontend deltas.
-    if st.session_state.pop(repaint_key, False):
-        st.rerun()
+    editor_session_id = f"{editor_scope}_{session_id}"
+    periodic_import_request_key = f"today_action_v3_import_periodic_request_{editor_session_id}"
+    template_notice_key = f"today_action_template_notice_{editor_session_id}"
 
     catalog = {item["id"]: item for item in list_exercise_catalog(connection)}
     stored_action_names = [
         _catalog_name(item) for item in catalog.values() if _catalog_name(item)
     ]
 
-    def available_action_names(selected_development_type):
-        return _action_name_options(
-            selected_development_type,
-            session_id,
-            stored_action_names,
-            selected_development_type,
+    def available_action_names(selected_development_type, module_key):
+        if module_key in PLAN_MODULE_ACTION_TYPES:
+            base_names = _plan_module_action_options(
+                module_key,
+                selected_development_type,
+                stored_action_names,
+            )
+            saved_key = (
+                f"today_action_names_{editor_session_id}_"
+                f"{selected_development_type}_{module_key}"
+            )
+        else:
+            base_names, saved_key = _action_name_options(
+                selected_development_type,
+                editor_session_id,
+                stored_action_names,
+                selected_development_type,
+            )
+        return (
+            _action_options_with_current_rows(
+                base_names,
+                [
+                    row for row in rows_by_development.get(
+                        selected_development_type, []
+                    )
+                    if row.get("module_key") == module_key
+                ],
+            ),
+            saved_key,
         )
 
-    def new_row(name="", sets=1, reps=0, load=0.0):
+    def new_row(name="", module_key="main_strength", sets=1, reps=0, load=0.0):
         return {
             "id": _uuid(),
             "name": name or "",
+            "module_key": module_key,
             "sets": int(sets or 1),
             "reps": int(reps or 0),
             "load": float(load or 0.0),
         }
 
-    rows_by_development_key = f"today_action_rows_by_development_v3_{session_id}"
-    rows_model_key = f"today_action_rows_by_development_version_{session_id}"
-    development_type_key = f"today_action_development_type_{session_id}"
-    if st.session_state.get(rows_model_key) != 4:
+    rows_by_development_key = f"today_action_rows_by_development_v3_{editor_session_id}"
+    rows_model_key = f"today_action_rows_by_development_version_{editor_session_id}"
+    development_type_key = f"today_action_development_type_{editor_session_id}"
+    initialized_types_key = f"today_action_v3_initialized_types_{editor_session_id}"
+    if st.session_state.get(rows_model_key) != 6:
         previous_rows = {}
         model_version = st.session_state.get(rows_model_key)
-        if model_version == 3:
+        saved_rows = _development_rows_from_saved_training(
+            session.get("exercises"), catalog
+        )
+        if any(saved_rows.values()):
+            # A saved session is authoritative. This also replaces stale
+            # default rows from the previous editor version on first load.
+            previous_rows = saved_rows
+        elif model_version in {3, 4, 5}:
             previous_rows = st.session_state.get(rows_by_development_key, {})
         else:
             # Preserve any in-progress legacy rows during the one-time
             # transition. Every development type then owns an entirely
             # separate list, so its + and - controls cannot affect another.
             legacy_groups = st.session_state.get(
-                f"today_action_groups_v2_{session_id}", []
+                f"today_action_groups_v2_{editor_session_id}", []
             )
             legacy_active_id = st.session_state.get(
-                f"today_action_active_group_v2_{session_id}"
+                f"today_action_active_group_v2_{editor_session_id}"
             )
             legacy_group = next(
                 (
@@ -2435,6 +2708,7 @@ def _today_action_input_table(connection, session, sessions):
             )
         for development_type in DEVELOPMENT_STRENGTH_OPTIONS:
             previous_rows.setdefault(development_type, [])
+        _ensure_action_row_module_keys(previous_rows)
 
         selected_before = st.session_state.get(development_type_key)
         selected_rows_before = list(previous_rows.get(selected_before, []))
@@ -2453,7 +2727,17 @@ def _today_action_input_table(connection, session, sessions):
             and normalized_rows.get(inferred_type)
         ):
             st.session_state[development_type_key] = inferred_type
-        st.session_state[rows_model_key] = 4
+        saved_type = _first_populated_development_type(
+            normalized_rows, normalized_rows.keys()
+        )
+        if saved_type:
+            st.session_state[development_type_key] = saved_type
+            st.session_state[initialized_types_key] = [
+                development_type
+                for development_type, rows in normalized_rows.items()
+                if rows
+            ]
+        st.session_state[rows_model_key] = 6
 
     rows_by_development = st.session_state.get(rows_by_development_key, {})
     legacy_recovery_rows = rows_by_development.pop(LEGACY_ACTIVE_RECOVERY_TYPE, [])
@@ -2461,6 +2745,7 @@ def _today_action_input_table(connection, session, sessions):
         rows_by_development.setdefault("伤病预防类训练", []).extend(legacy_recovery_rows)
     for development_type in DEVELOPMENT_STRENGTH_OPTIONS:
         rows_by_development.setdefault(development_type, [])
+    _ensure_action_row_module_keys(rows_by_development)
     # Re-check on every render as well as during the one-time migration.  A
     # hot-reloaded session can already carry the current model version while
     # its action buckets were created by an older run (or accidentally shared
@@ -2484,14 +2769,81 @@ def _today_action_input_table(connection, session, sessions):
     st.session_state[rows_by_development_key] = rows_by_development
     if st.session_state.get(development_type_key) == LEGACY_ACTIVE_RECOVERY_TYPE:
         st.session_state[development_type_key] = "伤病预防类训练"
+
+    if allow_periodic_import and st.session_state.pop(
+        periodic_import_request_key, False
+    ):
+        # For history corrections, resolve the cycle that covered the
+        # recorded training date. This includes completed and archived cycles
+        # instead of incorrectly importing today's plan.
+        target_date = periodic_import_date or date.today()
+        current_cycle = get_training_cycle_for_date(
+            connection,
+            on_date=target_date,
+            training_domain="indoor_strength",
+        )
+        if current_cycle:
+            # A completed workout can intentionally use a different type than
+            # the one written on that calendar date.  Read the whole cycle's
+            # current plan week, then let the type selector choose its
+            # matching session (for example, import Wednesday's upper push
+            # plan while correcting Tuesday's actual lower-pull slot).
+            planned_sessions = list_planned_sessions(
+                connection,
+                cycle_id=current_cycle["id"],
+            )
+            current_week = current_cycle_week_segment(
+                current_cycle,
+                on_date=target_date,
+            )
+        else:
+            # Do not fall back to plans from another cycle. The
+            # import is explicitly scoped to the cycle currently in progress.
+            planned_sessions = []
+            current_week = None
+        # Import only the plan segment requested in the development-strength
+        # selector.  Do not silently switch the editor to the first planned
+        # type, otherwise a user selecting "上肢推力" can receive another
+        # type's actions from the same day's periodic plan.
+        selected_import_type = str(
+            st.session_state.get(development_type_key)
+            or DEVELOPMENT_STRENGTH_OPTIONS[0]
+        ).strip()
+        planned_sessions = _planned_sessions_for_development_type(
+            planned_sessions,
+            selected_import_type,
+            week_segment=current_week,
+        )
+        imported_rows = _periodic_plan_action_rows(planned_sessions, catalog)
+        imported_count = sum(len(rows) for rows in imported_rows.values())
+        if imported_count:
+            # Import is the starting point for editing, so replace the
+            # current draft rather than appending duplicates to it.
+            rows_by_development = imported_rows
+            st.session_state[rows_by_development_key] = imported_rows
+            st.session_state[initialized_types_key] = [selected_import_type]
+            st.session_state[development_type_key] = selected_import_type
+            st.session_state[template_notice_key] = TR(
+                "training_logging.imported_matching_periodic_plan",
+                count=imported_count,
+                cycle_name=current_cycle.get("name") or _ui("当前周期", "Current cycle"),
+            )
+        else:
+            st.session_state[template_notice_key] = TR(
+                "training_logging.no_matching_periodic_plan"
+            )
+
     legacy_custom_development_type_key = (
-        f"today_action_custom_development_type_{session_id}"
+        f"today_action_custom_development_type_{editor_session_id}"
     )
     active_custom_development_type_key = (
-        f"today_action_active_custom_development_type_{session_id}"
+        f"today_action_active_custom_development_type_{editor_session_id}"
     )
     custom_development_types_key = (
-        f"today_action_custom_development_types_{session_id}"
+        f"today_action_custom_development_types_{editor_session_id}"
+    )
+    selection_alignment_key = (
+        f"today_action_v3_selection_alignment_{editor_session_id}"
     )
     development_type_label = TR("training_logging.development_strength_type")
     development_type_header = (
@@ -2538,6 +2890,21 @@ def _today_action_input_table(connection, session, sessions):
             custom_development_types.append(candidate)
     st.session_state[custom_development_types_key] = custom_development_types
     development_type_options = [*DEVELOPMENT_STRENGTH_OPTIONS, *custom_development_types]
+    # Older editor states can retain an empty selector (for example, 上肢拉力)
+    # after its last action was removed, even when the actual training is in
+    # another strength type. Correct that stale selection once before the
+    # widget is created, without preventing a deliberate later selection of
+    # an empty type to add a new action.
+    if st.session_state.get(selection_alignment_key) != 1:
+        selected_type = str(
+            st.session_state.get(development_type_key, "")
+        ).strip()
+        populated_type = _first_populated_development_type(
+            rows_by_development, development_type_options
+        )
+        if populated_type and not rows_by_development.get(selected_type):
+            st.session_state[development_type_key] = populated_type
+        st.session_state[selection_alignment_key] = 1
     development_type_choice = st.selectbox(
         development_type_label,
         development_type_options,
@@ -2568,37 +2935,71 @@ def _today_action_input_table(connection, session, sessions):
         ),
         reverse=True,
     )
-    template_notice_key = f"today_action_template_notice_{session_id}"
-
-    # Button callbacks run before this script body renders.  Updating the
-    # current list there prevents Streamlit from first drawing the old row
-    # and then leaving a partial copy of its number inputs behind.
-    def current_development_type():
-        return development_type or None
-
-    def add_current_action():
-        selected_development_type = current_development_type()
-        if not selected_development_type:
+    def change_action_plan_module(row_id, selected_development_type, choice_key):
+        """Keep a row's plan-table module and action name compatible."""
+        module_key = str(st.session_state.get(choice_key) or "").strip()
+        if module_key not in PLAN_MODULE_ACTION_TYPES:
             return
         current_rows = _development_action_rows(
             st.session_state[rows_by_development_key], selected_development_type
         )
-        action_names, _ = available_action_names(selected_development_type)
-        _add_development_action(
-            current_rows,
-            new_row(name=_recommended_action_name(current_rows, action_names)),
+        row = next(
+            (item for item in current_rows if item.get("id") == row_id), None
         )
-        st.session_state[repaint_key] = True
+        if not row or row.get("module_key") == module_key:
+            return
 
-    def remove_current_action():
-        selected_development_type = current_development_type()
+        row["module_key"] = module_key
+        allowed_names = _plan_module_action_options(
+            module_key, selected_development_type, stored_action_names
+        )
+        allowed_keys = {_action_name_key(name) for name in allowed_names}
+        if row.get("name") and _action_name_key(row["name"]) not in allowed_keys:
+            same_module_rows = [
+                item for item in current_rows
+                if item.get("id") != row_id and item.get("module_key") == module_key
+            ]
+            row["name"] = _recommended_action_name(
+                same_module_rows, allowed_names
+            )
+            st.session_state[
+                f"today_action_v3_name_choice_{editor_session_id}_{row_id}"
+            ] = row["name"]
+        _ensure_action_row_module_keys(st.session_state[rows_by_development_key])
+
+    def delete_current_development_type():
+        selected_development_type = str(
+            st.session_state.get(development_type_key) or development_type
+        ).strip()
         if not selected_development_type:
             return
-        current_rows = _development_action_rows(
-            st.session_state[rows_by_development_key], selected_development_type
+        current_model = st.session_state[rows_by_development_key]
+        if not _clear_development_action_type(
+            current_model, selected_development_type
+        ):
+            return
+        # Keep a deliberately deleted standard type empty. Otherwise the
+        # editor's first-open convenience row would immediately recreate it.
+        initialized = set(st.session_state.get(initialized_types_key, []))
+        initialized.add(selected_development_type)
+        st.session_state[initialized_types_key] = sorted(initialized)
+        next_type = _first_populated_development_type(
+            current_model,
+            development_type_options,
+            exclude=selected_development_type,
         )
-        _remove_development_action(current_rows)
-        st.session_state[repaint_key] = True
+        if next_type:
+            st.session_state[development_type_key] = next_type
+        st.session_state[template_notice_key] = TR(
+            "training_logging.deleted_development_type",
+            type=selected_development_type,
+        )
+
+    def request_periodic_plan_import():
+        # Database reads stay in the main Streamlit render thread. The
+        # callback only records the user's request, avoiding SQLite's
+        # cross-thread connection error.
+        st.session_state[periodic_import_request_key] = True
 
     def copy_previous_training():
         source = next(
@@ -2606,7 +3007,7 @@ def _today_action_input_table(connection, session, sessions):
                 item for item in previous_sessions
                 if any(
                     st.session_state.get(
-                        f"today_action_rows_by_development_v3_{item.get('id')}", {}
+                        f"today_action_rows_by_development_v3_{editor_scope}_{item.get('id')}", {}
                     ).values()
                 )
             ),
@@ -2615,11 +3016,13 @@ def _today_action_input_table(connection, session, sessions):
         copied_rows = None
         source_type = None
         if source:
-            source_rows_key = f"today_action_rows_by_development_v3_{source['id']}"
+            source_rows_key = (
+                f"today_action_rows_by_development_v3_{editor_scope}_{source['id']}"
+            )
             source_rows = st.session_state.get(source_rows_key, {})
             copied_rows = _clone_development_action_rows(source_rows)
             source_type = st.session_state.get(
-                f"today_action_development_type_{source['id']}"
+                f"today_action_development_type_{editor_scope}_{source['id']}"
             )
         else:
             source = next(
@@ -2627,13 +3030,12 @@ def _today_action_input_table(connection, session, sessions):
                 None,
             )
             if source:
-                copied_rows = {
-                    item: [] for item in DEVELOPMENT_STRENGTH_OPTIONS
-                }
-                copied_rows[development_type] = _action_rows_from_training_exercises(
-                    source.get("exercises"), development_type, catalog
+                copied_rows = _development_rows_from_saved_training(
+                    source.get("exercises"), catalog
                 )
-                source_type = development_type
+                source_type = _first_populated_development_type(
+                    copied_rows, copied_rows.keys()
+                )
 
         if copied_rows is None:
             st.session_state[template_notice_key] = TR(
@@ -2654,7 +3056,6 @@ def _today_action_input_table(connection, session, sessions):
         st.session_state[template_notice_key] = TR(
             "training_logging.copied_previous_training"
         )
-        st.session_state[repaint_key] = True
 
     def save_current_template():
         templates = st.session_state.setdefault("today_action_templates_v1", [])
@@ -2669,8 +3070,37 @@ def _today_action_input_table(connection, session, sessions):
             "training_logging.template_saved"
         )
 
-    headers = (action_name_label, sets_label, reps_label, load_label)
-    column_widths = (3.2, .75, .75, .9)
+    headers = (
+        _plan_actual_text("training_module"),
+        action_name_label,
+        sets_label,
+        reps_label,
+        load_label,
+    )
+    column_widths = (1.15, 2.45, .75, .75, .9)
+
+    # Make the editor immediately usable when a strength session has no
+    # recorded action rows yet.  Remember which development types have been
+    # initialized so removing the final row still leaves the type empty until
+    # the user explicitly adds another action.
+    initialized_types = set(st.session_state.get(initialized_types_key, []))
+    if development_type not in initialized_types:
+        if not active_rows:
+            module_key = "main_strength"
+            action_names, _ = available_action_names(
+                development_type, module_key
+            )
+            if action_names:
+                _add_development_action(
+                    active_rows,
+                    new_row(
+                        name=_recommended_action_name(active_rows, action_names),
+                        module_key=module_key,
+                    ),
+                )
+        initialized_types.add(development_type)
+        st.session_state[initialized_types_key] = sorted(initialized_types)
+
     header_columns = st.columns(column_widths)
     for column, header in zip(header_columns, headers):
         header_html = "<div class='drc-action-input-header'>" + str(header) + "</div>"
@@ -2680,7 +3110,7 @@ def _today_action_input_table(connection, session, sessions):
     # session.  When an action is removed we clear its slot ourselves instead
     # of relying on Streamlit's dynamic-column reconciliation, which can leave
     # faded reps/load fields and duplicate action controls in the browser.
-    slot_counts_key = f"today_action_v3_slot_counts_{session_id}"
+    slot_counts_key = f"today_action_v3_slot_counts_{editor_session_id}"
     slot_counts = st.session_state.setdefault(slot_counts_key, {})
     slot_count = max(slot_counts.get(development_type, 0), len(active_rows))
     slot_counts[development_type] = slot_count
@@ -2690,7 +3120,27 @@ def _today_action_input_table(connection, session, sessions):
         row_id = row["id"]
         row_container = row_slots[row_index].container()
         row_columns = row_container.columns(column_widths)
-        action_names, saved_names_key = available_action_names(development_type)
+        row_module_key = (
+            f"today_action_v3_row_plan_module_{editor_session_id}_{row_id}"
+        )
+        if (
+            st.session_state.get(row_module_key)
+            not in PLAN_MODULE_ACTION_TYPES
+        ):
+            st.session_state[row_module_key] = row.get("module_key")
+        row_columns[0].selectbox(
+            _plan_actual_text("training_module"),
+            PLAN_MODULES,
+            format_func=_strength_plan_module_label,
+            key=row_module_key,
+            label_visibility="collapsed",
+            on_change=change_action_plan_module,
+            args=(row_id, development_type, row_module_key),
+        )
+        module_key = row.get("module_key")
+        action_names, saved_names_key = available_action_names(
+            development_type, module_key
+        )
         if row["name"] == "__custom_action__":
             row["name"] = ""
         # A standard development type is a closed action set.  Replace any
@@ -2715,7 +3165,7 @@ def _today_action_input_table(connection, session, sessions):
             name_options.append(row["name"])
         if not name_options:
             name_options = [""]
-        name_choice_key = f"today_action_v3_name_choice_{session_id}_{row_id}"
+        name_choice_key = f"today_action_v3_name_choice_{editor_session_id}_{row_id}"
         if (
             development_type in DEVELOPMENT_STRENGTH_ACTION_NAMES
             and st.session_state.get(name_choice_key) not in name_options
@@ -2725,7 +3175,7 @@ def _today_action_input_table(connection, session, sessions):
             st.session_state[name_choice_key] = (
                 row["name"] if row["name"] in name_options else name_options[0]
             )
-        selected_name = row_columns[0].selectbox(
+        selected_name = row_columns[1].selectbox(
             action_name_label, name_options,
             index=(name_options.index(row["name"]) if row["name"] in name_options else 0),
             key=name_choice_key,
@@ -2739,19 +3189,19 @@ def _today_action_input_table(connection, session, sessions):
             if row["name"] not in saved_names:
                 saved_names.append(row["name"])
                 st.session_state[saved_names_key] = saved_names
-        row["sets"] = row_columns[1].number_input(
+        row["sets"] = row_columns[2].number_input(
             sets_label, min_value=1, step=1, value=row["sets"],
-            key=f"today_action_v3_sets_{session_id}_{row_id}",
+            key=f"today_action_v3_sets_{editor_session_id}_{row_id}",
             label_visibility="collapsed",
         )
-        row["reps"] = row_columns[2].number_input(
+        row["reps"] = row_columns[3].number_input(
             reps_label, min_value=0, step=1, value=row["reps"],
-            key=f"today_action_v3_reps_{session_id}_{row_id}",
+            key=f"today_action_v3_reps_{editor_session_id}_{row_id}",
             label_visibility="collapsed",
         )
-        row["load"] = row_columns[3].number_input(
+        row["load"] = row_columns[4].number_input(
             load_label, min_value=0.0, step=0.5, value=row["load"],
-            key=f"today_action_v3_load_{session_id}_{row_id}",
+            key=f"today_action_v3_load_{editor_session_id}_{row_id}",
             label_visibility="collapsed",
         )
 
@@ -2761,33 +3211,85 @@ def _today_action_input_table(connection, session, sessions):
     st.session_state[rows_by_development_key] = rows_by_development
     action_count = len(active_rows)
     controls_container = st.container(
-        key=f"today_action_v3_controls_{session_id}_{development_type}"
+        key=f"today_action_v3_controls_{editor_session_id}_{development_type}"
     )
-    group_action_controls = controls_container.columns(2)
-    group_action_controls[0].button(
+    group_action_controls = controls_container.columns(3)
+    add_action_clicked = group_action_controls[0].button(
         f"{action_name_label.replace('名称', '')}+",
-        key=f"today_action_v3_add_{session_id}_{development_type}",
+        key=f"today_action_v3_add_{editor_session_id}_{development_type}",
         use_container_width=True,
-        on_click=add_current_action,
     )
-    group_action_controls[1].button(
+    remove_action_clicked = group_action_controls[1].button(
         f"{action_name_label.replace('名称', '')}-",
-        key=f"today_action_v3_delete_{session_id}_{development_type}",
+        key=f"today_action_v3_delete_{editor_session_id}_{development_type}",
         use_container_width=True,
         disabled=action_count == 0,
-        on_click=remove_current_action,
     )
+    group_action_controls[2].button(
+        TR("training_logging.delete_development_type"),
+        key=f"today_action_v3_delete_type_{editor_session_id}_{development_type}",
+        use_container_width=True,
+        disabled=action_count == 0,
+        on_click=delete_current_development_type,
+    )
+    # These controls intentionally mutate after the current table has been
+    # rendered and then start a clean rerun.  Streamlit callbacks capture the
+    # preceding render's list, which can make + / - appear inert after a plan
+    # import or module change.
+    if add_action_clicked:
+        current_rows = _development_action_rows(
+            st.session_state[rows_by_development_key], development_type
+        )
+        module_key = (
+            current_rows[-1].get("module_key")
+            if current_rows else "main_strength"
+        )
+        action_names, _ = available_action_names(development_type, module_key)
+        _add_development_action(
+            current_rows,
+            new_row(
+                name=_recommended_action_name(current_rows, action_names),
+                module_key=module_key,
+            ),
+        )
+        _ensure_action_row_module_keys(rows_by_development)
+        st.session_state[rows_by_development_key] = rows_by_development
+        st.rerun()
+    if remove_action_clicked:
+        current_rows = _development_action_rows(
+            st.session_state[rows_by_development_key], development_type
+        )
+        if _remove_development_action(current_rows):
+            if not current_rows:
+                next_type = _first_populated_development_type(
+                    st.session_state[rows_by_development_key],
+                    development_type_options,
+                    exclude=development_type,
+                )
+                if next_type:
+                    st.session_state[development_type_key] = next_type
+            st.session_state[rows_by_development_key] = rows_by_development
+            st.rerun()
 
-    template_controls = st.columns(2)
-    template_controls[0].button(
+    template_controls = st.columns(3 if allow_periodic_import else 2)
+    copy_control_index = 1 if allow_periodic_import else 0
+    template_control_index = 2 if allow_periodic_import else 1
+    if allow_periodic_import:
+        template_controls[0].button(
+            TR("training_logging.import_matching_periodic_plan"),
+            key=f"today_action_v3_import_periodic_plan_{editor_session_id}",
+            use_container_width=True,
+            on_click=request_periodic_plan_import,
+        )
+    template_controls[copy_control_index].button(
         TR("training_logging.copy_previous_training"),
-        key=f"today_action_v3_copy_previous_{session_id}",
+        key=f"today_action_v3_copy_previous_{editor_session_id}",
         use_container_width=True,
         on_click=copy_previous_training,
     )
-    template_controls[1].button(
+    template_controls[template_control_index].button(
         TR("training_logging.save_template"),
-        key=f"today_action_v3_save_template_{session_id}",
+        key=f"today_action_v3_save_template_{editor_session_id}",
         use_container_width=True,
         on_click=save_current_template,
     )
@@ -2795,10 +3297,10 @@ def _today_action_input_table(connection, session, sessions):
     if notice:
         st.success(notice)
 
-    save_notice_key = f"today_action_save_notice_{session_id}"
+    save_notice_key = f"today_action_save_notice_{editor_session_id}"
     if st.button(
         TR("training_logging.save_action_details"),
-        key=f"today_action_v3_save_{session_id}",
+        key=f"today_action_v3_save_{editor_session_id}",
         type="primary",
         use_container_width=True,
     ):
@@ -2812,7 +3314,10 @@ def _today_action_input_table(connection, session, sessions):
                         or session.get("polar_sport_type")
                     ),
                     "status": "completed",
-                    "notes": session.get("notes"),
+                    "notes": (
+                        st.session_state.get(notes_key, session.get("notes"))
+                        if notes_key else session.get("notes")
+                    ),
                 },
                 _compact_action_rows_to_exercises(rows_by_development, catalog),
             )
@@ -2939,6 +3444,138 @@ def _historical_action_summary(session):
 
 def _historical_training_summary(session):
     _render_training_summary(session, _historical_action_summary(session))
+
+
+STRENGTH_PROGRESS_PERIODS = (28, 56, None)
+STRENGTH_PROGRESS_METRICS = (
+    "max_load_kg", "estimated_1rm_kg", "volume_kg",
+)
+
+
+def _strength_progress_value(value):
+    return TR("common.no_data") if value is None else f"{format_number(value, LANGUAGE)} kg"
+
+
+def _strength_progress_delta(records, metric):
+    values = [record.get(metric) for record in records if record.get(metric) is not None]
+    if len(values) < 2:
+        return None
+    return values[-1] - values[-2]
+
+
+def _strength_progress_chart(records, metric, label):
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(
+        x=[record["date"] for record in records],
+        y=[record.get(metric) for record in records],
+        mode="lines+markers",
+        line={"color": "#ff5a5f", "width": 3},
+        marker={"color": "#ff5a5f", "size": 8},
+        hovertemplate=f"%{{x}}<br>{escape(label)}：%{{y:.1f}} kg<extra></extra>",
+    ))
+    figure.update_layout(
+        height=330,
+        margin={"l": 8, "r": 8, "t": 16, "b": 8},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#f5f7fa"},
+        hovermode="x unified",
+        showlegend=False,
+    )
+    figure.update_xaxes(showgrid=False, title=None)
+    figure.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,.18)",
+        zeroline=False,
+        title=f"{label}（kg）",
+    )
+    return figure
+
+
+def _render_strength_progress(connection, sessions):
+    """Show completed, per-action load trends without mixing movements."""
+    # This is a detailed analysis surface, not an always-visible dashboard.
+    # Starting it collapsed keeps history compact on every page re-entry.
+    with st.expander(TR("training_logging.strength_progress"), expanded=False):
+        catalog_names = {
+            item["id"]: _catalog_name(item)
+            for item in list_exercise_catalog(connection)
+        }
+        records = strength_progress_records(sessions, catalog_names=catalog_names)
+        st.caption(TR("training_logging.strength_progress_notice"))
+        if not records:
+            st.info(TR("training_logging.strength_progress_no_data"))
+            return
+
+        exercises = sorted({record["exercise"] for record in records})
+        controls = st.columns(2)
+        selected_exercise = controls[0].selectbox(
+            TR("training_logging.strength_progress_exercise"),
+            exercises,
+            key="strength_progress_exercise",
+        )
+        period_labels = {
+            28: TR("training_logging.strength_progress_4_weeks"),
+            56: TR("training_logging.strength_progress_8_weeks"),
+            None: TR("training_logging.strength_progress_all_time"),
+        }
+        selected_period = controls[1].selectbox(
+            TR("training_logging.strength_progress_range"),
+            STRENGTH_PROGRESS_PERIODS,
+            format_func=lambda value: period_labels[value],
+            key="strength_progress_range",
+        )
+        start_date = (
+            (date.today() - timedelta(days=selected_period - 1)).isoformat()
+            if selected_period else None
+        )
+        selected_records = filter_strength_progress_records(
+            records,
+            selected_exercise,
+            start_date=start_date,
+        )
+        if not selected_records:
+            st.info(TR("training_logging.strength_progress_no_range_data"))
+            return
+
+        latest = selected_records[-1]
+        metric_labels = {
+            "max_load_kg": TR("training_logging.max_working_load"),
+            "estimated_1rm_kg": TR("training_logging.estimated_1rm"),
+            "volume_kg": TR("training_logging.exercise_volume"),
+        }
+        overview = st.columns(3)
+        for column, metric in zip(overview, STRENGTH_PROGRESS_METRICS):
+            delta = _strength_progress_delta(selected_records, metric)
+            column.metric(
+                metric_labels[metric],
+                _strength_progress_value(latest.get(metric)),
+                None if delta is None else f"{delta:+.1f} kg",
+            )
+
+        selected_metric = st.radio(
+            TR("training_logging.strength_progress_view"),
+            STRENGTH_PROGRESS_METRICS,
+            horizontal=True,
+            format_func=lambda value: metric_labels[value],
+            key="strength_progress_metric",
+        )
+        st.plotly_chart(
+            _strength_progress_chart(
+                selected_records,
+                selected_metric,
+                metric_labels[selected_metric],
+            ),
+            width="stretch",
+            config={"displayModeBar": False},
+        )
+        st.caption(
+            TR(
+                "training_logging.strength_progress_working_sets",
+                count=latest["working_set_count"],
+                date=format_date(latest["date"], LANGUAGE),
+            )
+        )
 
 
 def _has_recorded_training_set(set_item):
@@ -3362,55 +3999,6 @@ def _summary(session, show_title=True):
         )
 
 
-def _readonly_training_details(connection, session):
-    """Show historical action rows with today's compact read-only layout."""
-    catalog = {item["id"]: item for item in list_exercise_catalog(connection)}
-    st.subheader(TR("training_logging.exercise_details"))
-    grouped = _historical_action_rows(session, catalog)
-    if not grouped:
-        st.info(TR("training_logging.empty_sets"))
-        return
-    load_label = f"{TR('training_logging.load')}（KG）"
-    headers = (
-        TR("training_logging.exercise"),
-        TR("training_logging.total_sets").replace("总", "", 1),
-        TR("training_logging.reps"),
-        load_label,
-    )
-    for development_type, rows in grouped.items():
-        st.markdown(
-            "<div class='drc-action-input-header'>"
-            + escape(TR("training_logging.development_strength_type"))
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<div class='drc-readonly-development'>"
-            + escape(str(development_type))
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        header_columns = st.columns((3.2, .75, .75, .9))
-        for column, header in zip(header_columns, headers):
-            column.markdown(
-                "<div class='drc-action-input-header'>" + escape(str(header)) + "</div>",
-                unsafe_allow_html=True,
-            )
-        for row in rows:
-            columns = st.columns((3.2, .75, .75, .9))
-            values = (
-                row["name"], row["sets"], row["reps"],
-                _value(row["load"]) if row["load"] is not None else TR("common.no_data"),
-            )
-            for column, value in zip(columns, values):
-                column.markdown(
-                    "<div class='drc-readonly-action-cell'>"
-                    + escape(str(value))
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
-
 def _render_plan_actual_analysis(connection, session):
     plan = get_weekly_training_plan(connection, date.fromisoformat(session["date"]))
     day = plan_day_for_date(plan, date.fromisoformat(session["date"]))
@@ -3434,43 +4022,48 @@ def _render_plan_actual_analysis(connection, session):
             st.json(regulated)
 
 
-def _details(connection, session, *, auto_expand=False, readonly=False):
+def _details(connection, session, sessions, *, auto_expand=False):
     historical_data_title = (_ui("历史", "") + TR("training_logging.title")) if LANGUAGE != "en" else TR("training_logging.title")
     historical_details_title = (_ui("历史", "") + TR("training_logging.combined_details")) if LANGUAGE != "en" else TR("training_logging.combined_details")
+    notes_key = f"training_notes_{session['id']}"
     with st.expander(historical_data_title, expanded=auto_expand):
         _session_header(session)
-        if readonly:
-            st.caption(f"{TR('training_logging.notes')}：{session.get('notes') or TR('common.no_data')}")
-        else:
-            notes = st.text_area(
-                TR("training_logging.notes"), value=session.get("notes") or "",
-                key=f"training_notes_{session['id']}",
-            )
+        # Polar objective fields remain read-only, while notes and the
+        # structured training details below can be corrected later.
+        st.text_area(
+            TR("training_logging.notes"), value=session.get("notes") or "",
+            key=notes_key,
+        )
 
-    # Match today's behavior: structured action details and the combined
-    # action summary exist only when Polar identified the session as strength
-    # training.  Other historical sports keep their Polar data view only.
+    # Match today's training view: the compact action module is available for
+    # strength sessions, while Polar objective fields remain read-only.
     if not _is_strength_training_session(session):
         return
 
+    # History stays compact by default. Selecting a record from the history
+    # table can open it once, but returning to the page no longer forces this
+    # large editor back open after the user has collapsed it.
     with st.expander(historical_details_title, expanded=auto_expand):
-        # The history panel mirrors the compact daily view.  Editing remains
-        # available in today's section above; this panel never renders the
-        # legacy advanced editor or mutation controls.
-        _readonly_training_details(connection, session)
-        _historical_training_summary(session)
+        action_rows = _today_action_input_table(
+            connection,
+            session,
+            sessions,
+            periodic_import_date=session.get("date"),
+            notes_key=notes_key,
+            editor_scope="history",
+        )
+        _today_training_summary(session, action_rows)
 
 
 TRAINING_BASELINE_CSS = """
 <style>
-.drc-load-card,.drc-load-week{border:1px solid rgba(117,130,148,.18);border-radius:var(--rh-radius-standard);background:rgba(117,130,148,.065);box-shadow:none;color:var(--rh-text)}
-.drc-load-card{box-sizing:border-box;min-height:0;padding:1.25rem 1.35rem}.drc-load-card-head{display:flex;align-items:flex-start;justify-content:flex-start;gap:.75rem;flex-wrap:wrap;padding-bottom:.875rem;border-bottom:1px solid var(--rh-border-subtle)}
+.drc-load-overview{box-sizing:border-box;border:1px solid rgba(117,130,148,.18);border-radius:var(--rh-radius-standard);background:rgba(117,130,148,.065);box-shadow:none;color:var(--rh-text);padding:1.25rem 1.35rem}.drc-load-baseline-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0}.drc-load-baseline-panel{min-width:0;padding-right:1.35rem}.drc-load-baseline-panel + .drc-load-baseline-panel{border-left:1px solid var(--rh-border-subtle);padding-left:1.35rem;padding-right:0}.drc-load-card-head{display:flex;align-items:flex-start;justify-content:flex-start;gap:.75rem;flex-wrap:wrap;padding-bottom:.875rem;border-bottom:1px solid var(--rh-border-subtle)}
 .drc-load-title{color:var(--rh-text);font-size:1.0625rem;font-weight:600;letter-spacing:-.006em;line-height:1.4}.drc-load-value{color:var(--rh-text);font-size:1.875rem;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.016em;line-height:1.2;margin:1.125rem 0 0}.drc-load-value.is-empty{font-size:1.4375rem;font-weight:600;letter-spacing:-.01em;margin-top:1.25rem}
 .drc-load-evidence{color:var(--rh-text-muted);font-size:.8125rem;line-height:1.55;margin-top:1rem}.drc-load-muted{color:var(--rh-text-muted);font-size:.8125rem;line-height:1.55}.drc-load-status{border-radius:var(--rh-radius-small);background:var(--rh-surface-inset);color:var(--rh-text-secondary);font-size:.8125rem;font-weight:600;line-height:1.3;padding:.3125rem .625rem}.drc-load-status.good{background:var(--rh-status-positive-surface);color:var(--rh-status-positive)}.drc-load-status.info{background:rgba(73,111,153,.12);color:#356da8}.drc-load-status.warn{background:var(--rh-status-caution-surface);color:var(--rh-status-caution)}.drc-load-status.neutral{color:var(--rh-text-secondary)}
 .drc-range{position:relative;height:8px;margin:1.15rem 0 .4rem;border-radius:999px;background:linear-gradient(90deg,rgba(117,130,148,.12) 0 20%,rgba(47,125,92,.18) 20% 80%,rgba(117,130,148,.12) 80%)}
 .drc-range-bound{position:absolute;top:-.25rem;height:16px;border-left:1px solid var(--rh-text-muted)}.drc-range-marker{position:absolute;top:-.22rem;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:#2e7d52;border:2px solid var(--rh-surface);box-shadow:none}
-.drc-load-week{margin-top:1.15rem;padding:1.25rem 1.35rem}.drc-load-week-title{color:var(--rh-text);font-size:1.0625rem;font-weight:600;line-height:1.4}.drc-load-week-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin-top:1rem;border-top:1px solid var(--rh-border-subtle)}.drc-load-week-item{min-width:0;padding:.875rem 1rem .2rem 0}.drc-load-week-item + .drc-load-week-item{border-left:1px solid var(--rh-border-subtle);padding-left:1rem}.drc-load-week-label{color:var(--rh-text-muted);font-size:.8125rem;font-weight:500;line-height:1.4}.drc-load-week-value{color:var(--rh-text);font-size:1.625rem;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.016em;line-height:1.25;margin-top:.32rem;overflow-wrap:anywhere}
-@media (max-width:720px){.drc-load-card,.drc-load-week{padding:1.1rem}.drc-load-week-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.drc-load-week-item:nth-child(odd){border-left:0;padding-left:0}.drc-load-week-item:nth-child(n+3){border-top:1px solid var(--rh-border-subtle)}}
+.drc-load-overview-week{margin-top:1.25rem;padding-top:1.15rem;border-top:1px solid var(--rh-border-subtle)}.drc-load-week-title{color:var(--rh-text);font-size:1.0625rem;font-weight:600;line-height:1.4}.drc-load-week-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin-top:1rem}.drc-load-week-item{min-width:0;padding:.15rem 1rem .2rem 0}.drc-load-week-item + .drc-load-week-item{border-left:1px solid var(--rh-border-subtle);padding-left:1rem}.drc-load-week-label{color:var(--rh-text-muted);font-size:.8125rem;font-weight:500;line-height:1.4}.drc-load-week-value{color:var(--rh-text);font-size:1.625rem;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.016em;line-height:1.25;margin-top:.32rem;overflow-wrap:anywhere}.drc-load-note{color:var(--rh-text-muted);font-size:.8125rem;line-height:1.55;margin-top:.85rem}
+@media (max-width:720px){.drc-load-overview{padding:1.1rem}.drc-load-baseline-grid,.drc-load-week-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.drc-load-baseline-panel{padding:0 0 1.1rem}.drc-load-baseline-panel + .drc-load-baseline-panel{border-left:0;border-top:1px solid var(--rh-border-subtle);padding:1.1rem 0 0}.drc-load-week-item:nth-child(odd){border-left:0;padding-left:0}.drc-load-week-item:nth-child(n+3){border-top:1px solid var(--rh-border-subtle);padding-top:.85rem}}
 .drc-calendar{display:grid;grid-template-columns:repeat(14,minmax(28px,1fr));gap:.35rem}.drc-day{height:3.2rem;border:1px solid #d9dee7;border-radius:8px;text-align:center;padding:.3rem;font-size:.72rem;color:#687386}.drc-day.training{background:#cfe8d7;color:#1e6b3d}.drc-day.no_training_yet,.drc-day.confirmed_no_training{background:#f4f5f7}.drc-day.planned_rest{background:#e8eef8;color:#3c6090}.drc-day.missing,.drc-day.not_synced,.drc-day.sync_error{border-style:dashed;background:#fff8e9;color:#9a6b20}.drc-legend{display:flex;flex-wrap:wrap;gap:.8rem;margin-top:.7rem;color:#697386;font-size:.82rem}.drc-legend span:before{content:'';display:inline-block;width:.7rem;height:.7rem;border-radius:3px;background:#cfe8d7;margin-right:.3rem}.drc-legend .missing:before{background:#fff8e9;border:1px dashed #9a6b20}.drc-legend .rest:before{background:#e8eef8}.drc-legend .none:before{background:#f4f5f7}
 </style>
 """
@@ -3514,7 +4107,7 @@ def _range_bar(item):
     )
 
 
-def _training_metric_card(title, item, suffix=""):
+def _training_metric_panel(title, item, suffix=""):
     maturity = item.get("maturity", {})
     comparison = item.get("comparison")
     status = TR({
@@ -3532,15 +4125,14 @@ def _training_metric_card(title, item, suffix=""):
     window_label = _ui("28天基线", "28-day baseline")
     current_value = item.get("current_value")
     value_class = "drc-load-value is-empty" if current_value is None else "drc-load-value"
-    card_html = (
-        f"<div class='drc-load-card'><div class='drc-load-card-head'><div class='drc-load-title'>{escape(title)} · {escape(window_label)}</div>"
+    return (
+        f"<section class='drc-load-baseline-panel'><div class='drc-load-card-head'><div class='drc-load-title'>{escape(title)} · {escape(window_label)}</div>"
         f"<div class='drc-load-status {status_class}'>{escape(status)}　{escape(pct_text)}</div></div>"
         f"<div class='{value_class}'>{escape(_training_value(current_value, suffix))}</div>"
         f"<div class='drc-load-evidence'>{escape(TR('training_baseline.baseline'))}：{escape(_training_value(item.get('center'), suffix))}　{escape(TR('training_baseline.typical_range'))}：{escape(range_text)}</div>"
         f"<div class='drc-load-muted'>{escape(TR('training_baseline.baseline_phase'))}：{escape(maturity.get('status','collecting'))} · {escape(TR('training_baseline.valid_days'))}：{maturity.get('valid_days',0)}</div>"
-        f"{_range_bar(item)}</div>"
+        f"{_range_bar(item)}</section>"
     )
-    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def _render_training_baseline():
@@ -3550,10 +4142,6 @@ def _render_training_baseline():
         baseline_title = _ui("个人训练基线", "Personal Training Baseline")
     st.subheader(baseline_title)
     st.markdown(TRAINING_BASELINE_CSS, unsafe_allow_html=True)
-    left, right = st.columns(2)
-    with left: _training_metric_card(TR("training_baseline.training_duration"), view["duration_baseline"], traditionalize(" 分钟") if LANGUAGE == "zh-TW" else " 分钟")
-    with right: _training_metric_card(TR("training_baseline.training_calories"), view["calorie_baseline"], " kcal")
-    st.caption(TR("training_baseline.calorie_note"))
     weekly = view["weekly_load"]
     weekly_values = (
         (TR("training_baseline.training_count"), weekly["session_count"]),
@@ -3567,11 +4155,16 @@ def _render_training_baseline():
         f"<div class='drc-load-week-value'>{escape(str(value))}</div></div>"
         for label, value in weekly_values
     )
-    st.markdown(
-        f"<section class='drc-load-week'><div class='drc-load-week-title'>{escape(TR('training_baseline.recent_week'))}</div>"
-        f"<div class='drc-load-week-grid'>{weekly_html}</div></section>",
-        unsafe_allow_html=True,
+    duration_suffix = traditionalize(" 分钟") if LANGUAGE == "zh-TW" else " 分钟"
+    baseline_html = (
+        f"<section class='drc-load-overview'><div class='drc-load-baseline-grid'>"
+        f"{_training_metric_panel(TR('training_baseline.training_duration'), view['duration_baseline'], duration_suffix)}"
+        f"{_training_metric_panel(TR('training_baseline.training_calories'), view['calorie_baseline'], ' kcal')}"
+        f"</div><div class='drc-load-note'>{escape(TR('training_baseline.calorie_note'))}</div>"
+        f"<div class='drc-load-overview-week'><div class='drc-load-week-title'>{escape(TR('training_baseline.recent_week'))}</div>"
+        f"<div class='drc-load-week-grid'>{weekly_html}</div></div></section>"
     )
+    st.markdown(baseline_html, unsafe_allow_html=True)
     typical = weekly.get("typical_calories_kcal")
     if typical is not None and weekly.get("calories_kcal") is not None:
         st.caption(TR("training_baseline.relative_week", percent=f"{weekly['calories_kcal'] / typical * 100:.1f}", value=format_number(typical, LANGUAGE)))

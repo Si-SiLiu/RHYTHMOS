@@ -121,7 +121,13 @@ class SyncPipelineTests(unittest.TestCase):
         directory, runner = self.make_runner({name: make_step(name) for name in names})
         try:
             result = runner.run(if_new_data=True)
-            self.assertEqual(calls, ["token", "fetch", "import", "manual-summary", "resolution", "report", "governance"])
+            self.assertEqual(
+                calls,
+                [
+                    "token", "fetch", "import", "manual-summary", "resolution",
+                    "ai-feedback", "report", "governance",
+                ],
+            )
             self.assertTrue(result["no_new_data_short_circuit"])
             self.assertTrue(result["steps"]["recovery"]["no_new_data_skip"])
             self.assertEqual(runner.history.last_sync()["message"], "completed_no_new_data")

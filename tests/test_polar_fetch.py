@@ -101,6 +101,27 @@ class PolarFetchTests(unittest.TestCase):
         self.assertEqual(calls, ["2026-07-09", "2026-07-10"])
         self.assertEqual(len(payload["nightSleeps"]), 1)
 
+    def test_sleep_history_is_split_into_supported_ranges(self):
+        ranges = []
+
+        class Client:
+            def get_sleep(self, **kwargs):
+                ranges.append((kwargs["from_date"], kwargs["to_date"]))
+                return {"nightSleeps": []}
+
+            def get_sleep_for_date(self, _date_value):
+                raise AssertionError("no individual record should be requested")
+
+        polar_fetch.fetch_sleep_details(
+            Client(), from_date="2026-07-05", to_date="2026-09-02"
+        )
+
+        self.assertEqual(ranges, [
+            ("2026-07-05", "2026-08-02"),
+            ("2026-08-03", "2026-08-31"),
+            ("2026-09-01", "2026-09-02"),
+        ])
+
     def test_fetch_continuous_hr_uses_per_date_endpoint(self):
         class Client:
             def get_continuous_heart_rate(self, date_value=None, **kwargs):
@@ -158,6 +179,26 @@ class PolarFetchTests(unittest.TestCase):
             payload["nightlyRechargeResults"][0]["breathingRateSamples"][0]["breathingRateValues"],
             [14.0, 16.0],
         )
+
+    def test_nightly_recharge_history_is_split_before_sample_fetches(self):
+        range_calls = []
+
+        class Client:
+            def get_nightly_recharge(self, **kwargs):
+                if not kwargs["samples"]:
+                    range_calls.append((kwargs["from_date"], kwargs["to_date"]))
+                    return {"nightlyRechargeResults": []}
+                raise AssertionError("no sample record should be requested")
+
+        polar_fetch.fetch_nightly_recharge_with_samples(
+            Client(), from_date="2026-07-05", to_date="2026-09-02"
+        )
+
+        self.assertEqual(range_calls, [
+            ("2026-07-05", "2026-08-02"),
+            ("2026-08-03", "2026-08-31"),
+            ("2026-09-01", "2026-09-02"),
+        ])
 
 
 if __name__ == "__main__":

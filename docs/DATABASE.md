@@ -1,5 +1,14 @@
 # Database
 
+## Runtime connection checks (2026-09-07)
+
+`connect()` checks the migration ledger (including checksums), compatibility
+columns, and legacy meal repairs using reads first. Current databases no longer
+run DDL and compatibility UPDATE statements on every page rerun. Pending
+migrations retain the existing backup and initialization path. Failed
+initialization closes the connection before propagating the error. No schema
+version or stored health fields changed.
+
 ## Sleep regularity persistence boundary (2.0.0)
 
 No new table or column is required for Sleep Regularity Engine 2.0.0. Results

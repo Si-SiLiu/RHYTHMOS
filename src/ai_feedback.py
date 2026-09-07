@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from src.ai_coach_approval import load_provider_approval
@@ -92,7 +92,36 @@ def _presentation_locale(language: str) -> str:
 
 
 def _nutrition_bands(connection: sqlite3.Connection, analysis_date: str) -> dict[str, str]:
-    """Project today’s nutrition logging into non-identifying categorical bands."""
+    """Project the same saved-meal source used by Today's Nutrition page.
+
+    The legacy daily summary remains available for older records. Modern meal
+    records take precedence so the Codex nutrition assessment stays aligned
+    with the visible daily nutrition data.
+    """
+    try:
+        from src.nutrition_logging import list_meal_records
+        from src.nutrition_logging.feedback import (
+            NutritionFeedbackService,
+            is_day_nutrition_confirmed,
+        )
+
+        records = list_meal_records(connection, limit=200)
+        summary = NutritionFeedbackService(records, analysis_date).today_summary()
+        if int(summary.get("recorded_meals") or 0) > 0:
+            confirmed = is_day_nutrition_confirmed(connection, analysis_date)
+            identified = int(summary.get("identified_food_count") or 0)
+            unidentified = int(summary.get("unidentified_food_count") or 0)
+            return {
+                "recording_band": "complete" if confirmed else "partial",
+                "coverage_band": (
+                    "adequate"
+                    if confirmed or (identified > 0 and unidentified == 0)
+                    else "limited"
+                ),
+            }
+    except (sqlite3.OperationalError, TypeError, ValueError):
+        # A partially migrated database can still use the legacy fallback.
+        pass
     try:
         row = connection.execute(
             """SELECT logged_meals, data_completeness
@@ -144,6 +173,10 @@ def _local_readiness(daily_metrics: Mapping[str, str]) -> dict[str, str]:
         "status": status,
         "basis": "sleep_and_recovery" if hrv != "unknown" or resting_hr != "unknown" else "sleep_only",
     }
+
+
+def _prior_day(value: str) -> str:
+    return (date.fromisoformat(value) - timedelta(days=1)).isoformat()
 
 
 def build_feedback_source(connection: sqlite3.Connection, analysis_date: str, *, language: str = "zh-CN") -> dict[str, Any]:
@@ -209,9 +242,20 @@ def build_feedback_source(connection: sqlite3.Connection, analysis_date: str, *,
             "deviation_band": _deviation_band(baseline),
         })
 
+    # Morning feedback is a decision for ``analysis_date``. Sleep and recovery
+    # therefore come from today, while yesterday's completed training and food
+    # records describe the load and refuelling context the user brings into a
+    # 06:00–08:00 session.
+    prior_date = _prior_day(analysis_date)
+    prior_row = connection.execute(
+        """SELECT training_duration,training_count,active_calories
+             FROM daily_recovery_metrics WHERE date=?""",
+        (prior_date,),
+    ).fetchone()
+    prior_metric = dict(prior_row) if prior_row else {}
     sleep_hours = _duration_hours(metric.get("sleep_duration"))
-    training_hours = _duration_hours(metric.get("training_duration"))
-    training_count = metric.get("training_count")
+    training_hours = _duration_hours(prior_metric.get("training_duration"))
+    training_count = prior_metric.get("training_count")
     daily_metrics = {
         "sleep_duration_band": _band(sleep_hours, low=6, high=9, names=("low", "typical", "high"), unknown="unknown"),
         "sleep_score_band": _band(metric.get("sleep_score"), low=60, high=80, names=("low", "typical", "high"), unknown="unknown"),
@@ -220,7 +264,7 @@ def build_feedback_source(connection: sqlite3.Connection, analysis_date: str, *,
         "respiration_band": _band(metric.get("respiration_rate"), low=12, high=18, names=("low", "typical", "high"), unknown="unknown"),
         "training_duration_band": _band(training_hours, low=0.34, high=1.34, names=("light", "moderate", "high"), unknown="unknown") if training_hours not in (None, 0) else "none",
         "training_count_band": "none" if training_count in (None, 0) else "single" if int(training_count) == 1 else "multiple",
-        "activity_band": _band(metric.get("active_calories"), low=200, high=700, names=("low", "typical", "high"), unknown="unknown"),
+        "activity_band": _band(prior_metric.get("active_calories"), low=200, high=700, names=("low", "typical", "high"), unknown="unknown"),
         "kubios_readiness_label": "available" if metric.get("kubios_readiness") not in (None, "") else "unavailable",
     }
     local_readiness = _local_readiness(daily_metrics)
@@ -244,7 +288,7 @@ def build_feedback_source(connection: sqlite3.Connection, analysis_date: str, *,
             "missing_groups": [str(item)[:64] for item in missing_groups[:12]],
         },
         "daily_metrics": daily_metrics,
-        "nutrition": _nutrition_bands(connection, analysis_date),
+        "nutrition": _nutrition_bands(connection, prior_date),
         "baseline_context": baseline_context,
         "presentation": {"locale": _presentation_locale(language), "unit_system": "metric"},
     }

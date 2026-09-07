@@ -785,7 +785,6 @@ def _historical_recovery_situation(history, *, auto_expand=False, focus_nonce=0)
 
 def main():
     intro = TR("domain.recovery.intro")
-    intro = intro.replace("确定性恢复建议", "恢复建议").replace("deterministic recovery guidance", "recovery guidance")
     st.title(TR("domain.recovery.title")); st.caption(intro)
     notice = st.session_state.pop("recovery_save_notice", None)
     collapse_editor_nonce = st.session_state.pop("recovery_collapse_editor_nonce", None)
@@ -794,6 +793,9 @@ def main():
     )
     has_measurement = bool(data or kubios_measurement)
     data = _merge_recovery_evidence(data, kubios_measurement)
+    if notice:
+        st.success(notice)
+        st.toast(notice, icon="✅")
     if not has_measurement: st.info(TR("domain.recovery.empty"))
     _recovery_panel(data)
     if collapse_editor_nonce is not None:
@@ -802,7 +804,6 @@ def main():
             target_expander_label=TR("inline_edit.edit_recovery"),
             nonce=collapse_editor_nonce,
         )
-    if notice: st.success(notice)
     st.markdown(RECOVERY_CORE_CARD_CSS, unsafe_allow_html=True)
     baseline_context = _baseline_context(baselines)
     baseline_chips = "".join(
@@ -830,8 +831,6 @@ def main():
     if should_focus_history:
         st.session_state["recovery_history_last_scrolled_nonce"] = history_focus_nonce
 
-    st.subheader(_ui("恢复建议", "Recovery Guidance"))
-    _render_recovery_guidance(coach, data)
     st.info(TR("domain.recovery.boundary")); st.caption(TR("safety.medical"))
 
 

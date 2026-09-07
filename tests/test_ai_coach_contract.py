@@ -48,7 +48,7 @@ def valid_input():
         ],
         "presentation": {"locale": "zh-CN", "unit_system": "metric"},
         "contract_versions": {
-            "prompt_version": "1.3.0",
+            "prompt_version": "1.3.1",
             "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
         },
@@ -77,7 +77,7 @@ def valid_output():
         "safety_notice": "这不是医疗诊断。",
         "audit": {
             "model_version": "provider-model-snapshot",
-            "prompt_version": "1.3.0",
+            "prompt_version": "1.3.1",
             "output_schema_version": "1.3.0",
             "safety_policy_version": "1.0.0",
             "input_snapshot_digest": "a" * 64,
@@ -90,7 +90,7 @@ def valid_output():
 class AICoachContractTests(unittest.TestCase):
     def test_contract_versions_and_schema_files_are_valid(self):
         contract = ai_coach_contract.load_contract()
-        self.assertEqual(contract["prompt_version"], "1.3.0")
+        self.assertEqual(contract["prompt_version"], "1.3.1")
         self.assertEqual(contract["output_schema_version"], "1.3.0")
         self.assertEqual(contract["safety_policy_version"], "1.0.0")
         for key in ("input_schema", "output_schema"):

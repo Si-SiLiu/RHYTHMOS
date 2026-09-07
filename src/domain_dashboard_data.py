@@ -363,6 +363,8 @@ def get_latest_sleep(
     *,
     _connection=None,
     _continuous_hr_cache=None,
+    include_continuous_hr=True,
+    polar_only=False,
 ):
     connection = _connection or connect_readonly(db_path)
     owns_connection = _connection is None
@@ -415,7 +417,7 @@ def get_latest_sleep(
             raw, "bedtimeEnd", "wakeUpTime", "wake_time", "sleep_end_time", "endTime"
         )
         heart_rates = _sleep_raw_heart_rates(raw)
-        if not heart_rates:
+        if not heart_rates and include_continuous_hr:
             heart_rates = _continuous_sleep_heart_rates(
                 connection,
                 bedtime,
@@ -458,6 +460,10 @@ def get_latest_sleep(
         resolved = resolve_sleep_date(connection, latest)
 
         def device_fallback(name, value):
+            if polar_only:
+                # History views that are explicitly synchronized to Polar must
+                # not retain a manual or inferred value when Polar lacks it.
+                return _with_name(name, _resolved_value(value, "polar"))
             field = resolved.get(name)
             if field and field.get("value") not in (None, ""):
                 return _with_name(name, field)
@@ -618,7 +624,7 @@ def get_recovery_history(db_path=None, limit=60):
                            n.physiological_age,n.measurement_quality,
                            r.mean_rr_ms,r.poincare_sd1_ms,r.poincare_sd2_ms,
                            r.lf_power_ms2,r.hf_power_ms2,r.lf_power_nu,
-                           r.hf_power_nu,r.lf_hf_ratio
+                           r.hf_power_nu,r.lf_hf_ratio,r.mood_code
                     FROM kubios_hrv_normalized n
                     JOIN kubios_hrv_measurements_raw r ON r.id=n.source_raw_id
                     WHERE n.selected_as_primary=1 AND n.date IN ({placeholders})
@@ -633,7 +639,7 @@ def get_recovery_history(db_path=None, limit=60):
             extended_fields = (
                 "mean_rr_ms", "poincare_sd1_ms", "poincare_sd2_ms",
                 "lf_power_ms2", "hf_power_ms2", "lf_power_nu", "hf_power_nu",
-                "lf_hf_ratio",
+                "lf_hf_ratio", "mood_code",
             )
             for group_id in group_ids:
                 grouped_dates = [
@@ -688,6 +694,7 @@ def get_recovery_history(db_path=None, limit=60):
                 "lf_power_nu": kubios.get("lf_power_nu"),
                 "hf_power_nu": kubios.get("hf_power_nu"),
                 "lf_hf_ratio": kubios.get("lf_hf_ratio"),
+                "mood_code": kubios.get("mood_code"),
             })
         return records
     except sqlite3.OperationalError:
@@ -823,13 +830,23 @@ def get_training_history(db_path=None, limit=30):
     return [item for item in (get_latest_training(db_path, value) for value in dates) if item]
 
 
-def get_sleep_history(db_path=None, limit=30):
-    dates = _available_dates(db_path, (
+def get_sleep_history(
+    db_path=None,
+    limit=30,
+    *,
+    include_continuous_hr=True,
+    polar_only=False,
+):
+    date_queries = (
         "SELECT date AS log_date FROM polar_sleep_raw",
         "SELECT date AS log_date FROM polar_nightly_recharge_raw",
-        "SELECT sleep_date AS log_date FROM manual_sleep_logs",
-        "SELECT date AS log_date FROM daily_recovery_metrics WHERE sleep_duration IS NOT NULL",
-    ), limit)
+    )
+    if not polar_only:
+        date_queries += (
+            "SELECT sleep_date AS log_date FROM manual_sleep_logs",
+            "SELECT date AS log_date FROM daily_recovery_metrics WHERE sleep_duration IS NOT NULL",
+        )
+    dates = _available_dates(db_path, date_queries, limit)
     connection = connect_readonly(db_path)
     continuous_hr_cache = {}
     try:
@@ -840,6 +857,8 @@ def get_sleep_history(db_path=None, limit=30):
                     value,
                     _connection=connection,
                     _continuous_hr_cache=continuous_hr_cache,
+                    include_continuous_hr=include_continuous_hr,
+                    polar_only=polar_only,
                 )
                 for value in dates
             ) if item

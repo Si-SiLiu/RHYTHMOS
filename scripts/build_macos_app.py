@@ -8,6 +8,14 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import tempfile
+
+try:
+    from scripts.apple_silicon import MACOS_MIN_VERSION, MACOS_TARGET, require_arm64_binary, require_arm64_python
+    from scripts.build_kubios_ocr_helper import build as build_ocr_helper
+except ModuleNotFoundError:  # Direct script invocation.
+    from apple_silicon import MACOS_MIN_VERSION, MACOS_TARGET, require_arm64_binary, require_arm64_python
+    from build_kubios_ocr_helper import build as build_ocr_helper
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -32,6 +40,8 @@ def compile_native_app(source_path: Path, executable_path: Path) -> None:
             [
                 "/usr/bin/xcrun",
                 "swiftc",
+                "-target",
+                MACOS_TARGET,
                 str(source_path),
                 "-o",
                 str(executable_path),
@@ -47,6 +57,7 @@ def compile_native_app(source_path: Path, executable_path: Path) -> None:
     except (OSError, subprocess.CalledProcessError) as exc:
         detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else ""
         raise RuntimeError(f"DASHBOARD_APP_COMPILE_FAILED:{detail}") from exc
+    require_arm64_binary(executable_path)
 
 
 def sign_app_bundle(output_path: Path) -> None:
@@ -57,6 +68,10 @@ def sign_app_bundle(output_path: Path) -> None:
             check=True,
             capture_output=True,
             text=True,
+        )
+        subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(output_path)],
+            check=True, capture_output=True, text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("DASHBOARD_APP_SIGN_FAILED") from exc
@@ -77,6 +92,10 @@ def build_app_bundle(
         raise RuntimeError("DASHBOARD_LAUNCHER_NOT_FOUND")
     if not python_path.is_file():
         raise RuntimeError("DASHBOARD_PYTHON_NOT_FOUND")
+    if should_compile:
+        if output_path != DEFAULT_OUTPUT.resolve():
+            raise RuntimeError("DASHBOARD_CANONICAL_OUTPUT_REQUIRED")
+        require_arm64_python(python_path)
     if not ICON_PATH.is_file():
         raise RuntimeError("DASHBOARD_APP_ICON_NOT_FOUND")
     if not STARTUP_SPLASH_PATH.is_file():
@@ -86,8 +105,28 @@ def build_app_bundle(
     except (OSError, KeyError, json.JSONDecodeError) as exc:
         raise RuntimeError("DASHBOARD_APP_VERSION_NOT_FOUND") from exc
 
-    if output_path.exists():
-        shutil.rmtree(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Build and sign before replacing the installed bundle. Temporary build
+    # support stays beside the sole supported app output and is cleaned up.
+    with tempfile.TemporaryDirectory(prefix=".rhythmos-build-", dir=output_path.parent) as staging:
+        stage = Path(staging)
+        bundle = stage / "bundle"
+        _populate_bundle(project_root, bundle, app_version, should_compile)
+        if should_sign:
+            sign_app_bundle(bundle)
+        previous = stage / "previous"
+        if output_path.exists():
+            output_path.rename(previous)
+        try:
+            bundle.rename(output_path)
+        except OSError:
+            if previous.exists():
+                previous.rename(output_path)
+            raise
+    return output_path
+
+
+def _populate_bundle(project_root: Path, output_path: Path, app_version: str, should_compile: bool) -> None:
     contents_dir = output_path / "Contents"
     macos_dir = contents_dir / "MacOS"
     resources_dir = contents_dir / "Resources"
@@ -115,16 +154,15 @@ def build_app_bundle(
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": app_version,
         "CFBundleVersion": app_version,
-        "LSMinimumSystemVersion": "12.0",
+        "LSMinimumSystemVersion": MACOS_MIN_VERSION,
+        "LSArchitecturePriority": ["arm64"],
+        "LSRequiresNativeExecution": True,
         "LSApplicationCategoryType": "public.app-category.healthcare-fitness",
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
     }
     with (contents_dir / "Info.plist").open("wb") as plist_file:
         plistlib.dump(info, plist_file, sort_keys=True)
-    if should_sign:
-        sign_app_bundle(output_path)
-    return output_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,6 +173,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.output.resolve() != DEFAULT_OUTPUT.resolve():
+        raise RuntimeError("DASHBOARD_CANONICAL_OUTPUT_REQUIRED")
+    require_arm64_python(BASE_DIR / ".venv/bin/python")
+    build_ocr_helper()
     app_path = build_app_bundle(BASE_DIR, args.output)
     print(f"Built: {app_path}")
     return 0

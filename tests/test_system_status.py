@@ -142,6 +142,39 @@ class SystemStatusTests(unittest.TestCase):
         self.assertEqual(status["system_health"], "Healthy")
         self.assertEqual(status["last_sync_warning_count"], 2)
 
+    def test_auxiliary_sync_warnings_do_not_degrade_core_data_health(self):
+        status = system_status.load_system_status(
+            self.state_path,
+            self.versions_path,
+            database_check=lambda _: True,
+            sync_reader=lambda _: {
+                "finish_time": "2026-07-10T18:30:00+08:00",
+                "success": 1,
+                "warning_count": 2,
+                "source_warning_count": 0,
+            },
+            today=date(2026, 7, 10),
+        )
+        self.assertEqual(status["system_health"], "Healthy")
+        self.assertEqual(status["last_sync_source_warning_count"], 0)
+        self.assertEqual(status["last_sync_auxiliary_warning_count"], 2)
+
+    def test_optional_polar_source_warnings_remain_visible_to_health(self):
+        status = system_status.load_system_status(
+            self.state_path,
+            self.versions_path,
+            database_check=lambda _: True,
+            sync_reader=lambda _: {
+                "finish_time": "2026-07-10T18:30:00+08:00",
+                "success": 1,
+                "warning_count": 2,
+                "source_warning_count": 1,
+            },
+            today=date(2026, 7, 10),
+        )
+        self.assertEqual(status["system_health"], "Warning")
+        self.assertEqual(status["last_sync_auxiliary_warning_count"], 1)
+
     def test_canonical_status_uses_live_data_freshness_over_stale_snapshot(self):
         with mock.patch.object(system_status, "STATE_PATH", self.state_path), \
              mock.patch.object(system_status, "get_data_freshness", return_value={

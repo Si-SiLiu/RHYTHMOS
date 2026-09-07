@@ -2,6 +2,7 @@ import json
 import math
 import sqlite3
 import statistics
+from bisect import bisect_left
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -372,6 +373,29 @@ def calculate_baseline_for_date(connection, target_date, config=None):
     return results
 
 
+def _load_baseline_series(connection, metric, start_date, end_date):
+    """Read and normalize each source once per rebuild, never across runs."""
+    table = metric.get("source_table", "daily_recovery_metrics")
+    column = metric["source_column"]
+    primary = " AND selected_as_primary=1" if table == "kubios_hrv_normalized" else ""
+    try:
+        rows = connection.execute(
+            f"SELECT date,{column} AS value FROM {table} "
+            f"WHERE date>=? AND date<=?{primary} ORDER BY date,id",
+            (start_date, end_date),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    days, values, latest = [], [], {}
+    for row in rows:
+        value = normalize_metric_value(row["value"], metric)
+        latest[row["date"]] = value
+        if value is not None:
+            days.append(row["date"])
+            values.append(value)
+    return days, values, latest
+
+
 def calculate_all_baselines(connection=None, config=None):
     owns_connection = connection is None
     if owns_connection:
@@ -388,9 +412,28 @@ def calculate_all_baselines(connection=None, config=None):
         total = 0
         status_counts = {status: 0 for status in STATUSES}
         insufficient_metrics = set()
+        window_days = int(config["default_window_days"])
+        series = [
+            _load_baseline_series(
+                connection, metric,
+                (parse_iso_date(dates[0]) - timedelta(days=window_days)).isoformat(),
+                dates[-1],
+            )
+            for metric in config["metrics"]
+        ] if dates else []
 
         for target_date in dates:
-            results = calculate_baseline_for_date(connection, target_date, config=config)
+            start = (parse_iso_date(target_date) - timedelta(days=window_days)).isoformat()
+            results = []
+            for metric, (days, values, latest) in zip(config["metrics"], series):
+                result = calculate_baseline_from_values(
+                    target_date, metric,
+                    values[bisect_left(days, start):bisect_left(days, target_date)],
+                    latest.get(target_date), config=config,
+                )
+                upsert_baseline(connection, result)
+                results.append(result)
+            connection.commit()
             total += len(results)
             for result in results:
                 status_counts[result["status"]] = status_counts.get(result["status"], 0) + 1

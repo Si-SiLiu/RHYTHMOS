@@ -170,6 +170,10 @@ def get_training_session(connection: sqlite3.Connection, session_id):
                ORDER BY updated_at DESC,id DESC LIMIT 1""", (session["polar_external_id"],)
         ).fetchone()
         polar = _polar_values(dict(raw)) if raw else None
+    return _hydrate_session(session, polar, _session_exercises(connection, session["id"]))
+
+
+def _hydrate_session(session, polar, exercises):
     if polar:
         for key in (
             "date", "start_time", "end_time", "duration_seconds", "average_hr",
@@ -184,17 +188,54 @@ def get_training_session(connection: sqlite3.Connection, session_id):
         resolved = session.get("polar_sport_type")
     session["sport_display"] = resolve_sport_name(resolved) or resolved
     session["polar_readonly"] = bool(session.get("polar_external_id"))
-    session["exercises"] = _session_exercises(connection, session["id"])
+    session["exercises"] = exercises
     session["summary"] = summarize_training(session["exercises"])
     return session
 
 
 def list_training_sessions(connection: sqlite3.Connection, limit=100):
-    ids = [row[0] for row in connection.execute(
-        """SELECT id FROM training_sessions WHERE deleted_at IS NULL
+    rows = connection.execute(
+        """SELECT * FROM training_sessions WHERE deleted_at IS NULL
            ORDER BY date DESC,start_time DESC,id DESC LIMIT ?""", (limit,)
-    ).fetchall()]
-    return [get_training_session(connection, session_id) for session_id in ids]
+    ).fetchall()
+    sessions = []
+    for offset in range(0, len(rows), 400):
+        batch = rows[offset:offset + 400]
+        ids = [row["id"] for row in batch]
+        placeholders = ",".join("?" for _ in ids)
+        polar_ids = [row["polar_external_id"] for row in batch if row["polar_external_id"]]
+        polar_by_id = {}
+        if polar_ids:
+            for raw in connection.execute(
+                "SELECT * FROM polar_training_sessions_raw WHERE external_id IN ("
+                + ",".join("?" for _ in polar_ids)
+                + ") ORDER BY updated_at DESC,id DESC", polar_ids,
+            ):
+                if raw["external_id"] not in polar_by_id:
+                    polar_by_id[raw["external_id"]] = _polar_values(dict(raw))
+        exercises_by_session = {identifier: [] for identifier in ids}
+        exercises_by_id = {}
+        for row in connection.execute(
+            f"SELECT * FROM training_exercises WHERE training_session_id IN ({placeholders}) "
+            "AND deleted_at IS NULL ORDER BY sequence_order,id", ids,
+        ):
+            exercise = dict(row)
+            exercise["sets"] = []
+            exercises_by_id[exercise["id"]] = exercise
+            exercises_by_session[exercise["training_session_id"]].append(exercise)
+        for row in connection.execute(
+            f"""SELECT s.* FROM training_sets s JOIN training_exercises e
+                ON e.id=s.training_exercise_id
+                WHERE e.training_session_id IN ({placeholders})
+                  AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                ORDER BY s.set_number,s.id""", ids,
+        ):
+            exercises_by_id[row["training_exercise_id"]]["sets"].append(dict(row))
+        sessions.extend(_hydrate_session(
+            dict(row), polar_by_id.get(row["polar_external_id"]),
+            exercises_by_session[row["id"]],
+        ) for row in batch)
+    return sessions
 
 
 def create_manual_training_session(connection: sqlite3.Connection, data):

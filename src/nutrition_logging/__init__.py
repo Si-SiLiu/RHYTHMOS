@@ -11,7 +11,7 @@ from .storage import (
     list_meal_events,
     save_meal_event,
 )
-from .validation import NutritionEventValidationError
+from .validation import INITIAL_MEAL_SLOTS, NutritionEventValidationError, inferred_meal_slot, is_meal_slot, meal_slot_number, meal_type_for_slot
 from .supplement_catalog import (
     CATALOG_VERSION, CUSTOM_SUPPLEMENT, allowed_units, catalog_by_name,
     default_unit, list_catalog,
@@ -29,14 +29,14 @@ from .food_catalog import (
 )
 from .simple_storage import (
     MEAL_SOURCES, MEAL_STATUSES, ai_meal_summaries, copy_meal_record,
-    create_meal_from_template, create_meal_record, find_meal_id, find_previous_meal_id,
+    create_meal_from_template, create_meal_record, find_meal_id, find_meal_id_for_slot, find_previous_meal_id,
     find_yesterday_meal_id, get_meal_record, list_meal_records,
     list_meal_templates, meal_time_warning, predict_meal_time, recent_meal_times, save_meal_record,
     save_meal_template, soft_delete_meal_record, soft_delete_meal_template, summarize_meal,
 )
 
 __all__ = [
-    "MEAL_TYPES", "CATEGORIES", "CORE_CATEGORIES", "EXTENDED_CATEGORIES",
+    "MEAL_TYPES", "INITIAL_MEAL_SLOTS", "CATEGORIES", "CORE_CATEGORIES", "EXTENDED_CATEGORIES",
     "NutritionEventValidationError", "create_meal_event", "save_meal_event",
     "delete_meal_event", "get_meal_event", "list_meal_events",
     "SupplementUnit", "SUPPLEMENT_UNITS", "COUNT_UNITS", "unit_label_key",
@@ -50,8 +50,8 @@ __all__ = [
     "allowed_food_units", "calculate_food_values", "ensure_manual_food_option", "recent_foods",
     "favorite_foods", "set_food_favorite", "MEAL_STATUSES", "MEAL_SOURCES",
     "create_meal_record", "save_meal_record", "get_meal_record",
-    "list_meal_records", "soft_delete_meal_record", "copy_meal_record",
-    "find_meal_id", "find_previous_meal_id", "find_yesterday_meal_id", "predict_meal_time", "recent_meal_times", "save_meal_template",
+    "list_meal_records", "soft_delete_meal_record", "copy_meal_record", "meal_type_for_slot", "inferred_meal_slot", "is_meal_slot", "meal_slot_number",
+    "find_meal_id", "find_meal_id_for_slot", "find_previous_meal_id", "find_yesterday_meal_id", "predict_meal_time", "recent_meal_times", "save_meal_template",
     "list_meal_templates", "create_meal_from_template", "soft_delete_meal_template", "summarize_meal",
     "ai_meal_summaries", "meal_time_warning",
 ]

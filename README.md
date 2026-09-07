@@ -69,20 +69,27 @@ macOS shell with a local Streamlit workspace and SQLite-backed data layer.
 
 ### macOS application
 
-Requirements: macOS 12 or later, Python 3, and Xcode Command Line Tools.
+Build target: Apple Silicon (M-series), macOS 14 or later, native arm64 Python
+3.12, and an initialized Xcode/Command Line Tools installation. The retained
+NumPy arm64 wheel requires macOS 14. Rosetta is not part of the supported runtime.
 
 ```bash
 git clone https://github.com/Si-SiLiu/RHYTHMOS.git
 cd RHYTHMOS
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --only-binary=:all: -r requirements-macos-arm64.lock
 .venv/bin/python scripts/build_macos_app.py
+.venv/bin/python scripts/verify_apple_silicon.py
 open dist/RHYTHMOS.app
 ```
 
 The application starts a loopback-only local dashboard inside a native macOS
 window. It does not require a public server.
+
+The build command compiles both the arm64 app shell and local Vision OCR helper.
+For the existing Intel workspace migration and its verification status, see
+[Apple Silicon migration](docs/APPLE_SILICON.md).
 
 ### Development workspace
 

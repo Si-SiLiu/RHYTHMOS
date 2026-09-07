@@ -35,4 +35,5 @@ def recovery_metrics_table_row(date_value, values, *, tr, language, format_date,
         f'{tr("kubios_metrics.hf_nu.name")} (%)': values.get("hf_power_nu"),
         tr("kubios_metrics.lf_hf.name"): values.get("lf_hf_ratio"),
         tr("domain.recovery.measurement_quality"): quality_display,
+        tr("kubios_screenshot.mood_code"): values.get("mood_code"),
     }
