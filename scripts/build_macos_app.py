@@ -160,6 +160,15 @@ def _populate_bundle(project_root: Path, output_path: Path, app_version: str, sh
         "LSApplicationCategoryType": "public.app-category.healthcare-fitness",
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
+        "CFBundleDocumentTypes": [
+            {
+                "CFBundleTypeName": "打开 RHYTHMOS iOS",
+                "CFBundleTypeRole": "Editor",
+                "CFBundleTypeExtensions": ["rhythmos-ios"],
+                "CFBundleTypeIconFile": "app_icon.icns",
+                "LSHandlerRank": "Owner",
+            }
+        ],
     }
     with (contents_dir / "Info.plist").open("wb") as plist_file:
         plistlib.dump(info, plist_file, sort_keys=True)

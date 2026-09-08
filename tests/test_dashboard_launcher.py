@@ -117,6 +117,16 @@ class DashboardLauncherTests(unittest.TestCase):
             self.assertEqual(info["LSArchitecturePriority"], ["arm64"])
             self.assertTrue(info["LSRequiresNativeExecution"])
             self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
+            document_type = info["CFBundleDocumentTypes"][0]
+            self.assertEqual(document_type["CFBundleTypeExtensions"], ["rhythmos-ios"])
+            self.assertEqual(document_type["CFBundleTypeIconFile"], "app_icon.icns")
+
+    def test_render_swift_source_handles_ios_launcher_without_terminal(self):
+        source = render_swift_source(dashboard_launcher.BASE_DIR)
+        self.assertIn('iosLauncherDocumentExtension = "rhythmos-ios"', source)
+        self.assertIn('appendingPathComponent("scripts/open_ios_simulator.command")', source)
+        self.assertIn('process.arguments = ["--background"]', source)
+        self.assertNotIn('"-a", "Terminal"', source)
 
     @mock.patch("src.dashboard_launcher.subprocess.run")
     def test_open_dashboard_url_uses_native_macos_open(self, mock_run):

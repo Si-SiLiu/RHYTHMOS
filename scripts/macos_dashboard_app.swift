@@ -26,6 +26,11 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
     private var webView: WKWebView!
     private var keyEventMonitor: Any?
     private var revealWhenDashboardLoads = false
+    private var startupWorkItem: DispatchWorkItem?
+    private var launchIOSSimulatorOnly = false
+    private var isLaunchingIOSSimulator = false
+
+    private static let iosLauncherDocumentExtension = "rhythmos-ios"
 
     private static let downloadBridgeScript = #"""
     document.addEventListener("click", function(event) {
@@ -93,7 +98,21 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window.contentView = webView
-        startDashboard()
+        scheduleInitialLaunch()
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        let shouldLaunchSimulator = filenames.contains {
+            URL(fileURLWithPath: $0).pathExtension.lowercased() == Self.iosLauncherDocumentExtension
+        }
+        guard shouldLaunchSimulator else {
+            sender.reply(toOpenOrPrint: .failure)
+            return
+        }
+        launchIOSSimulatorOnly = true
+        startupWorkItem?.cancel()
+        launchIOSSimulator()
+        sender.reply(toOpenOrPrint: .success)
     }
 
     func webView(
@@ -312,6 +331,67 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         return true
     }
 
+    private func scheduleInitialLaunch() {
+        if launchIOSSimulatorOnly {
+            launchIOSSimulator()
+            return
+        }
+        // Finder delivers document-open events immediately after launch. A
+        // brief delay lets a desktop .rhythmos-ios launcher be handled before
+        // the local dashboard starts, so its click never opens a Terminal or
+        // an unnecessary dashboard window.
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self.launchIOSSimulatorOnly else { return }
+            self.startDashboard()
+        }
+        startupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
+    }
+
+    private func projectRootURL() -> URL? {
+        let fileManager = FileManager.default
+        let bundledProjectRoot = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let embeddedProjectRoot = URL(fileURLWithPath: "__PROJECT_ROOT__")
+        return [bundledProjectRoot, embeddedProjectRoot].first {
+            fileManager.fileExists(atPath: $0.appendingPathComponent(".venv/bin/python").path)
+                && fileManager.fileExists(atPath: $0.appendingPathComponent("src/dashboard_launcher.py").path)
+        }
+    }
+
+    private func launchIOSSimulator() {
+        guard !isLaunchingIOSSimulator else { return }
+        isLaunchingIOSSimulator = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let projectRootURL = self.projectRootURL() else {
+                self.showLaunchError(message: "DASHBOARD_PROJECT_ROOT_NOT_FOUND")
+                return
+            }
+            let launcherURL = projectRootURL.appendingPathComponent("scripts/open_ios_simulator.command")
+            guard FileManager.default.isExecutableFile(atPath: launcherURL.path) else {
+                self.showLaunchError(message: "IOS_SIMULATOR_LAUNCHER_NOT_FOUND")
+                return
+            }
+            let process = Process()
+            process.executableURL = launcherURL
+            process.arguments = ["--background"]
+            process.currentDirectoryURL = projectRootURL
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                self.showLaunchError(message: "IOS_SIMULATOR_LAUNCH_FAILED")
+            }
+        }
+    }
+
     private func startDashboard() {
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
@@ -320,19 +400,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
             let errorPath = "/tmp/daily-recovery-coach-error-\(uid).txt"
             try? fileManager.removeItem(atPath: urlPath)
             try? fileManager.removeItem(atPath: errorPath)
-            // Prefer the project directory next to this App bundle so the
-            // application keeps working when the project folder is renamed
-            // or moved. The build-time path remains a fallback for a copied
-            // App bundle that is launched outside the project tree.
-            let bundledProjectRoot = Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-            let embeddedProjectRoot = URL(fileURLWithPath: "__PROJECT_ROOT__")
-            let projectRootURL = [bundledProjectRoot, embeddedProjectRoot].first {
-                fileManager.fileExists(atPath: $0.appendingPathComponent(".venv/bin/python").path)
-                    && fileManager.fileExists(atPath: $0.appendingPathComponent("src/dashboard_launcher.py").path)
-            }
-            guard let projectRootURL else {
+            guard let projectRootURL = self.projectRootURL() else {
                 self.showLaunchError(message: "DASHBOARD_PROJECT_ROOT_NOT_FOUND")
                 return
             }
