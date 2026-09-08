@@ -188,6 +188,11 @@ def create_app(
         if isinstance(snapshot_date, str):
             save_cloud_document("daily_snapshot", snapshot_date, snapshot)
 
+    def cloud_error_response(error: CloudSyncError | ValueError) -> Response:
+        """Return a stable, non-sensitive cloud storage failure code."""
+        failure_code = error.failure_code if isinstance(error, CloudSyncError) else "configuration"
+        return jsonify(error=f"CLOUD_SYNC_{failure_code.upper()}"), 502
+
     @app.after_request
     def security_headers(response: Response) -> Response:
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -513,8 +518,8 @@ def create_app(
             return jsonify(error="CLOUD_SYNC_NOT_CONFIGURED"), 503
         try:
             document = store.load(cloud_account_id(), document_type, document_key)
-        except (CloudSyncError, ValueError):
-            return jsonify(error="CLOUD_SYNC_UNAVAILABLE"), 502
+        except (CloudSyncError, ValueError) as error:
+            return cloud_error_response(error)
         if document is None:
             return jsonify(error="CLOUD_DOCUMENT_NOT_FOUND"), 404
         response = jsonify(
@@ -547,8 +552,8 @@ def create_app(
             document = store.save(
                 cloud_account_id(), document_type, document_key, payload["payload"], source_device,
             )
-        except (CloudSyncError, ValueError):
-            return jsonify(error="CLOUD_SYNC_UNAVAILABLE"), 502
+        except (CloudSyncError, ValueError) as error:
+            return cloud_error_response(error)
         response = jsonify(
             revision=document.revision,
             payload_sha256=document.payload_sha256,

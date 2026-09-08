@@ -22,6 +22,21 @@ TABLE_NAME = "rhythmos_sync_documents"
 class CloudSyncError(RuntimeError):
     """Raised when the private cloud projection cannot be safely used."""
 
+    def __init__(self, message: str, *, failure_code: str = "unavailable"):
+        super().__init__(message)
+        self.failure_code = failure_code
+
+
+def _response_failure_code(status_code: int) -> str:
+    """Classify an upstream response without retaining its body or headers."""
+    if status_code in {401, 403}:
+        return "credentials"
+    if status_code in {404, 406}:
+        return "schema"
+    if status_code == 429:
+        return "throttled"
+    return "unavailable"
+
 
 @dataclass(frozen=True)
 class CloudDocument:
@@ -73,7 +88,10 @@ class SupabaseCloudDocumentStore:
             timeout=self._timeout,
         )
         if response.status_code != 200:
-            raise CloudSyncError("cloud document lookup failed")
+            raise CloudSyncError(
+                "cloud document lookup failed",
+                failure_code=_response_failure_code(response.status_code),
+            )
         try:
             rows = response.json()
         except ValueError as error:
@@ -121,7 +139,10 @@ class SupabaseCloudDocumentStore:
             timeout=self._timeout,
         )
         if response.status_code not in {200, 201}:
-            raise CloudSyncError("cloud document save failed")
+            raise CloudSyncError(
+                "cloud document save failed",
+                failure_code=_response_failure_code(response.status_code),
+            )
         try:
             rows = response.json()
         except ValueError as error:

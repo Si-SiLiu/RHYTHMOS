@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 
 from src.cloud_sync_store import CloudDocument
 from src.mobile_sync_server import create_app
+from src.cloud_sync_store import CloudSyncError
 from src.secure_token_store import EncryptedTokenStore
 
 
@@ -244,6 +245,26 @@ class MobileSyncServerTests(unittest.TestCase):
         self.assertEqual(pulled.status_code, 200)
         self.assertEqual(pulled.get_json()["payload"], self.snapshot)
         self.assertEqual(pulled.headers["Cache-Control"], "no-store")
+
+    def test_cloud_storage_failure_reports_a_safe_actionable_code(self):
+        class CredentialsRejectedStore:
+            def save(self, *args, **kwargs):
+                raise CloudSyncError("upstream rejected credentials", failure_code="credentials")
+
+            def load(self, *args, **kwargs):
+                raise CloudSyncError("upstream rejected credentials", failure_code="credentials")
+
+        app = create_app(self.config, cloud_store_factory=lambda settings: CredentialsRejectedStore())
+        app.config["TESTING"] = True
+        client = app.test_client()
+        payload = {"payload": self.snapshot, "source_device": "macOS-test"}
+
+        response = client.post(
+            "/v1/cloud/documents/daily_snapshot/2026-09-07", headers=self.headers, json=payload,
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json(), {"error": "CLOUD_SYNC_CREDENTIALS"})
 
     def test_reviewed_screenshot_values_are_imported_without_an_image_upload(self):
         payload = {

@@ -198,6 +198,21 @@ class MobileDailySnapshotTests(unittest.TestCase):
         self.assertEqual(protein["current"], 12.56)
         self.assertEqual(protein["status"], "recorded")
 
+    def test_nutrition_excludes_draft_meals_from_mobile_projection(self):
+        catalog = food_catalog_by_name(self.connection)
+        create_meal_record(self.connection, {
+            "date": "2026-09-07", "meal_type": "breakfast", "eaten_at": "08:00",
+        }, [{"food_catalog_id": catalog["egg"]["id"], "quantity": 2, "unit": "piece"}])
+        create_meal_record(self.connection, {
+            "date": "2026-09-07", "meal_type": "lunch", "eaten_at": "12:00", "status": "draft",
+        }, [{"food_catalog_id": catalog["egg"]["id"], "quantity": 1, "unit": "piece"}])
+
+        nutrition = build_mobile_daily_snapshot(self.path, "2026-09-07")["nutrition"]
+
+        self.assertEqual(nutrition["recorded_meals"], 1)
+        self.assertEqual(nutrition["food_count"], 1)
+        self.assertEqual(len(nutrition["meals"]), 1)
+
     def test_nutrition_projects_the_active_desktop_cycle_plan(self):
         cursor = self.connection.execute(
             """INSERT INTO nutrition_plan_cycles(uuid,name,start_date,end_date,status)

@@ -621,7 +621,11 @@ def _mobile_nutrition_meals(records: list[dict[str, Any]], day: str, catalog: di
     """Expose the same day-local meal rows shown in the desktop editor."""
     meals = []
     for record in records:
-        if record.get("date") != day:
+        # Keep the detailed rows aligned with NutritionFeedbackService, which
+        # deliberately excludes draft meals from its daily totals.  Publishing
+        # drafts would make the mobile food count disagree with the desktop
+        # summary and could present unfinished entries as consumed food.
+        if record.get("date") != day or record.get("status", "completed") != "completed":
             continue
         items = []
         for item in record.get("items") or []:
