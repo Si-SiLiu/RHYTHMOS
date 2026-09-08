@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # Direct script invocation.
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = BASE_DIR / "dist" / "RHYTHMOS.app"
 SWIFT_TEMPLATE = BASE_DIR / "scripts" / "macos_dashboard_app.swift"
+IOS_LAUNCHER_TEMPLATE = BASE_DIR / "scripts" / "macos_ios_launcher.swift"
 ICON_PATH = BASE_DIR / "assets" / "app_icon.icns"
 STARTUP_SPLASH_PATH = BASE_DIR / "assets" / "startup_splash.png"
 VERSIONS_PATH = BASE_DIR / "config" / "versions.json"
@@ -29,6 +30,13 @@ VERSIONS_PATH = BASE_DIR / "config" / "versions.json"
 def render_swift_source(project_root: Path) -> str:
     """Render the native app source with a safely escaped project path."""
     template = SWIFT_TEMPLATE.read_text(encoding="utf-8")
+    project_literal = json.dumps(str(project_root.resolve()), ensure_ascii=False)
+    return template.replace('"__PROJECT_ROOT__"', project_literal)
+
+
+def render_ios_launcher_swift_source(project_root: Path) -> str:
+    """Render the no-window iOS Simulator launcher with its project root."""
+    template = IOS_LAUNCHER_TEMPLATE.read_text(encoding="utf-8")
     project_literal = json.dumps(str(project_root.resolve()), ensure_ascii=False)
     return template.replace('"__PROJECT_ROOT__"', project_literal)
 
@@ -60,9 +68,43 @@ def compile_native_app(source_path: Path, executable_path: Path) -> None:
     require_arm64_binary(executable_path)
 
 
+def compile_ios_launcher(source_path: Path, executable_path: Path) -> None:
+    """Compile the native, windowless iOS Simulator desktop launcher."""
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/xcrun",
+                "swiftc",
+                "-target",
+                MACOS_TARGET,
+                str(source_path),
+                "-o",
+                str(executable_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else ""
+        raise RuntimeError(f"IOS_LAUNCHER_COMPILE_FAILED:{detail}") from exc
+    require_arm64_binary(executable_path)
+
+
 def sign_app_bundle(output_path: Path) -> None:
     """Apply an ad-hoc local signature so Finder can launch the bundle."""
     try:
+        # Nested helper apps are separately sealed before the outer dashboard
+        # bundle. Without this step, deep verification reports an unsigned
+        # subcomponent and Finder may refuse to launch the desktop entry.
+        helpers_dir = output_path / "Contents" / "Helpers"
+        for helper in sorted(helpers_dir.glob("*.app")) if helpers_dir.is_dir() else []:
+            subprocess.run(
+                ["/usr/bin/codesign", "--force", "--sign", "-", str(helper)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         subprocess.run(
             ["/usr/bin/codesign", "--force", "--sign", "-", str(output_path)],
             check=True,
@@ -144,6 +186,8 @@ def _populate_bundle(project_root: Path, output_path: Path, app_version: str, sh
         executable_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable_path.chmod(0o755)
 
+    _populate_ios_launcher_bundle(project_root, contents_dir, app_version, should_compile)
+
     info = {
         "CFBundleDisplayName": "RHYTHMOS｜律衡",
         "CFBundleExecutable": "rhythmos",
@@ -160,17 +204,47 @@ def _populate_bundle(project_root: Path, output_path: Path, app_version: str, sh
         "LSApplicationCategoryType": "public.app-category.healthcare-fitness",
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
-        "CFBundleDocumentTypes": [
-            {
-                "CFBundleTypeName": "打开 RHYTHMOS iOS",
-                "CFBundleTypeRole": "Editor",
-                "CFBundleTypeExtensions": ["rhythmos-ios"],
-                "CFBundleTypeIconFile": "app_icon.icns",
-                "LSHandlerRank": "Owner",
-            }
-        ],
     }
     with (contents_dir / "Info.plist").open("wb") as plist_file:
+        plistlib.dump(info, plist_file, sort_keys=True)
+
+
+def _populate_ios_launcher_bundle(
+    project_root: Path,
+    contents_dir: Path,
+    app_version: str,
+    should_compile: bool,
+) -> None:
+    """Embed a click-to-run, no-window iOS launcher inside RHYTHMOS.app."""
+    bundle = contents_dir / "Helpers" / "打开 RHYTHMOS iOS.app"
+    macos_dir = bundle / "Contents" / "MacOS"
+    resources_dir = bundle / "Contents" / "Resources"
+    macos_dir.mkdir(parents=True)
+    resources_dir.mkdir()
+    executable = macos_dir / "rhythmos-ios-launcher"
+    source = resources_dir / "IOSLauncher.swift"
+    source.write_text(render_ios_launcher_swift_source(project_root), encoding="utf-8")
+    shutil.copy2(ICON_PATH, resources_dir / "app_icon.icns")
+    if should_compile:
+        compile_ios_launcher(source, executable)
+    else:
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+    info = {
+        "CFBundleDisplayName": "打开 RHYTHMOS iOS",
+        "CFBundleExecutable": executable.name,
+        "CFBundleIconFile": "app_icon.icns",
+        "CFBundleIdentifier": "local.rhythmos.dashboard.ios-launcher",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "打开 RHYTHMOS iOS",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": app_version,
+        "CFBundleVersion": app_version,
+        "LSMinimumSystemVersion": MACOS_MIN_VERSION,
+        "LSUIElement": True,
+        "NSHighResolutionCapable": True,
+    }
+    with (bundle / "Contents" / "Info.plist").open("wb") as plist_file:
         plistlib.dump(info, plist_file, sort_keys=True)
 
 

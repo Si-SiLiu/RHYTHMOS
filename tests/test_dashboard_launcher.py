@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.build_macos_app import build_app_bundle, render_swift_source
+from scripts.build_macos_app import (
+    build_app_bundle,
+    render_ios_launcher_swift_source,
+    render_swift_source,
+)
 from src import dashboard_launcher
 
 
@@ -117,17 +121,17 @@ class DashboardLauncherTests(unittest.TestCase):
             self.assertEqual(info["LSArchitecturePriority"], ["arm64"])
             self.assertTrue(info["LSRequiresNativeExecution"])
             self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
-            document_type = info["CFBundleDocumentTypes"][0]
-            self.assertEqual(document_type["CFBundleTypeExtensions"], ["rhythmos-ios"])
-            self.assertEqual(document_type["CFBundleTypeIconFile"], "app_icon.icns")
+            launcher = built_path / "Contents" / "Helpers" / "打开 RHYTHMOS iOS.app"
+            self.assertTrue((launcher / "Contents" / "MacOS" / "rhythmos-ios-launcher").is_file())
+            with (launcher / "Contents" / "Info.plist").open("rb") as launcher_plist:
+                launcher_info = plistlib.load(launcher_plist)
+            self.assertTrue(launcher_info["LSUIElement"])
 
-    def test_render_swift_source_handles_ios_launcher_without_terminal(self):
-        source = render_swift_source(dashboard_launcher.BASE_DIR)
-        self.assertIn('iosLauncherDocumentExtension = "rhythmos-ios"', source)
+    def test_ios_launcher_source_runs_without_terminal(self):
+        source = render_ios_launcher_swift_source(dashboard_launcher.BASE_DIR)
         self.assertIn('appendingPathComponent("scripts/open_ios_simulator.command")', source)
         self.assertIn('process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")', source)
-        self.assertIn('process.arguments = [launcherURL.path, "--background"]', source)
-        self.assertIn('application(_ sender: NSApplication, openFile filename: String)', source)
+        self.assertIn('process.arguments = [launcher.path, "--background"]', source)
         self.assertNotIn('"-a", "Terminal"', source)
 
     @mock.patch("src.dashboard_launcher.subprocess.run")

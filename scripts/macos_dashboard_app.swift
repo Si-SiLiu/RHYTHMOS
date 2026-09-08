@@ -26,11 +26,6 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
     private var webView: WKWebView!
     private var keyEventMonitor: Any?
     private var revealWhenDashboardLoads = false
-    private var startupWorkItem: DispatchWorkItem?
-    private var launchIOSSimulatorOnly = false
-    private var isLaunchingIOSSimulator = false
-
-    private static let iosLauncherDocumentExtension = "rhythmos-ios"
 
     private static let downloadBridgeScript = #"""
     document.addEventListener("click", function(event) {
@@ -98,33 +93,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window.contentView = webView
-        scheduleInitialLaunch()
-    }
-
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        if handleIOSLauncherDocuments(filenames) {
-            sender.reply(toOpenOrPrint: .success)
-        } else {
-            sender.reply(toOpenOrPrint: .failure)
-        }
-    }
-
-    // Finder may send a single-file request through this legacy delegate
-    // method instead of application(_:openFiles:). Supporting both forms is
-    // essential for the desktop launcher to work from a fresh Finder window.
-    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        handleIOSLauncherDocuments([filename])
-    }
-
-    private func handleIOSLauncherDocuments(_ filenames: [String]) -> Bool {
-        let shouldLaunchSimulator = filenames.contains {
-            URL(fileURLWithPath: $0).pathExtension.lowercased() == Self.iosLauncherDocumentExtension
-        }
-        guard shouldLaunchSimulator else { return false }
-        launchIOSSimulatorOnly = true
-        startupWorkItem?.cancel()
-        launchIOSSimulator()
-        return true
+        startDashboard()
     }
 
     func webView(
@@ -343,23 +312,6 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         return true
     }
 
-    private func scheduleInitialLaunch() {
-        if launchIOSSimulatorOnly {
-            launchIOSSimulator()
-            return
-        }
-        // Finder delivers document-open events immediately after launch. A
-        // brief delay lets a desktop .rhythmos-ios launcher be handled before
-        // the local dashboard starts, so its click never opens a Terminal or
-        // an unnecessary dashboard window.
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, !self.launchIOSSimulatorOnly else { return }
-            self.startDashboard()
-        }
-        startupWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
-    }
-
     private func projectRootURL() -> URL? {
         let fileManager = FileManager.default
         let bundledProjectRoot = Bundle.main.bundleURL
@@ -369,40 +321,6 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
         return [bundledProjectRoot, embeddedProjectRoot].first {
             fileManager.fileExists(atPath: $0.appendingPathComponent(".venv/bin/python").path)
                 && fileManager.fileExists(atPath: $0.appendingPathComponent("src/dashboard_launcher.py").path)
-        }
-    }
-
-    private func launchIOSSimulator() {
-        guard !isLaunchingIOSSimulator else { return }
-        isLaunchingIOSSimulator = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard let projectRootURL = self.projectRootURL() else {
-                self.showLaunchError(message: "DASHBOARD_PROJECT_ROOT_NOT_FOUND")
-                return
-            }
-            let launcherURL = projectRootURL.appendingPathComponent("scripts/open_ios_simulator.command")
-            guard FileManager.default.isExecutableFile(atPath: launcherURL.path) else {
-                self.showLaunchError(message: "IOS_SIMULATOR_LAUNCHER_NOT_FOUND")
-                return
-            }
-            let process = Process()
-            // Start the long-running build independently of this native
-            // process. nohup keeps it alive after this lightweight launcher
-            // exits, without creating a Terminal window.
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
-            process.arguments = [launcherURL.path, "--background"]
-            process.currentDirectoryURL = projectRootURL
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                DispatchQueue.main.async {
-                    NSApp.terminate(nil)
-                }
-            } catch {
-                self.showLaunchError(message: "IOS_SIMULATOR_LAUNCH_FAILED")
-            }
         }
     }
 
