@@ -19,14 +19,16 @@ from src.cloud_projection_sync import CloudProjectionSyncError, publish_local_pr
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Publish RHYTHMOS projections through the configured HTTPS sync service.")
-    parser.add_argument("--days", type=int, default=14, help="History span to publish (1-30).")
+    parser.add_argument("--days", type=int, default=28, help="Recovery history span to publish (1-28).")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
-        result = publish_local_projections(history_days=args.days)
+        result = publish_local_projections(
+            history_days=min(args.days, 28), training_history_days=args.days,
+        )
     except (CloudProjectionSyncError, ValueError) as error:
         print(json.dumps({"success": False, "error": str(error)}, ensure_ascii=False))
         return 2

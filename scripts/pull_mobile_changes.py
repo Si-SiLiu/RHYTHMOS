@@ -54,7 +54,7 @@ def main() -> int:
     should_publish = bool(result["changes_applied"]) or local_data_changed(signature)
     if should_publish:
         try:
-            publish_local_projections(history_days=30)
+            publish_local_projections(history_days=28, training_history_days=30)
         except (CloudProjectionSyncError, ValueError):
             print(json.dumps({"status": "applied_publish_deferred"}, sort_keys=True))
             return 0

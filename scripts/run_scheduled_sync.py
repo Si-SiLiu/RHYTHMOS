@@ -63,9 +63,7 @@ def _publish_cloud_projection_after_local_sync(*, dry_run: bool) -> str:
     if dry_run:
         return "skipped_dry_run"
     try:
-        # Use the iOS history span so both recovery and training documents are
-        # fresh when the app returns to foreground.
-        result = publish_local_projections(history_days=30)
+        result = publish_local_projections(history_days=28, training_history_days=30)
     except (CloudProjectionSyncError, ValueError):
         return "deferred"
     return "published" if result else "not_configured"
