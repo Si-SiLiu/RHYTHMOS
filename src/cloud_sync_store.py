@@ -68,10 +68,15 @@ class SupabaseCloudDocumentStore:
         self._timeout = timeout
         self._headers = {
             "apikey": service_role_key,
-            "Authorization": f"Bearer {service_role_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Supabase's newer sb_secret_* keys are API keys, not JWTs.  Sending
+        # one in Authorization makes the REST gateway try to parse it as a JWT
+        # and reject it.  Keep the Authorization header for the legacy JWT
+        # service_role key while migrating existing test deployments safely.
+        if not service_role_key.startswith("sb_secret_"):
+            self._headers["Authorization"] = f"Bearer {service_role_key}"
 
     def load(self, account_id: str, document_type: str, document_key: str) -> CloudDocument | None:
         self._validate_identity(account_id, document_type, document_key)
