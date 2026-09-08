@@ -15,7 +15,9 @@ from urllib.parse import urlparse
 import requests
 
 
-DOCUMENT_TYPES = frozenset({"daily_snapshot", "recovery_history", "training_history"})
+DOCUMENT_TYPES = frozenset({
+    "daily_snapshot", "recovery_history", "training_history", "mobile_change",
+})
 TABLE_NAME = "rhythmos_sync_documents"
 
 
@@ -47,6 +49,7 @@ class CloudDocument:
     payload: dict[str, Any]
     payload_sha256: str
     source_device: str
+    updated_at: str | None = None
 
 
 def payload_sha256(payload: Mapping[str, Any]) -> str:
@@ -114,7 +117,55 @@ class SupabaseCloudDocumentStore:
             payload=row["payload"],
             payload_sha256=str(row["payload_sha256"]),
             source_device=str(row["source_device"]),
+            updated_at=str(row["updated_at"]) if row.get("updated_at") is not None else None,
         )
+
+    def list_documents(
+        self, account_id: str, document_type: str, *, limit: int = 200,
+    ) -> list[CloudDocument]:
+        """Return an account-scoped ordered document collection for sync inboxes."""
+        if not account_id or len(account_id) > 160 or document_type not in DOCUMENT_TYPES:
+            raise ValueError("invalid cloud document collection")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise ValueError("invalid cloud document limit")
+        response = self._http.get(
+            self._endpoint,
+            headers=self._headers,
+            params={
+                "select": "account_id,document_type,document_key,revision,payload,payload_sha256,source_device,updated_at",
+                "account_id": f"eq.{account_id}",
+                "document_type": f"eq.{document_type}",
+                "order": "updated_at.asc,document_key.asc",
+                "limit": str(limit),
+            },
+            timeout=self._timeout,
+        )
+        if response.status_code != 200:
+            raise CloudSyncError(
+                "cloud document collection lookup failed",
+                failure_code=_response_failure_code(response.status_code),
+            )
+        try:
+            rows = response.json()
+        except ValueError as error:
+            raise CloudSyncError("cloud document collection returned invalid JSON") from error
+        if not isinstance(rows, list):
+            raise CloudSyncError("cloud document collection shape is invalid")
+        documents: list[CloudDocument] = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("payload"), dict):
+                raise CloudSyncError("cloud document collection item is invalid")
+            documents.append(CloudDocument(
+                account_id=str(row["account_id"]),
+                document_type=str(row["document_type"]),
+                document_key=str(row["document_key"]),
+                revision=int(row["revision"]),
+                payload=row["payload"],
+                payload_sha256=str(row["payload_sha256"]),
+                source_device=str(row["source_device"]),
+                updated_at=str(row["updated_at"]) if row.get("updated_at") is not None else None,
+            ))
+        return documents
 
     def save(
         self,
@@ -163,6 +214,7 @@ class SupabaseCloudDocumentStore:
             payload=dict(saved["payload"]),
             payload_sha256=str(saved["payload_sha256"]),
             source_device=str(saved["source_device"]),
+            updated_at=str(saved["updated_at"]) if saved.get("updated_at") is not None else None,
         )
 
     @staticmethod

@@ -20,6 +20,8 @@ if str(BASE_DIR) not in sys.path:
 from src.scheduler import TRIGGER_TYPES
 from src.scheduler.config import CONFIG_PATH, load_scheduler_config
 from src.scheduler.runner import SchedulerRunError, run_triggered_pipeline
+from src.cloud_projection_sync import CloudProjectionSyncError, publish_local_projections
+from src.cloud_mobile_change_sync import MobileCloudChangeSyncError, pull_mobile_changes
 
 
 def parse_args(argv=None):
@@ -50,8 +52,36 @@ def _safe_summary(summary: dict) -> dict:
         "error_code",
         "dry_run",
         "lock_recovered_after_abandonment",
+        "cloud_projection_status",
+        "cloud_change_pull_status",
     }
     return {key: summary[key] for key in allowed if key in summary}
+
+
+def _publish_cloud_projection_after_local_sync(*, dry_run: bool) -> str:
+    """Publish mobile-safe data without turning a local sync into a failure."""
+    if dry_run:
+        return "skipped_dry_run"
+    try:
+        # Use the iOS history span so both recovery and training documents are
+        # fresh when the app returns to foreground.
+        result = publish_local_projections(history_days=30)
+    except (CloudProjectionSyncError, ValueError):
+        return "deferred"
+    return "published" if result else "not_configured"
+
+
+def _pull_mobile_changes_before_local_sync(*, dry_run: bool) -> str:
+    """Apply iPhone-confirmed writes before rebuilding local projections."""
+    if dry_run:
+        return "skipped_dry_run"
+    try:
+        result = pull_mobile_changes()
+    except MobileCloudChangeSyncError:
+        return "deferred"
+    if result is None:
+        return "not_configured"
+    return "applied" if result.get("changes_applied") else "up_to_date"
 
 
 def main(argv=None) -> int:
@@ -70,6 +100,7 @@ def main(argv=None) -> int:
             )
         )
         return 0
+    change_pull_status = _pull_mobile_changes_before_local_sync(dry_run=args.dry_run)
     try:
         summary = run_triggered_pipeline(
             args.trigger_type,
@@ -78,6 +109,11 @@ def main(argv=None) -> int:
     except SchedulerRunError as exc:
         print(json.dumps(_safe_summary(exc.summary), sort_keys=True))
         return 2
+    if summary.get("pipeline_invoked"):
+        summary["cloud_projection_status"] = _publish_cloud_projection_after_local_sync(
+            dry_run=args.dry_run
+        )
+    summary["cloud_change_pull_status"] = change_pull_status
     print(json.dumps(_safe_summary(summary), sort_keys=True))
     return 0
 

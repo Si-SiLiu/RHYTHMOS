@@ -14,6 +14,7 @@ import time
 import urllib.parse
 from datetime import date
 from typing import Any, Callable
+from uuid import uuid4
 
 import requests
 from flask import Flask, Response, jsonify, redirect, request, session
@@ -21,6 +22,7 @@ from requests.auth import HTTPBasicAuth
 
 from .mobile_snapshot import build_mobile_daily_snapshot
 from .mobile_recovery_history import (
+    MAX_DAYS as RECOVERY_HISTORY_MAX_DAYS,
     MobileRecoveryHistoryError,
     build_mobile_recovery_history,
 )
@@ -39,6 +41,15 @@ from .mobile_nutrition_library import (
     mobile_food_nutrition_library,
     parse_mobile_food_label,
     save_mobile_food_label,
+)
+from .mobile_nutrition_plan_input import (
+    MobileNutritionPlanInputError,
+    save_mobile_nutrition_plan_entry,
+)
+from .mobile_personal_input import (
+    MobilePersonalInputError,
+    save_mobile_body_measurement,
+    save_mobile_personal_profile,
 )
 from .cloud_sync_store import CloudSyncError, DOCUMENT_TYPES, cloud_store_from_settings
 from .polar_client import TOKEN_FILE
@@ -127,6 +138,9 @@ def create_app(
     nutrition_label_parser: Callable[[dict[str, Any]], dict[str, Any]] = parse_mobile_food_label,
     nutrition_label_saver: Callable[[dict[str, Any]], dict[str, Any]] = save_mobile_food_label,
     nutrition_library_loader: Callable[[], dict[str, list[dict[str, Any]]]] = mobile_food_nutrition_library,
+    nutrition_plan_entry_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_nutrition_plan_entry,
+    personal_profile_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_personal_profile,
+    body_measurement_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_body_measurement,
     cloud_store_factory: Callable[[dict[str, Any]], Any] = cloud_store_from_settings,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> Flask:
@@ -187,6 +201,36 @@ def create_app(
         snapshot_date = snapshot.get("date")
         if isinstance(snapshot_date, str):
             save_cloud_document("daily_snapshot", snapshot_date, snapshot)
+
+    def cloud_mobile_change(kind: str, payload: dict[str, Any]) -> None:
+        """Queue an iOS-confirmed write for the local Mac database.
+
+        The Render service remains the sole cloud credential holder.  The
+        queue contains only the validated form fields already accepted by the
+        iOS endpoint; it never contains an image, a Polar token, or a SQLite
+        database.  Individual immutable documents make delivery idempotent.
+        """
+        if kind not in {
+            "kubios_screenshot", "morning_hrv", "nutrition_entry",
+            "nutrition_plan_entry", "personal_profile", "body_measurement",
+            "food_nutrition_label",
+        }:
+            return
+        save_cloud_document(
+            "mobile_change", f"ios:{uuid4()}",
+            {"kind": kind, "payload": payload, "version": 1},
+        )
+
+    def cloud_recovery_history(days: int = 28) -> None:
+        """Refresh the mobile history projection after recovery data changes."""
+        try:
+            history = history_builder(days=days)
+        except Exception:
+            # Projection availability must not turn an otherwise successful
+            # Polar or reviewed-screenshot import into a failed operation.
+            return
+        if isinstance(history, dict):
+            save_cloud_document("recovery_history", f"days:{days}", history)
 
     def cloud_error_response(error: CloudSyncError | ValueError) -> Response:
         """Return a stable, non-sensitive cloud storage failure code."""
@@ -322,6 +366,7 @@ def create_app(
         snapshot = snapshot_builder()
         if isinstance(snapshot, dict):
             cloud_snapshot(snapshot)
+        cloud_recovery_history()
         return jsonify(_safe_summary(summary))
 
     @app.get("/v1/mobile/daily-snapshot")
@@ -352,9 +397,13 @@ def create_app(
         guard = api_guard()
         if guard:
             return guard
-        requested_days = request.args.get("days", "14")
+        requested_days = request.args.get("days", "28")
         try:
             days = int(requested_days)
+            if not 1 <= days <= RECOVERY_HISTORY_MAX_DAYS:
+                raise MobileRecoveryHistoryError(
+                    f"days must be between 1 and {RECOVERY_HISTORY_MAX_DAYS}"
+                )
             history = load_cloud_document("recovery_history", f"days:{days}")
             if history is None:
                 history = history_builder(days=days)
@@ -371,7 +420,7 @@ def create_app(
         guard = api_guard()
         if guard:
             return guard
-        requested_days = request.args.get("days", "14")
+        requested_days = request.args.get("days", "30")
         try:
             days = int(requested_days)
             history = load_cloud_document("training_history", f"days:{days}")
@@ -400,10 +449,12 @@ def create_app(
             return jsonify(error=str(error)), 400
         except Exception:
             return jsonify(error="SCREENSHOT_IMPORT_FAILED"), 502
+        cloud_mobile_change("kubios_screenshot", payload)
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
         cloud_snapshot(snapshot)
+        cloud_recovery_history()
         response = jsonify(snapshot)
         response.status_code = 201
         response.headers["Cache-Control"] = "no-store"
@@ -424,10 +475,12 @@ def create_app(
             return jsonify(error=str(error)), 400
         except Exception:
             return jsonify(error="DEVICE_MEASUREMENT_IMPORT_FAILED"), 502
+        cloud_mobile_change("morning_hrv", payload)
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
         cloud_snapshot(snapshot)
+        cloud_recovery_history()
         response = jsonify(snapshot)
         response.status_code = 201
         response.headers["Cache-Control"] = "no-store"
@@ -447,6 +500,76 @@ def create_app(
             return jsonify(error=str(error)), 400
         except Exception:
             return jsonify(error="NUTRITION_SAVE_FAILED"), 502
+        cloud_mobile_change("nutrition_entry", payload)
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/nutrition-plan-entry")
+    def save_nutrition_plan_entry() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_NUTRITION_PLAN_PAYLOAD"), 400
+        try:
+            result = nutrition_plan_entry_saver(payload)
+        except MobileNutritionPlanInputError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="NUTRITION_PLAN_SAVE_FAILED"), 502
+        cloud_mobile_change("nutrition_plan_entry", payload)
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/personal-profile")
+    def save_personal_profile() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_PROFILE_PAYLOAD"), 400
+        try:
+            result = personal_profile_saver(payload)
+        except MobilePersonalInputError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="PROFILE_SAVE_FAILED"), 502
+        cloud_mobile_change("personal_profile", payload)
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/body-measurement")
+    def save_body_measurement() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_BODY_PAYLOAD"), 400
+        try:
+            result = body_measurement_saver(payload)
+        except MobilePersonalInputError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="BODY_SAVE_FAILED"), 502
+        cloud_mobile_change("body_measurement", payload)
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
@@ -500,6 +623,7 @@ def create_app(
             return jsonify(error=str(error)), 400
         except Exception:
             return jsonify(error="NUTRITION_LABEL_SAVE_FAILED"), 502
+        cloud_mobile_change("food_nutrition_label", payload)
         response = jsonify(result)
         response.status_code = 201
         response.headers["Cache-Control"] = "no-store"
@@ -528,6 +652,34 @@ def create_app(
             payload_sha256=document.payload_sha256,
             source_device=document.source_device,
         )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/cloud/changes")
+    def list_cloud_changes() -> Response:
+        """Return the private iOS write inbox for the connected Mac only."""
+        guard = api_guard()
+        if guard:
+            return guard
+        try:
+            limit = int(request.args.get("limit", "200"))
+            store = cloud_store()
+            if store is None:
+                return jsonify(error="CLOUD_SYNC_NOT_CONFIGURED"), 503
+            documents = store.list_documents(cloud_account_id(), "mobile_change", limit=limit)
+        except (TypeError, ValueError):
+            return jsonify(error="INVALID_CLOUD_CHANGE_LIMIT"), 400
+        except CloudSyncError as error:
+            return cloud_error_response(error)
+        response = jsonify(changes=[
+            {
+                "id": document.document_key,
+                "payload": document.payload,
+                "source_device": document.source_device,
+                "updated_at": document.updated_at,
+            }
+            for document in documents
+        ])
         response.headers["Cache-Control"] = "no-store"
         return response
 

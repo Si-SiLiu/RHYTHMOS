@@ -8,7 +8,7 @@
 create table if not exists public.rhythmos_sync_documents (
     account_id text not null check (char_length(account_id) between 1 and 160),
     document_type text not null check (
-        document_type in ('daily_snapshot', 'recovery_history', 'training_history')
+        document_type in ('daily_snapshot', 'recovery_history', 'training_history', 'mobile_change')
     ),
     document_key text not null check (char_length(document_key) between 1 and 160),
     revision bigint not null default 1 check (revision > 0),
