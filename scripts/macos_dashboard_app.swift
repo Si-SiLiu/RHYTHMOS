@@ -102,17 +102,29 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if handleIOSLauncherDocuments(filenames) {
+            sender.reply(toOpenOrPrint: .success)
+        } else {
+            sender.reply(toOpenOrPrint: .failure)
+        }
+    }
+
+    // Finder may send a single-file request through this legacy delegate
+    // method instead of application(_:openFiles:). Supporting both forms is
+    // essential for the desktop launcher to work from a fresh Finder window.
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        handleIOSLauncherDocuments([filename])
+    }
+
+    private func handleIOSLauncherDocuments(_ filenames: [String]) -> Bool {
         let shouldLaunchSimulator = filenames.contains {
             URL(fileURLWithPath: $0).pathExtension.lowercased() == Self.iosLauncherDocumentExtension
         }
-        guard shouldLaunchSimulator else {
-            sender.reply(toOpenOrPrint: .failure)
-            return
-        }
+        guard shouldLaunchSimulator else { return false }
         launchIOSSimulatorOnly = true
         startupWorkItem?.cancel()
         launchIOSSimulator()
-        sender.reply(toOpenOrPrint: .success)
+        return true
     }
 
     func webView(

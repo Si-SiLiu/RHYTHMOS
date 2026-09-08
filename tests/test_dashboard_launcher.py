@@ -126,6 +126,7 @@ class DashboardLauncherTests(unittest.TestCase):
         self.assertIn('iosLauncherDocumentExtension = "rhythmos-ios"', source)
         self.assertIn('appendingPathComponent("scripts/open_ios_simulator.command")', source)
         self.assertIn('process.arguments = ["--background"]', source)
+        self.assertIn('application(_ sender: NSApplication, openFile filename: String)', source)
         self.assertNotIn('"-a", "Terminal"', source)
 
     @mock.patch("src.dashboard_launcher.subprocess.run")
