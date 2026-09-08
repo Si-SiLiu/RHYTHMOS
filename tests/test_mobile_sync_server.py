@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from cryptography.fernet import Fernet
 
+from src.cloud_sync_store import CloudDocument
 from src.mobile_sync_server import create_app
 from src.secure_token_store import EncryptedTokenStore
 
@@ -14,6 +15,29 @@ class _Runner:
     def run(self, **kwargs):
         assert kwargs == {"if_new_data": True, "trigger_type": "scheduled"}
         return {"success": True, "run_id": "safe-run-id", "records_imported": 4, "access_token": "never-return"}
+
+
+class _CloudStore:
+    def __init__(self):
+        self.documents = {}
+
+    def load(self, account_id, document_type, document_key):
+        return self.documents.get((account_id, document_type, document_key))
+
+    def save(self, account_id, document_type, document_key, payload, source_device):
+        key = (account_id, document_type, document_key)
+        previous = self.documents.get(key)
+        document = CloudDocument(
+            account_id=account_id,
+            document_type=document_type,
+            document_key=document_key,
+            revision=(previous.revision + 1) if previous else 1,
+            payload=dict(payload),
+            payload_sha256="a" * 64,
+            source_device=source_device,
+        )
+        self.documents[key] = document
+        return document
 
 
 class MobileSyncServerTests(unittest.TestCase):
@@ -37,10 +61,32 @@ class MobileSyncServerTests(unittest.TestCase):
             "version": 1,
             "date": "2026-09-07",
         }
+        self.nutrition_entry_saver = Mock(side_effect=lambda payload: {"date": payload["date"]})
+        self.nutrition_label_parser = Mock(return_value={"basis": "per 100 g", "nutrients": {"protein": {"value": 3.2, "unit": "g"}}, "confidence": 0.9})
+        self.nutrition_label_saver = Mock(return_value={"food_catalog_id": 7, "food_name": "测试食物"})
+        self.nutrition_library_loader = Mock(return_value={"items": [{"id": 7, "food_name": "测试食物"}]})
         self.app = create_app(
             self.config,
             runner_factory=lambda: _Runner(),
             snapshot_builder=lambda **kwargs: self.snapshot,
+            screenshot_importer=lambda payload: {"date": payload["date"]},
+            morning_hrv_importer=lambda payload: {"date": payload["date"]},
+            nutrition_entry_saver=self.nutrition_entry_saver,
+            nutrition_label_parser=self.nutrition_label_parser,
+            nutrition_label_saver=self.nutrition_label_saver,
+            nutrition_library_loader=self.nutrition_library_loader,
+            history_builder=lambda **kwargs: {
+                "kind": "rhythmos.mobile_recovery_history",
+                "version": 1,
+                "days": [],
+                "requested_days": kwargs["days"],
+            },
+            training_history_builder=lambda **kwargs: {
+                "kind": "rhythmos.mobile_training_history",
+                "version": 1,
+                "days": [],
+                "requested_days": kwargs["days"],
+            },
         )
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
@@ -65,6 +111,35 @@ class MobileSyncServerTests(unittest.TestCase):
         response = self.client.post("/v1/mobile/sync", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"success": True, "run_id": "safe-run-id", "records_imported": 4})
+
+    def test_manual_nutrition_entry_requires_auth_and_returns_refreshed_snapshot(self):
+        payload = {"date": "2026-09-07", "food_name": "午餐", "calories_kcal": 620}
+        self.assertEqual(self.client.post("/v1/mobile/nutrition-entry", json=payload).status_code, 401)
+
+        response = self.client.post("/v1/mobile/nutrition-entry", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), self.snapshot)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.nutrition_entry_saver.assert_called_once_with(payload)
+
+    def test_food_label_parse_and_library_share_the_mobile_token_boundary(self):
+        payload = {"raw_text": "每100g 蛋白质 3.2g"}
+        self.assertEqual(self.client.post("/v1/mobile/nutrition-label/parse", json=payload).status_code, 401)
+        parsed = self.client.post("/v1/mobile/nutrition-label/parse", headers=self.headers, json=payload)
+        self.assertEqual(parsed.status_code, 200)
+        self.assertEqual(parsed.get_json()["basis"], "per 100 g")
+        self.assertEqual(parsed.headers["Cache-Control"], "no-store")
+        self.nutrition_label_parser.assert_called_once_with(payload)
+
+        library = self.client.get("/v1/mobile/nutrition-library/food", headers=self.headers)
+        self.assertEqual(library.status_code, 200)
+        self.assertEqual(library.get_json()["items"][0]["food_name"], "测试食物")
+
+        saved = self.client.post("/v1/mobile/nutrition-library/food", headers=self.headers, json=payload)
+        self.assertEqual(saved.status_code, 201)
+        self.assertEqual(saved.get_json()["food_catalog_id"], 7)
+        self.nutrition_label_saver.assert_called_once_with(payload)
 
     def test_connect_requires_basic_auth_and_never_puts_secret_in_authorization_url(self):
         unauthorized = self.client.get("/connect/polar")
@@ -115,6 +190,86 @@ class MobileSyncServerTests(unittest.TestCase):
         response = self.client.get("/v1/mobile/daily-snapshot?date=not-a-date", headers=self.headers)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json(), {"error": "INVALID_DATE"})
+
+    def test_history_is_token_protected_and_range_checked(self):
+        response = self.client.get("/v1/mobile/recovery-history")
+        self.assertEqual(response.status_code, 401)
+        response = self.client.get("/v1/mobile/recovery-history?days=7", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["requested_days"], 7)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        response = self.client.get("/v1/mobile/recovery-history?days=bad", headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "INVALID_HISTORY_RANGE"})
+
+    def test_training_history_is_token_protected_and_range_checked(self):
+        response = self.client.get("/v1/mobile/training-history")
+        self.assertEqual(response.status_code, 401)
+        response = self.client.get("/v1/mobile/training-history?days=7", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["requested_days"], 7)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        response = self.client.get("/v1/mobile/training-history?days=bad", headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "INVALID_HISTORY_RANGE"})
+
+    def test_cloud_document_push_and_pull_share_the_mobile_token_boundary(self):
+        cloud = _CloudStore()
+        app = create_app(self.config, cloud_store_factory=lambda settings: cloud)
+        app.config["TESTING"] = True
+        client = app.test_client()
+        payload = {"payload": self.snapshot, "source_device": "macOS-test"}
+
+        self.assertEqual(
+            client.post("/v1/cloud/documents/daily_snapshot/2026-09-07", json=payload).status_code,
+            401,
+        )
+        saved = client.post(
+            "/v1/cloud/documents/daily_snapshot/2026-09-07", headers=self.headers, json=payload,
+        )
+        self.assertEqual(saved.status_code, 201)
+        self.assertEqual(saved.get_json()["revision"], 1)
+        pulled = client.get(
+            "/v1/cloud/documents/daily_snapshot/2026-09-07", headers=self.headers,
+        )
+        self.assertEqual(pulled.status_code, 200)
+        self.assertEqual(pulled.get_json()["payload"], self.snapshot)
+        self.assertEqual(pulled.headers["Cache-Control"], "no-store")
+
+    def test_reviewed_screenshot_values_are_imported_without_an_image_upload(self):
+        payload = {
+            "date": "2026-09-07", "rmssd": 42.5, "mean_hr": 57,
+            "image_sha256": "a" * 64, "user_confirmed": True,
+        }
+        response = self.client.post("/v1/mobile/kubios-screenshot-import", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json(), self.snapshot)
+
+    def test_screenshot_endpoint_reports_a_safe_import_failure_or_non_json_input(self):
+        response = self.client.post("/v1/mobile/kubios-screenshot-import", headers=self.headers, json={})
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json(), {"error": "SCREENSHOT_IMPORT_FAILED"})
+        response = self.client.post("/v1/mobile/kubios-screenshot-import", headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "INVALID_SCREENSHOT_PAYLOAD"})
+
+    def test_reviewed_device_measurement_returns_a_fresh_snapshot(self):
+        payload = {
+            "date": "2026-09-07", "source_type": "ios_bluetooth_hrv",
+            "measurement_sha256": "d" * 64, "user_confirmed": True,
+        }
+        response = self.client.post("/v1/mobile/morning-hrv-import", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json(), self.snapshot)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_device_measurement_endpoint_rejects_non_json_input(self):
+        response = self.client.post("/v1/mobile/morning-hrv-import", headers=self.headers)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "INVALID_DEVICE_MEASUREMENT_PAYLOAD"})
 
 
 if __name__ == "__main__":

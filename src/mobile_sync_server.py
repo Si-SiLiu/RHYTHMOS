@@ -24,7 +24,23 @@ from .mobile_recovery_history import (
     MobileRecoveryHistoryError,
     build_mobile_recovery_history,
 )
-from .mobile_kubios_import import MobileKubiosImportError, import_mobile_screenshot_measurement
+from .mobile_training_history import (
+    MobileTrainingHistoryError,
+    build_mobile_training_history,
+)
+from .mobile_kubios_import import (
+    MobileKubiosImportError,
+    import_mobile_morning_hrv_measurement,
+    import_mobile_screenshot_measurement,
+)
+from .mobile_nutrition_input import MobileNutritionInputError, save_mobile_manual_nutrition_entry
+from .mobile_nutrition_library import (
+    MobileNutritionLibraryError,
+    mobile_food_nutrition_library,
+    parse_mobile_food_label,
+    save_mobile_food_label,
+)
+from .cloud_sync_store import CloudSyncError, DOCUMENT_TYPES, cloud_store_from_settings
 from .polar_client import TOKEN_FILE
 from .secure_token_store import TokenStoreError, token_store_for
 from .sync_pipeline import PipelineError, PipelineRunner
@@ -56,6 +72,9 @@ def _settings(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         "POLAR_CONNECT_PASSWORD": os.getenv("POLAR_CONNECT_PASSWORD"),
         "FLASK_SECRET_KEY": os.getenv("FLASK_SECRET_KEY"),
         "POLAR_TOKEN_FILE": str(TOKEN_FILE),
+        "SUPABASE_URL": os.getenv("SUPABASE_URL"),
+        "SUPABASE_SERVICE_ROLE_KEY": os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+        "CLOUD_SYNC_SOURCE_DEVICE": os.getenv("CLOUD_SYNC_SOURCE_DEVICE", "render-polar-service"),
     }
     if overrides:
         values.update(overrides)
@@ -101,7 +120,14 @@ def create_app(
     runner_factory: Callable[[], PipelineRunner] = PipelineRunner,
     snapshot_builder: Callable[..., dict[str, Any] | None] = build_mobile_daily_snapshot,
     history_builder: Callable[..., dict[str, Any]] = build_mobile_recovery_history,
+    training_history_builder: Callable[..., dict[str, Any]] = build_mobile_training_history,
     screenshot_importer: Callable[[dict[str, Any]], dict[str, Any]] = import_mobile_screenshot_measurement,
+    morning_hrv_importer: Callable[[dict[str, Any]], dict[str, Any]] = import_mobile_morning_hrv_measurement,
+    nutrition_entry_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_manual_nutrition_entry,
+    nutrition_label_parser: Callable[[dict[str, Any]], dict[str, Any]] = parse_mobile_food_label,
+    nutrition_label_saver: Callable[[dict[str, Any]], dict[str, Any]] = save_mobile_food_label,
+    nutrition_library_loader: Callable[[], dict[str, list[dict[str, Any]]]] = mobile_food_nutrition_library,
+    cloud_store_factory: Callable[[dict[str, Any]], Any] = cloud_store_from_settings,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> Flask:
     """Create the service without requiring deploy-time secrets at import time."""
@@ -121,6 +147,46 @@ def create_app(
         if not _api_authorized(current):
             return jsonify(error="UNAUTHORIZED"), 401
         return None
+
+    def cloud_store() -> Any | None:
+        """Build an optional cloud store without making cloud configuration required."""
+        try:
+            return cloud_store_factory(service_settings())
+        except (CloudSyncError, ValueError):
+            return None
+
+    def cloud_account_id() -> str:
+        # Polar's member id is controlled server-side and scopes the initial
+        # small-test account. A multi-account identity layer will replace it.
+        return str(service_settings()["POLAR_MEMBER_ID"])
+
+    def load_cloud_document(document_type: str, document_key: str) -> dict[str, Any] | None:
+        store = cloud_store()
+        if store is None:
+            return None
+        try:
+            document = store.load(cloud_account_id(), document_type, document_key)
+        except (CloudSyncError, ValueError):
+            return None
+        return document.payload if document else None
+
+    def save_cloud_document(document_type: str, document_key: str, payload: dict[str, Any]) -> bool:
+        store = cloud_store()
+        if store is None:
+            return False
+        try:
+            store.save(
+                cloud_account_id(), document_type, document_key, payload,
+                str(service_settings()["CLOUD_SYNC_SOURCE_DEVICE"]),
+            )
+        except (CloudSyncError, ValueError):
+            return False
+        return True
+
+    def cloud_snapshot(snapshot: dict[str, Any]) -> None:
+        snapshot_date = snapshot.get("date")
+        if isinstance(snapshot_date, str):
+            save_cloud_document("daily_snapshot", snapshot_date, snapshot)
 
     @app.after_request
     def security_headers(response: Response) -> Response:
@@ -235,6 +301,11 @@ def create_app(
             return jsonify(error="SYNC_FAILED", summary=_safe_summary(error.summary)), 502
         except Exception:
             return jsonify(error="SYNC_FAILED"), 502
+        # A failed cloud projection must not hide a successful provider sync.
+        # The next authenticated read retries the projection.
+        snapshot = snapshot_builder()
+        if isinstance(snapshot, dict):
+            cloud_snapshot(snapshot)
         return jsonify(_safe_summary(summary))
 
     @app.get("/v1/mobile/daily-snapshot")
@@ -248,7 +319,12 @@ def create_app(
                 date.fromisoformat(requested_date)
             except ValueError:
                 return jsonify(error="INVALID_DATE"), 400
-        snapshot = snapshot_builder(snapshot_date=requested_date) if requested_date else snapshot_builder()
+        document_key = requested_date or date.today().isoformat()
+        snapshot = load_cloud_document("daily_snapshot", document_key)
+        if snapshot is None:
+            snapshot = snapshot_builder(snapshot_date=requested_date) if requested_date else snapshot_builder()
+            if isinstance(snapshot, dict):
+                cloud_snapshot(snapshot)
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 404
         response = jsonify(snapshot)
@@ -262,8 +338,32 @@ def create_app(
             return guard
         requested_days = request.args.get("days", "14")
         try:
-            history = history_builder(days=int(requested_days))
+            days = int(requested_days)
+            history = load_cloud_document("recovery_history", f"days:{days}")
+            if history is None:
+                history = history_builder(days=days)
+                if isinstance(history, dict):
+                    save_cloud_document("recovery_history", f"days:{days}", history)
         except (TypeError, ValueError, MobileRecoveryHistoryError):
+            return jsonify(error="INVALID_HISTORY_RANGE"), 400
+        response = jsonify(history)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/mobile/training-history")
+    def training_history() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        requested_days = request.args.get("days", "14")
+        try:
+            days = int(requested_days)
+            history = load_cloud_document("training_history", f"days:{days}")
+            if history is None:
+                history = training_history_builder(days=days)
+                if isinstance(history, dict):
+                    save_cloud_document("training_history", f"days:{days}", history)
+        except (TypeError, ValueError, MobileTrainingHistoryError):
             return jsonify(error="INVALID_HISTORY_RANGE"), 400
         response = jsonify(history)
         response.headers["Cache-Control"] = "no-store"
@@ -287,7 +387,162 @@ def create_app(
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
         response = jsonify(snapshot)
+        response.status_code = 201
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/morning-hrv-import")
+    def import_morning_hrv() -> Response:
+        """Accept reviewed derived metrics from an iPhone device measurement."""
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_DEVICE_MEASUREMENT_PAYLOAD"), 400
+        try:
+            result = morning_hrv_importer(payload)
+        except MobileKubiosImportError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="DEVICE_MEASUREMENT_IMPORT_FAILED"), 502
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.status_code = 201
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/nutrition-entry")
+    def save_nutrition_entry() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_NUTRITION_PAYLOAD"), 400
+        try:
+            result = nutrition_entry_saver(payload)
+        except MobileNutritionInputError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="NUTRITION_SAVE_FAILED"), 502
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/nutrition-label/parse")
+    def parse_nutrition_label() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_NUTRITION_LABEL_PAYLOAD"), 400
+        try:
+            result = nutrition_label_parser(payload)
+        except MobileNutritionLibraryError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="NUTRITION_LABEL_PARSE_FAILED"), 502
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/mobile/nutrition-library/food")
+    def food_nutrition_library() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        try:
+            result = nutrition_library_loader()
+        except Exception:
+            return jsonify(error="NUTRITION_LIBRARY_UNAVAILABLE"), 502
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/mobile/nutrition-library/food")
+    def save_food_nutrition_label() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_NUTRITION_LABEL_PAYLOAD"), 400
+        try:
+            result = nutrition_label_saver(payload)
+        except MobileNutritionLibraryError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="NUTRITION_LABEL_SAVE_FAILED"), 502
+        response = jsonify(result)
+        response.status_code = 201
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/cloud/documents/<document_type>/<document_key>")
+    def get_cloud_document(document_type: str, document_key: str) -> Response:
+        """Authenticated pull endpoint for the local macOS application."""
+        guard = api_guard()
+        if guard:
+            return guard
+        if document_type not in DOCUMENT_TYPES:
+            return jsonify(error="INVALID_CLOUD_DOCUMENT_TYPE"), 400
+        store = cloud_store()
+        if store is None:
+            return jsonify(error="CLOUD_SYNC_NOT_CONFIGURED"), 503
+        try:
+            document = store.load(cloud_account_id(), document_type, document_key)
+        except (CloudSyncError, ValueError):
+            return jsonify(error="CLOUD_SYNC_UNAVAILABLE"), 502
+        if document is None:
+            return jsonify(error="CLOUD_DOCUMENT_NOT_FOUND"), 404
+        response = jsonify(
+            revision=document.revision,
+            payload=document.payload,
+            payload_sha256=document.payload_sha256,
+            source_device=document.source_device,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/v1/cloud/documents/<document_type>/<document_key>")
+    def put_cloud_document(document_type: str, document_key: str) -> Response:
+        """Authenticated push endpoint for the local macOS application."""
+        guard = api_guard()
+        if guard:
+            return guard
+        if document_type not in DOCUMENT_TYPES:
+            return jsonify(error="INVALID_CLOUD_DOCUMENT_TYPE"), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not isinstance(payload.get("payload"), dict):
+            return jsonify(error="INVALID_CLOUD_DOCUMENT_PAYLOAD"), 400
+        store = cloud_store()
+        if store is None:
+            return jsonify(error="CLOUD_SYNC_NOT_CONFIGURED"), 503
+        source_device = payload.get("source_device")
+        if not isinstance(source_device, str) or not source_device or len(source_device) > 160:
+            return jsonify(error="INVALID_CLOUD_SOURCE_DEVICE"), 400
+        try:
+            document = store.save(
+                cloud_account_id(), document_type, document_key, payload["payload"], source_device,
+            )
+        except (CloudSyncError, ValueError):
+            return jsonify(error="CLOUD_SYNC_UNAVAILABLE"), 502
+        response = jsonify(
+            revision=document.revision,
+            payload_sha256=document.payload_sha256,
+            source_device=document.source_device,
+        )
         response.status_code = 201
         response.headers["Cache-Control"] = "no-store"
         return response
