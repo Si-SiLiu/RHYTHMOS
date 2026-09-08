@@ -125,7 +125,8 @@ class DashboardLauncherTests(unittest.TestCase):
         source = render_swift_source(dashboard_launcher.BASE_DIR)
         self.assertIn('iosLauncherDocumentExtension = "rhythmos-ios"', source)
         self.assertIn('appendingPathComponent("scripts/open_ios_simulator.command")', source)
-        self.assertIn('process.arguments = ["--background"]', source)
+        self.assertIn('process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")', source)
+        self.assertIn('process.arguments = [launcherURL.path, "--background"]', source)
         self.assertIn('application(_ sender: NSApplication, openFile filename: String)', source)
         self.assertNotIn('"-a", "Terminal"', source)
 

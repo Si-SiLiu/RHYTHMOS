@@ -386,15 +386,17 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate, WKNavigationD
                 return
             }
             let process = Process()
-            process.executableURL = launcherURL
-            process.arguments = ["--background"]
+            // Start the long-running build independently of this native
+            // process. nohup keeps it alive after this lightweight launcher
+            // exits, without creating a Terminal window.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+            process.arguments = [launcherURL.path, "--background"]
             process.currentDirectoryURL = projectRootURL
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             do {
                 try process.run()
-                process.waitUntilExit()
                 DispatchQueue.main.async {
                     NSApp.terminate(nil)
                 }
