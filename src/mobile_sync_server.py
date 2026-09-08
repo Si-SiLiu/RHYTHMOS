@@ -196,7 +196,16 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> Response:
-        return jsonify(status="ok")
+        # This deliberately exposes only readiness booleans, never credentials,
+        # account identifiers, health records, or Polar connection state.
+        current = service_settings()
+        return jsonify(
+            status="ok",
+            cloud_sync_configured=bool(
+                current.get("SUPABASE_URL") and current.get("SUPABASE_SERVICE_ROLE_KEY")
+            ),
+            mobile_sync_configured=bool(current.get("MOBILE_SYNC_API_TOKEN")),
+        )
 
     @app.get("/connect/polar")
     def connect_polar() -> Response:

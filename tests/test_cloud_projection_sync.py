@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import Mock
 
-from src.cloud_projection_sync import CloudProjectionSyncError, publish_local_projections
+from src.cloud_projection_sync import (
+    DEFAULT_SYNC_SERVICE_URL,
+    CloudProjectionSyncError,
+    load_desktop_sync_settings,
+    publish_local_projections,
+)
 
 
 class _Response:
@@ -9,6 +14,13 @@ class _Response:
 
 
 class CloudProjectionSyncTests(unittest.TestCase):
+    def test_mac_keychain_token_uses_the_production_https_service_by_default(self):
+        settings = load_desktop_sync_settings(
+            environment={}, keychain_lookup=lambda: "stored-secret-not-printed"
+        )
+        self.assertEqual(settings["RHYTHMOS_SYNC_SERVICE_URL"], DEFAULT_SYNC_SERVICE_URL)
+        self.assertEqual(settings["MOBILE_SYNC_API_TOKEN"], "stored-secret-not-printed")
+
     def test_without_both_settings_the_publisher_does_not_make_a_request(self):
         post = Mock()
         result = publish_local_projections(settings={}, http_post=post)

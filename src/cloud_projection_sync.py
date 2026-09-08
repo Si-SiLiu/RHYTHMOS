@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from datetime import date
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
@@ -14,8 +16,55 @@ from .mobile_snapshot import build_mobile_daily_snapshot
 from .mobile_training_history import build_mobile_training_history
 
 
+DEFAULT_SYNC_SERVICE_URL = "https://rhythmos-bk8d.onrender.com"
+KEYCHAIN_SERVICE = "RHYTHMOS.mobile-sync-token"
+KEYCHAIN_ACCOUNT = "RHYTHMOS desktop sync"
+
+
 class CloudProjectionSyncError(RuntimeError):
     """Raised when an explicitly configured desktop cloud sync fails."""
+
+
+def load_desktop_sync_settings(
+    *,
+    environment: Mapping[str, str | None] | None = None,
+    keychain_lookup: Callable[[], str | None] | None = None,
+) -> dict[str, str | None]:
+    """Read desktop sync credentials without putting the bearer token in a file.
+
+    A developer can still provide both values through process environment for
+    automation.  On this Mac, the approved device token lives in the login
+    Keychain and the production HTTPS endpoint is used by default.
+    """
+    source = os.environ if environment is None else environment
+    base_url = (source.get("RHYTHMOS_SYNC_SERVICE_URL") or "").strip() or None
+    token = (source.get("MOBILE_SYNC_API_TOKEN") or "").strip() or None
+    if token is None:
+        lookup = keychain_lookup or _load_keychain_token
+        token = lookup()
+    if token and base_url is None:
+        base_url = DEFAULT_SYNC_SERVICE_URL
+    return {"RHYTHMOS_SYNC_SERVICE_URL": base_url, "MOBILE_SYNC_API_TOKEN": token}
+
+
+def _load_keychain_token() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "security", "find-generic-password", "-w",
+                "-a", KEYCHAIN_ACCOUNT,
+                "-s", KEYCHAIN_SERVICE,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    token = result.stdout.strip() if result.returncode == 0 else ""
+    return token or None
 
 
 def publish_local_projections(
@@ -34,10 +83,7 @@ def publish_local_projections(
     notes, provider tokens, or an iOS/macOS credential.  It only submits the
     existing versioned mobile projections to the Render HTTPS boundary.
     """
-    current = dict(settings or {
-        "RHYTHMOS_SYNC_SERVICE_URL": os.getenv("RHYTHMOS_SYNC_SERVICE_URL"),
-        "MOBILE_SYNC_API_TOKEN": os.getenv("MOBILE_SYNC_API_TOKEN"),
-    })
+    current = dict(settings) if settings is not None else load_desktop_sync_settings()
     base_url = current.get("RHYTHMOS_SYNC_SERVICE_URL")
     token = current.get("MOBILE_SYNC_API_TOKEN")
     if not base_url and not token:

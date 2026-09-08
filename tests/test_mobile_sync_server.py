@@ -96,7 +96,14 @@ class MobileSyncServerTests(unittest.TestCase):
         self.directory.cleanup()
 
     def test_health_is_public_but_mobile_data_requires_bearer_token(self):
-        self.assertEqual(self.client.get("/healthz").get_json(), {"status": "ok"})
+        self.assertEqual(
+            self.client.get("/healthz").get_json(),
+            {
+                "status": "ok",
+                "cloud_sync_configured": False,
+                "mobile_sync_configured": True,
+            },
+        )
         response = self.client.get("/v1/mobile/daily-snapshot")
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json(), {"error": "UNAUTHORIZED"})
