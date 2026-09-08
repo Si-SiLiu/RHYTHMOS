@@ -70,7 +70,8 @@ def _load_keychain_token() -> str | None:
 def publish_local_projections(
     *,
     settings: Mapping[str, str | None] | None = None,
-    history_days: int = 14,
+    history_days: int = 28,
+    training_history_days: int = 30,
     source_device: str = "macos-local",
     snapshot_builder: Callable[..., dict[str, Any] | None] = build_mobile_daily_snapshot,
     recovery_history_builder: Callable[..., dict[str, Any]] = build_mobile_recovery_history,
@@ -93,8 +94,14 @@ def publish_local_projections(
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.netloc:
         raise CloudProjectionSyncError("desktop cloud sync URL must use HTTPS")
-    if not isinstance(history_days, int) or isinstance(history_days, bool) or not 1 <= history_days <= 30:
-        raise ValueError("history_days must be between 1 and 30")
+    if not isinstance(history_days, int) or isinstance(history_days, bool) or not 1 <= history_days <= 28:
+        raise ValueError("history_days must be between 1 and 28")
+    if (
+        not isinstance(training_history_days, int)
+        or isinstance(training_history_days, bool)
+        or not 1 <= training_history_days <= 30
+    ):
+        raise ValueError("training_history_days must be between 1 and 30")
     if not source_device or len(source_device) > 160:
         raise ValueError("invalid cloud source device")
 
@@ -123,5 +130,9 @@ def publish_local_projections(
     # Empty histories remain meaningful and make removal of stale client state
     # explicit rather than silently retaining an earlier projection.
     publish("recovery_history", f"days:{history_days}", recovery_history)
-    publish("training_history", f"days:{history_days}", training_history_builder(days=history_days))
+    publish(
+        "training_history",
+        f"days:{training_history_days}",
+        training_history_builder(days=training_history_days),
+    )
     return {"success": True, "documents_published": len(sent), "history_days": history_days}
