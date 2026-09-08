@@ -100,6 +100,8 @@ class MobileSyncServerTests(unittest.TestCase):
             self.client.get("/healthz").get_json(),
             {
                 "status": "ok",
+                "supabase_url_configured": False,
+                "supabase_service_role_configured": False,
                 "cloud_sync_configured": False,
                 "mobile_sync_configured": True,
             },

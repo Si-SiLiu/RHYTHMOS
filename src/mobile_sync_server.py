@@ -201,6 +201,8 @@ def create_app(
         current = service_settings()
         return jsonify(
             status="ok",
+            supabase_url_configured=bool(current.get("SUPABASE_URL")),
+            supabase_service_role_configured=bool(current.get("SUPABASE_SERVICE_ROLE_KEY")),
             cloud_sync_configured=bool(
                 current.get("SUPABASE_URL") and current.get("SUPABASE_SERVICE_ROLE_KEY")
             ),
