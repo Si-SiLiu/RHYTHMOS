@@ -25,6 +25,16 @@ services:
         sync: false
       - key: MOBILE_SYNC_API_TOKEN
         sync: false
+      - key: RHYTHMOS_MOBILE_SESSION_SIGNING_KEY
+        sync: false
+      - key: RHYTHMOS_APPLE_AUDIENCE
+        value: com.rhythmos.ios
+      - key: RHYTHMOS_OWNER_APPLE_SUB_SHA256
+        sync: false
+      - key: RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED
+        value: "false"
+      - key: RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256
+        sync: false
       - key: POLAR_CONNECT_PASSWORD
         sync: false
       - key: POLAR_CONNECT_USERNAME

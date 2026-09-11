@@ -13,11 +13,14 @@ import secrets
 import time
 import urllib.parse
 from datetime import date
+from functools import wraps
+from hashlib import sha256
+import re
 from typing import Any, Callable
 from uuid import uuid4
 
 import requests
-from flask import Flask, Response, jsonify, redirect, request, session
+from flask import Flask, Response, g, jsonify, redirect, request, session
 from requests.auth import HTTPBasicAuth
 
 from .mobile_snapshot import build_mobile_daily_snapshot
@@ -27,6 +30,7 @@ from .mobile_recovery_history import (
     build_mobile_recovery_history,
 )
 from .mobile_training_history import (
+    MAX_DAYS as TRAINING_HISTORY_MAX_DAYS,
     MobileTrainingHistoryError,
     build_mobile_training_history,
 )
@@ -44,7 +48,17 @@ from .mobile_nutrition_library import (
 )
 from .mobile_nutrition_plan_input import (
     MobileNutritionPlanInputError,
+    save_mobile_nutrition_plan_cycle,
     save_mobile_nutrition_plan_entry,
+)
+from .mobile_nutrition_history import (
+    MobileNutritionHistoryError,
+    build_mobile_nutrition_history,
+)
+from .mobile_personal_history import (
+    MAX_DAYS as PERSONAL_HISTORY_MAX_DAYS,
+    MobilePersonalHistoryError,
+    build_mobile_personal_history,
 )
 from .mobile_personal_input import (
     MobilePersonalInputError,
@@ -52,6 +66,15 @@ from .mobile_personal_input import (
     save_mobile_personal_profile,
 )
 from .cloud_sync_store import CloudSyncError, DOCUMENT_TYPES, cloud_store_from_settings
+from .mobile_account_auth import (
+    AppleIdentityTokenVerifier,
+    MobileAccountAuthError,
+    MobileSessionIssuer,
+    account_name_digest,
+    normalize_account_name,
+    password_hash,
+    password_matches,
+)
 from .polar_client import TOKEN_FILE
 from .secure_token_store import TokenStoreError, token_store_for
 from .sync_pipeline import PipelineError, PipelineRunner
@@ -69,6 +92,8 @@ SCOPES = (
     "profile:read",
     "sports:read",
 )
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{8,160}")
+AUTH_REGISTRY_ACCOUNT_ID = "rhythmos-auth-registry"
 
 
 def _settings(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -79,6 +104,12 @@ def _settings(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         "POLAR_TOKEN_ENCRYPTION_KEY": os.getenv("POLAR_TOKEN_ENCRYPTION_KEY"),
         "POLAR_MEMBER_ID": os.getenv("POLAR_MEMBER_ID", "daily-recovery-coach-local"),
         "MOBILE_SYNC_API_TOKEN": os.getenv("MOBILE_SYNC_API_TOKEN"),
+        "RHYTHMOS_MOBILE_SESSION_SIGNING_KEY": os.getenv("RHYTHMOS_MOBILE_SESSION_SIGNING_KEY"),
+        "RHYTHMOS_APPLE_AUDIENCE": os.getenv("RHYTHMOS_APPLE_AUDIENCE"),
+        "RHYTHMOS_OWNER_APPLE_SUB": os.getenv("RHYTHMOS_OWNER_APPLE_SUB"),
+        "RHYTHMOS_OWNER_APPLE_SUB_SHA256": os.getenv("RHYTHMOS_OWNER_APPLE_SUB_SHA256"),
+        "RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED": os.getenv("RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED", "false"),
+        "RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256": os.getenv("RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256"),
         "POLAR_CONNECT_USERNAME": os.getenv("POLAR_CONNECT_USERNAME", "owner"),
         "POLAR_CONNECT_PASSWORD": os.getenv("POLAR_CONNECT_PASSWORD"),
         "FLASK_SECRET_KEY": os.getenv("FLASK_SECRET_KEY"),
@@ -132,16 +163,20 @@ def create_app(
     snapshot_builder: Callable[..., dict[str, Any] | None] = build_mobile_daily_snapshot,
     history_builder: Callable[..., dict[str, Any]] = build_mobile_recovery_history,
     training_history_builder: Callable[..., dict[str, Any]] = build_mobile_training_history,
+    nutrition_history_builder: Callable[..., dict[str, Any]] = build_mobile_nutrition_history,
+    personal_history_builder: Callable[..., dict[str, Any]] = build_mobile_personal_history,
     screenshot_importer: Callable[[dict[str, Any]], dict[str, Any]] = import_mobile_screenshot_measurement,
     morning_hrv_importer: Callable[[dict[str, Any]], dict[str, Any]] = import_mobile_morning_hrv_measurement,
     nutrition_entry_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_manual_nutrition_entry,
     nutrition_label_parser: Callable[[dict[str, Any]], dict[str, Any]] = parse_mobile_food_label,
     nutrition_label_saver: Callable[[dict[str, Any]], dict[str, Any]] = save_mobile_food_label,
     nutrition_library_loader: Callable[[], dict[str, list[dict[str, Any]]]] = mobile_food_nutrition_library,
+    nutrition_plan_cycle_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_nutrition_plan_cycle,
     nutrition_plan_entry_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_nutrition_plan_entry,
     personal_profile_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_personal_profile,
     body_measurement_saver: Callable[[dict[str, Any]], dict[str, str]] = save_mobile_body_measurement,
     cloud_store_factory: Callable[[dict[str, Any]], Any] = cloud_store_from_settings,
+    apple_identity_verifier: Callable[[str, str], str] | None = None,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> Flask:
     """Create the service without requiring deploy-time secrets at import time."""
@@ -153,13 +188,42 @@ def create_app(
     def service_settings() -> dict[str, Any]:
         return {key: app.config.get(key) for key in settings}
 
+    def default_account_id() -> str:
+        return str(service_settings()["POLAR_MEMBER_ID"])
+
+    def account_registration_enabled() -> bool:
+        current = service_settings()
+        return bool(current.get("RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256")) and str(
+            current.get("RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED", "")
+        ).lower() in {"1", "true", "yes", "enabled"}
+
+    def session_issuer() -> MobileSessionIssuer | None:
+        signing_key = service_settings().get("RHYTHMOS_MOBILE_SESSION_SIGNING_KEY")
+        if not signing_key:
+            return None
+        try:
+            return MobileSessionIssuer(str(signing_key))
+        except ValueError:
+            return None
+
     def api_guard() -> Response | None:
         current = service_settings()
-        missing = _required_settings(current, "MOBILE_SYNC_API_TOKEN")
-        if missing:
-            return jsonify(error="SYNC_NOT_CONFIGURED"), 503
-        if not _api_authorized(current):
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
             return jsonify(error="UNAUTHORIZED"), 401
+        presented = header.removeprefix("Bearer ")
+        legacy_token = current.get("MOBILE_SYNC_API_TOKEN")
+        if legacy_token and hmac.compare_digest(presented, legacy_token):
+            g.mobile_account_id = default_account_id()
+            return None
+        issuer = session_issuer()
+        if issuer is None:
+            return jsonify(error="SYNC_NOT_CONFIGURED"), 503
+        try:
+            account_id, _device_id = issuer.verify_access_token(presented)
+        except MobileAccountAuthError:
+            return jsonify(error="UNAUTHORIZED"), 401
+        g.mobile_account_id = account_id
         return None
 
     def cloud_store() -> Any | None:
@@ -170,32 +234,94 @@ def create_app(
             return None
 
     def cloud_account_id() -> str:
-        # Polar's member id is controlled server-side and scopes the initial
-        # small-test account. A multi-account identity layer will replace it.
-        return str(service_settings()["POLAR_MEMBER_ID"])
+        # The legacy service token remains scoped to the owner account. New
+        # sessions carry an account id that has been established only after
+        # Apple identity verification.
+        return str(getattr(g, "mobile_account_id", default_account_id()))
 
-    def load_cloud_document(document_type: str, document_key: str) -> dict[str, Any] | None:
+    def load_cloud_document_for(
+        account_id: str, document_type: str, document_key: str,
+    ) -> dict[str, Any] | None:
         store = cloud_store()
         if store is None:
             return None
         try:
-            document = store.load(cloud_account_id(), document_type, document_key)
+            document = store.load(account_id, document_type, document_key)
         except (CloudSyncError, ValueError):
             return None
         return document.payload if document else None
 
-    def save_cloud_document(document_type: str, document_key: str, payload: dict[str, Any]) -> bool:
+    def save_cloud_document_for(
+        account_id: str, document_type: str, document_key: str, payload: dict[str, Any],
+    ) -> bool:
         store = cloud_store()
         if store is None:
             return False
         try:
             store.save(
-                cloud_account_id(), document_type, document_key, payload,
+                account_id, document_type, document_key, payload,
                 str(service_settings()["CLOUD_SYNC_SOURCE_DEVICE"]),
             )
         except (CloudSyncError, ValueError):
             return False
         return True
+
+    def session_document_key(session_id: str) -> str:
+        return f"session:{session_id}"
+
+    def account_credential_key(account_name: str) -> str:
+        return f"name:{account_name_digest(account_name)}"
+
+    def owner_registration_key() -> str:
+        return "closed-beta-owner-registration"
+
+    def validate_device_id(value: object) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{16,160}", value):
+            raise MobileAccountAuthError("invalid device identifier")
+        return value
+
+    def account_auth_ready() -> bool:
+        current = service_settings()
+        return bool(
+            current.get("RHYTHMOS_MOBILE_SESSION_SIGNING_KEY")
+            and current.get("SUPABASE_URL")
+            and current.get("SUPABASE_SERVICE_ROLE_KEY")
+        )
+
+    def issue_account_session(account_id: str, device_id: str) -> tuple[MobileSessionIssuer, Any] | None:
+        issuer = session_issuer()
+        if issuer is None:
+            return None
+        session_value = issuer.issue(account_id, device_id)
+        if not save_cloud_document_for(
+            account_id,
+            "mobile_session",
+            session_document_key(session_value.refresh_token.partition(".")[0]),
+            {
+                "version": 1,
+                "account_id": account_id,
+                "device_id": device_id,
+                "refresh_sha256": issuer.refresh_digest(session_value.refresh_token),
+            },
+        ):
+            return None
+        return issuer, session_value
+
+    def session_response(session_value: Any, *, status: int = 200) -> Response:
+        response = jsonify(
+            access_token=session_value.access_token,
+            refresh_token=session_value.refresh_token,
+            expires_at=session_value.expires_at,
+            account_id=session_value.account_id,
+        )
+        response.status_code = status
+        return response
+
+    def load_cloud_document(document_type: str, document_key: str) -> dict[str, Any] | None:
+        return load_cloud_document_for(cloud_account_id(), document_type, document_key)
+
+    def save_cloud_document(document_type: str, document_key: str, payload: dict[str, Any]) -> bool:
+        return save_cloud_document_for(cloud_account_id(), document_type, document_key, payload)
 
     def cloud_snapshot(snapshot: dict[str, Any]) -> None:
         snapshot_date = snapshot.get("date")
@@ -216,10 +342,66 @@ def create_app(
             "food_nutrition_label",
         }:
             return
+        idempotency_key = request.headers.get("Idempotency-Key", "")
+        change_key = (
+            f"ios:{idempotency_key}"
+            if IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key)
+            else f"ios:{uuid4()}"
+        )
         save_cloud_document(
-            "mobile_change", f"ios:{uuid4()}",
+            "mobile_change", change_key,
             {"kind": kind, "payload": payload, "version": 1},
         )
+
+    def idempotent_mobile_write(operation: str):
+        """Replay a previously confirmed mobile write instead of reapplying it.
+
+        The iPhone persists a UUID per offline outbox item.  Render stores only
+        the request-body fingerprint and the safe JSON response in the private
+        cloud document store; a retry with the same key and same body gets the
+        original confirmation without duplicating a health record.  The
+        fallback remains backward-compatible when cloud sync is not configured.
+        """
+        def decorate(handler: Callable[..., Response]) -> Callable[..., Response]:
+            @wraps(handler)
+            def wrapped(*args: Any, **kwargs: Any) -> Response:
+                key = request.headers.get("Idempotency-Key")
+                if key is None:
+                    return handler(*args, **kwargs)
+                if not IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+                    return jsonify(error="INVALID_IDEMPOTENCY_KEY"), 400
+                request_fingerprint = sha256(request.get_data(cache=True)).hexdigest()
+                document_key = f"ios:{operation}:{key}"
+                cached = load_cloud_document("mobile_request", document_key)
+                if cached is not None:
+                    if (
+                        cached.get("request_sha256") != request_fingerprint
+                        or not isinstance(cached.get("response"), dict)
+                        or not isinstance(cached.get("status_code"), int)
+                    ):
+                        return jsonify(error="IDEMPOTENCY_KEY_CONFLICT"), 409
+                    response = jsonify(cached["response"])
+                    response.status_code = cached["status_code"]
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
+
+                response = app.make_response(handler(*args, **kwargs))
+                if 200 <= response.status_code < 300:
+                    body = response.get_json(silent=True)
+                    if isinstance(body, dict):
+                        save_cloud_document(
+                            "mobile_request",
+                            document_key,
+                            {
+                                "version": 1,
+                                "request_sha256": request_fingerprint,
+                                "status_code": response.status_code,
+                                "response": body,
+                            },
+                        )
+                return response
+            return wrapped
+        return decorate
 
     def cloud_recovery_history(days: int = 28) -> None:
         """Refresh the mobile history projection after recovery data changes."""
@@ -231,6 +413,39 @@ def create_app(
             return
         if isinstance(history, dict):
             save_cloud_document("recovery_history", f"days:{days}", history)
+
+    def cloud_nutrition_history(days: int = 28) -> None:
+        try:
+            history = nutrition_history_builder(days=days)
+        except Exception:
+            return
+        if isinstance(history, dict):
+            save_cloud_document("nutrition_history", f"days:{days}", history)
+
+    def cloud_personal_history(days: int = 28) -> None:
+        try:
+            history = personal_history_builder(days=days)
+        except Exception:
+            return
+        if isinstance(history, dict):
+            save_cloud_document("personal_history", f"days:{days}", history)
+
+    def has_complete_recovery_details(history: dict[str, Any]) -> bool:
+        """Reject compact histories so the iPhone receives every detail row."""
+        history_days = history.get("days")
+        required_sleep_fields = {
+            "duration_minutes", "score", "sleep_start_time", "wake_time",
+            "actual_duration_minutes", "deep_duration_minutes", "rem_duration_minutes",
+            "average_hr_bpm", "nightly_hrv_rmssd_ms", "resting_hr_bpm",
+            "respiration_rate_bpm", "regularity_score",
+        }
+        return isinstance(history_days, list) and all(
+            isinstance(day, dict)
+            and isinstance(day.get("details"), dict)
+            and isinstance(day.get("sleep_details"), dict)
+            and required_sleep_fields.issubset(day["sleep_details"])
+            for day in history_days
+        )
 
     def cloud_error_response(error: CloudSyncError | ValueError) -> Response:
         """Return a stable, non-sensitive cloud storage failure code."""
@@ -256,6 +471,205 @@ def create_app(
                 current.get("SUPABASE_URL") and current.get("SUPABASE_SERVICE_ROLE_KEY")
             ),
             mobile_sync_configured=bool(current.get("MOBILE_SYNC_API_TOKEN")),
+            mobile_account_auth_configured=bool(
+                account_auth_ready()
+            ),
+            rhythmos_account_registration_enabled=account_registration_enabled(),
+            apple_sign_in_configured=bool(
+                account_auth_ready()
+                and current.get("RHYTHMOS_APPLE_AUDIENCE")
+            ),
+        )
+
+    @app.post("/v1/mobile/auth/account/register")
+    def register_rhythmos_account() -> Response:
+        """Create a standalone RHYTHMOS account without collecting an email.
+
+        The credential registry is private to the service-role API. Passwords
+        are stored only as salted scrypt records, never in the user's data
+        projection, server logs, or iPhone preferences.
+        """
+        if not account_auth_ready():
+            return jsonify(error="ACCOUNT_AUTH_NOT_CONFIGURED"), 503
+        if not account_registration_enabled():
+            return jsonify(error="ACCOUNT_REGISTRATION_DISABLED"), 403
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_AUTH_PAYLOAD"), 400
+        try:
+            device_id = validate_device_id(payload.get("device_id"))
+            account_name = normalize_account_name(payload.get("account_name"))
+            password_record = password_hash(payload.get("password"))
+            registration_code = payload.get("registration_code")
+            expected_code_hash = str(service_settings().get("RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256") or "")
+            presented_code_hash = (
+                sha256(registration_code.encode("utf-8")).hexdigest()
+                if isinstance(registration_code, str) and registration_code else ""
+            )
+            if not hmac.compare_digest(presented_code_hash, expected_code_hash):
+                return jsonify(error="ACCOUNT_REGISTRATION_DISABLED"), 403
+            if load_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID, "mobile_account", owner_registration_key(),
+            ) is not None:
+                return jsonify(error="ACCOUNT_REGISTRATION_DISABLED"), 403
+            credential_key = account_credential_key(account_name)
+            if load_cloud_document_for(AUTH_REGISTRY_ACCOUNT_ID, "mobile_credential", credential_key):
+                return jsonify(error="ACCOUNT_NAME_UNAVAILABLE"), 409
+            # Current closed testing has one Mac/Polar archive. The invite is
+            # required before a password account can point at that archive;
+            # otherwise a stranger could create an account and read it.
+            account_id = default_account_id()
+            if not save_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID,
+                "mobile_account",
+                owner_registration_key(),
+                {"version": 1, "account_id": account_id, "provider": "rhythmos_account"},
+            ) or not save_cloud_document_for(
+                account_id,
+                "mobile_account",
+                "account",
+                {"version": 1, "provider": "rhythmos_account"},
+            ) or not save_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID,
+                "mobile_credential",
+                credential_key,
+                {"version": 1, "account_id": account_id, "password_scrypt": password_record},
+            ):
+                return jsonify(error="ACCOUNT_AUTH_UNAVAILABLE"), 503
+            issued = issue_account_session(account_id, device_id)
+            if issued is None:
+                return jsonify(error="ACCOUNT_AUTH_UNAVAILABLE"), 503
+            _issuer, session_value = issued
+        except MobileAccountAuthError:
+            return jsonify(error="INVALID_ACCOUNT_CREDENTIALS"), 400
+        return session_response(session_value, status=201)
+
+    @app.post("/v1/mobile/auth/account/login")
+    def login_rhythmos_account() -> Response:
+        """Open a session using a pre-existing RHYTHMOS account credential."""
+        if not account_auth_ready():
+            return jsonify(error="ACCOUNT_AUTH_NOT_CONFIGURED"), 503
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_AUTH_PAYLOAD"), 400
+        try:
+            device_id = validate_device_id(payload.get("device_id"))
+            account_name = normalize_account_name(payload.get("account_name"))
+            credential = load_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID, "mobile_credential", account_credential_key(account_name),
+            )
+            if (
+                credential is None
+                or not password_matches(payload.get("password"), credential.get("password_scrypt"))
+                or not isinstance(credential.get("account_id"), str)
+            ):
+                raise MobileAccountAuthError("invalid account credential")
+            issued = issue_account_session(credential["account_id"], device_id)
+            if issued is None:
+                return jsonify(error="ACCOUNT_AUTH_UNAVAILABLE"), 503
+            _issuer, session_value = issued
+        except MobileAccountAuthError:
+            # Keep the response identical for an unknown account and a bad
+            # password so the endpoint cannot be used for account discovery.
+            return jsonify(error="INVALID_ACCOUNT_CREDENTIALS"), 401
+        return session_response(session_value)
+
+    @app.post("/v1/mobile/auth/apple")
+    def establish_apple_session() -> Response:
+        """Exchange a verified Apple identity token for a device session.
+
+        This is the sole public route that accepts an Apple identity token.
+        It never accepts, returns, or stores a Polar credential, the legacy
+        shared mobile token, or an Apple email address.
+        """
+        current = service_settings()
+        if not account_auth_ready() or not current.get("RHYTHMOS_APPLE_AUDIENCE"):
+            return jsonify(error="ACCOUNT_AUTH_NOT_CONFIGURED"), 503
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_AUTH_PAYLOAD"), 400
+        try:
+            device_id = validate_device_id(payload.get("device_id"))
+            identity_token = payload.get("identity_token")
+            nonce = payload.get("nonce")
+            if not isinstance(identity_token, str) or not isinstance(nonce, str):
+                raise MobileAccountAuthError("invalid identity payload")
+            verifier = apple_identity_verifier or AppleIdentityTokenVerifier(
+                str(current["RHYTHMOS_APPLE_AUDIENCE"])
+            ).verify
+            apple_subject = verifier(identity_token, nonce)
+            owner_subject = current.get("RHYTHMOS_OWNER_APPLE_SUB")
+            owner_subject_hash = current.get("RHYTHMOS_OWNER_APPLE_SUB_SHA256")
+            subject_hash = sha256(apple_subject.encode("utf-8")).hexdigest()
+            owner_matches = (
+                bool(owner_subject) and hmac.compare_digest(apple_subject, str(owner_subject))
+            ) or (
+                bool(owner_subject_hash) and hmac.compare_digest(subject_hash, str(owner_subject_hash))
+            )
+            if owner_matches:
+                # The existing Mac/Polar archive stays assigned to its owner.
+                # A verified owner may use Apple without exposing that account
+                # identifier to Apple's identity service.
+                account_id = default_account_id()
+            elif not owner_subject and not owner_subject_hash:
+                return jsonify(
+                    error="ACCOUNT_ENROLLMENT_REQUIRED",
+                    owner_claim_sha256=subject_hash,
+                ), 409
+            else:
+                raise MobileAccountAuthError("account is not authorized")
+            issued = issue_account_session(account_id, device_id)
+            if issued is None:
+                return jsonify(error="ACCOUNT_AUTH_UNAVAILABLE"), 503
+            _issuer, session_value = issued
+        except MobileAccountAuthError:
+            return jsonify(error="APPLE_IDENTITY_INVALID"), 401
+        return session_response(session_value)
+
+    @app.post("/v1/mobile/auth/refresh")
+    def refresh_mobile_session() -> Response:
+        current = service_settings()
+        if _required_settings(current, "RHYTHMOS_MOBILE_SESSION_SIGNING_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+            return jsonify(error="ACCOUNT_AUTH_NOT_CONFIGURED"), 503
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_AUTH_PAYLOAD"), 400
+        try:
+            device_id = validate_device_id(payload.get("device_id"))
+            refresh_token = payload.get("refresh_token")
+            if not isinstance(refresh_token, str):
+                raise MobileAccountAuthError("invalid refresh session")
+            issuer = session_issuer()
+            if issuer is None:
+                raise MobileAccountAuthError("session issuer unavailable")
+            session_id, _secret = issuer.split_refresh_token(refresh_token)
+            stored = load_cloud_document("mobile_session", session_document_key(session_id))
+            if (
+                stored is None
+                or not hmac.compare_digest(str(stored.get("refresh_sha256", "")), issuer.refresh_digest(refresh_token))
+                or not hmac.compare_digest(str(stored.get("device_id", "")), device_id)
+                or not isinstance(stored.get("account_id"), str)
+            ):
+                raise MobileAccountAuthError("refresh session is invalid")
+            session_value = issuer.issue(stored["account_id"], device_id, session_id=session_id)
+            if not save_cloud_document(
+                "mobile_session",
+                session_document_key(session_id),
+                {
+                    "version": 1,
+                    "account_id": session_value.account_id,
+                    "device_id": device_id,
+                    "refresh_sha256": issuer.refresh_digest(session_value.refresh_token),
+                },
+            ):
+                return jsonify(error="ACCOUNT_AUTH_UNAVAILABLE"), 503
+        except MobileAccountAuthError:
+            return jsonify(error="SESSION_INVALID"), 401
+        return jsonify(
+            access_token=session_value.access_token,
+            refresh_token=session_value.refresh_token,
+            expires_at=session_value.expires_at,
+            account_id=session_value.account_id,
         )
 
     @app.get("/connect/polar")
@@ -367,6 +781,7 @@ def create_app(
         if isinstance(snapshot, dict):
             cloud_snapshot(snapshot)
         cloud_recovery_history()
+        cloud_personal_history()
         return jsonify(_safe_summary(summary))
 
     @app.get("/v1/mobile/daily-snapshot")
@@ -405,7 +820,7 @@ def create_app(
                     f"days must be between 1 and {RECOVERY_HISTORY_MAX_DAYS}"
                 )
             history = load_cloud_document("recovery_history", f"days:{days}")
-            if history is None:
+            if history is None or not has_complete_recovery_details(history):
                 history = history_builder(days=days)
                 if isinstance(history, dict):
                     save_cloud_document("recovery_history", f"days:{days}", history)
@@ -420,9 +835,13 @@ def create_app(
         guard = api_guard()
         if guard:
             return guard
-        requested_days = request.args.get("days", "30")
+        requested_days = request.args.get("days", "28")
         try:
             days = int(requested_days)
+            if not 1 <= days <= TRAINING_HISTORY_MAX_DAYS:
+                raise MobileTrainingHistoryError(
+                    f"days must be between 1 and {TRAINING_HISTORY_MAX_DAYS}"
+                )
             history = load_cloud_document("training_history", f"days:{days}")
             if history is None:
                 history = training_history_builder(days=days)
@@ -434,7 +853,53 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.get("/v1/mobile/personal-history")
+    def personal_history() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        requested_days = request.args.get("days", "28")
+        try:
+            days = int(requested_days)
+            if not 1 <= days <= PERSONAL_HISTORY_MAX_DAYS:
+                raise MobilePersonalHistoryError(
+                    f"days must be between 1 and {PERSONAL_HISTORY_MAX_DAYS}"
+                )
+            history = load_cloud_document("personal_history", f"days:{days}")
+            if history is None:
+                history = personal_history_builder(days=days)
+                if isinstance(history, dict):
+                    save_cloud_document("personal_history", f"days:{days}", history)
+        except (TypeError, ValueError, MobilePersonalHistoryError):
+            return jsonify(error="INVALID_PERSONAL_HISTORY_RANGE"), 400
+        response = jsonify(history)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/v1/mobile/nutrition-history")
+    def nutrition_history() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        requested_days = request.args.get("days", "28")
+        try:
+            days = int(requested_days)
+            if not 1 <= days <= 28:
+                raise MobileNutritionHistoryError("invalid history range")
+            # Nutrition records are edited directly on the Mac as well as on
+            # iPhone. Rebuild this compact projection on every request so a
+            # previously cached history can never hide a newer desktop meal.
+            history = nutrition_history_builder(days=days)
+            if isinstance(history, dict):
+                save_cloud_document("nutrition_history", f"days:{days}", history)
+        except (TypeError, ValueError, MobileNutritionHistoryError):
+            return jsonify(error="INVALID_HISTORY_RANGE"), 400
+        response = jsonify(history)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.post("/v1/mobile/kubios-screenshot-import")
+    @idempotent_mobile_write("kubios_screenshot_import")
     def import_kubios_screenshot() -> Response:
         """Accept reviewed local OCR values, never an iPhone screenshot image."""
         guard = api_guard()
@@ -461,6 +926,7 @@ def create_app(
         return response
 
     @app.post("/v1/mobile/morning-hrv-import")
+    @idempotent_mobile_write("morning_hrv_import")
     def import_morning_hrv() -> Response:
         """Accept reviewed derived metrics from an iPhone device measurement."""
         guard = api_guard()
@@ -487,6 +953,7 @@ def create_app(
         return response
 
     @app.post("/v1/mobile/nutrition-entry")
+    @idempotent_mobile_write("nutrition_entry")
     def save_nutrition_entry() -> Response:
         guard = api_guard()
         if guard:
@@ -505,11 +972,13 @@ def create_app(
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
         cloud_snapshot(snapshot)
+        cloud_nutrition_history()
         response = jsonify(snapshot)
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.post("/v1/mobile/nutrition-plan-entry")
+    @idempotent_mobile_write("nutrition_plan_entry")
     def save_nutrition_plan_entry() -> Response:
         guard = api_guard()
         if guard:
@@ -532,7 +1001,32 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.post("/v1/mobile/nutrition-plan-cycle")
+    @idempotent_mobile_write("nutrition_plan_cycle")
+    def save_nutrition_plan_cycle() -> Response:
+        guard = api_guard()
+        if guard:
+            return guard
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_NUTRITION_CYCLE_PAYLOAD"), 400
+        try:
+            result = nutrition_plan_cycle_saver(payload)
+        except MobileNutritionPlanInputError as error:
+            return jsonify(error=str(error)), 400
+        except Exception:
+            return jsonify(error="NUTRITION_CYCLE_SAVE_FAILED"), 502
+        cloud_mobile_change("nutrition_plan_entry", payload)
+        snapshot = snapshot_builder(snapshot_date=result["date"])
+        if snapshot is None:
+            return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
+        cloud_snapshot(snapshot)
+        response = jsonify(snapshot)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.post("/v1/mobile/personal-profile")
+    @idempotent_mobile_write("personal_profile")
     def save_personal_profile() -> Response:
         guard = api_guard()
         if guard:
@@ -547,6 +1041,7 @@ def create_app(
         except Exception:
             return jsonify(error="PROFILE_SAVE_FAILED"), 502
         cloud_mobile_change("personal_profile", payload)
+        cloud_personal_history()
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
@@ -556,6 +1051,7 @@ def create_app(
         return response
 
     @app.post("/v1/mobile/body-measurement")
+    @idempotent_mobile_write("body_measurement")
     def save_body_measurement() -> Response:
         guard = api_guard()
         if guard:
@@ -570,6 +1066,7 @@ def create_app(
         except Exception:
             return jsonify(error="BODY_SAVE_FAILED"), 502
         cloud_mobile_change("body_measurement", payload)
+        cloud_personal_history()
         snapshot = snapshot_builder(snapshot_date=result["date"])
         if snapshot is None:
             return jsonify(error="SNAPSHOT_UNAVAILABLE"), 502
@@ -610,6 +1107,7 @@ def create_app(
         return response
 
     @app.post("/v1/mobile/nutrition-library/food")
+    @idempotent_mobile_write("food_nutrition_label")
     def save_food_nutrition_label() -> Response:
         guard = api_guard()
         if guard:

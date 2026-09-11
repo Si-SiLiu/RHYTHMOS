@@ -16,7 +16,8 @@ import requests
 
 
 DOCUMENT_TYPES = frozenset({
-    "daily_snapshot", "recovery_history", "training_history", "mobile_change",
+    "daily_snapshot", "recovery_history", "training_history", "nutrition_history", "personal_history",
+    "mobile_change", "mobile_request", "mobile_session", "mobile_account", "mobile_credential",
 })
 TABLE_NAME = "rhythmos_sync_documents"
 

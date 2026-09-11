@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 from unittest.mock import Mock
 from urllib.parse import parse_qs, urlparse
@@ -63,9 +64,14 @@ class MobileSyncServerTests(unittest.TestCase):
             "date": "2026-09-07",
         }
         self.nutrition_entry_saver = Mock(side_effect=lambda payload: {"date": payload["date"]})
+        self.nutrition_plan_entry_saver = Mock(side_effect=lambda payload: {"date": payload["week_start"]})
+        self.nutrition_plan_cycle_saver = Mock(return_value={"date": "2026-09-07"})
+        self.nutrition_history_builder = Mock(return_value={"kind": "rhythmos.mobile_nutrition_history", "version": 1, "days": []})
         self.nutrition_label_parser = Mock(return_value={"basis": "per 100 g", "nutrients": {"protein": {"value": 3.2, "unit": "g"}}, "confidence": 0.9})
         self.nutrition_label_saver = Mock(return_value={"food_catalog_id": 7, "food_name": "测试食物"})
         self.nutrition_library_loader = Mock(return_value={"items": [{"id": 7, "food_name": "测试食物"}]})
+        self.personal_profile_saver = Mock(return_value={"date": "2026-09-07"})
+        self.body_measurement_saver = Mock(return_value={"date": "2026-09-07"})
         self.app = create_app(
             self.config,
             runner_factory=lambda: _Runner(),
@@ -73,9 +79,14 @@ class MobileSyncServerTests(unittest.TestCase):
             screenshot_importer=lambda payload: {"date": payload["date"]},
             morning_hrv_importer=lambda payload: {"date": payload["date"]},
             nutrition_entry_saver=self.nutrition_entry_saver,
+            nutrition_plan_cycle_saver=self.nutrition_plan_cycle_saver,
+            nutrition_plan_entry_saver=self.nutrition_plan_entry_saver,
+            nutrition_history_builder=self.nutrition_history_builder,
             nutrition_label_parser=self.nutrition_label_parser,
             nutrition_label_saver=self.nutrition_label_saver,
             nutrition_library_loader=self.nutrition_library_loader,
+            personal_profile_saver=self.personal_profile_saver,
+            body_measurement_saver=self.body_measurement_saver,
             history_builder=lambda **kwargs: {
                 "kind": "rhythmos.mobile_recovery_history",
                 "version": 1,
@@ -84,6 +95,12 @@ class MobileSyncServerTests(unittest.TestCase):
             },
             training_history_builder=lambda **kwargs: {
                 "kind": "rhythmos.mobile_training_history",
+                "version": 1,
+                "days": [],
+                "requested_days": kwargs["days"],
+            },
+            personal_history_builder=lambda **kwargs: {
+                "kind": "rhythmos.mobile_personal_history",
                 "version": 1,
                 "days": [],
                 "requested_days": kwargs["days"],
@@ -105,6 +122,9 @@ class MobileSyncServerTests(unittest.TestCase):
                 "supabase_service_role_configured": False,
                 "cloud_sync_configured": False,
                 "mobile_sync_configured": True,
+                "mobile_account_auth_configured": False,
+                "rhythmos_account_registration_enabled": False,
+                "apple_sign_in_configured": False,
             },
         )
         response = self.client.get("/v1/mobile/daily-snapshot")
@@ -117,10 +137,146 @@ class MobileSyncServerTests(unittest.TestCase):
         self.assertEqual(response.get_json(), self.snapshot)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
+    def test_verified_apple_identity_creates_a_rotating_account_session(self):
+        store = _CloudStore()
+        app = create_app(
+            {
+                **self.config,
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role-test-key",
+                "RHYTHMOS_MOBILE_SESSION_SIGNING_KEY": "a" * 48,
+                "RHYTHMOS_APPLE_AUDIENCE": "com.rhythmos.ios",
+                "RHYTHMOS_OWNER_APPLE_SUB": "apple-owner-subject",
+            },
+            snapshot_builder=lambda **kwargs: self.snapshot,
+            cloud_store_factory=lambda _settings: store,
+            apple_identity_verifier=lambda token, nonce: (
+                "apple-owner-subject" if token == "identity-token" and nonce == "n" * 32 else "other"
+            ),
+        )
+        client = app.test_client()
+        device_id = "ios-device-1234567890"
+        response = client.post("/v1/mobile/auth/apple", json={
+            "identity_token": "identity-token", "nonce": "n" * 32, "device_id": device_id,
+        })
+        self.assertEqual(response.status_code, 200)
+        created = response.get_json()
+        self.assertEqual(created["account_id"], self.config.get("POLAR_MEMBER_ID", "daily-recovery-coach-local"))
+        self.assertNotIn("mobile-api-token", str(created))
+
+        protected = client.get(
+            "/v1/mobile/daily-snapshot?date=2026-09-07",
+            headers={"Authorization": f"Bearer {created['access_token']}"},
+        )
+        self.assertEqual(protected.status_code, 200)
+
+        refreshed = client.post("/v1/mobile/auth/refresh", json={
+            "refresh_token": created["refresh_token"], "device_id": device_id,
+        })
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertNotEqual(refreshed.get_json()["refresh_token"], created["refresh_token"])
+
+    def test_rhythmos_account_registration_and_login_share_one_private_account(self):
+        store = _CloudStore()
+        app = create_app(
+            {
+                **self.config,
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role-test-key",
+                "RHYTHMOS_MOBILE_SESSION_SIGNING_KEY": "a" * 48,
+                "RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED": "true",
+                "RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256": sha256(b"test-invitation").hexdigest(),
+            },
+            snapshot_builder=lambda **kwargs: self.snapshot,
+            cloud_store_factory=lambda _settings: store,
+        )
+        client = app.test_client()
+        payload = {
+            "account_name": "rhythmos.tester", "password": "a-safe-test-password",
+            "registration_code": "test-invitation",
+            "device_id": "ios-device-1234567890",
+        }
+        created = client.post("/v1/mobile/auth/account/register", json=payload)
+        self.assertEqual(created.status_code, 201)
+        created_body = created.get_json()
+        self.assertEqual(created_body["account_id"], self.config.get("POLAR_MEMBER_ID", "daily-recovery-coach-local"))
+        self.assertNotIn(payload["password"], str(store.documents))
+
+        logged_in = client.post("/v1/mobile/auth/account/login", json=payload)
+        self.assertEqual(logged_in.status_code, 200)
+        self.assertEqual(logged_in.get_json()["account_id"], created_body["account_id"])
+        self.assertNotEqual(logged_in.get_json()["refresh_token"], created_body["refresh_token"])
+
+        bad_password = client.post("/v1/mobile/auth/account/login", json={**payload, "password": "wrong-password-123"})
+        unknown_account = client.post("/v1/mobile/auth/account/login", json={**payload, "account_name": "unknown.account"})
+        self.assertEqual(bad_password.get_json(), {"error": "INVALID_ACCOUNT_CREDENTIALS"})
+        self.assertEqual(unknown_account.get_json(), {"error": "INVALID_ACCOUNT_CREDENTIALS"})
+        repeated_registration = client.post("/v1/mobile/auth/account/register", json={
+            **payload, "account_name": "another.tester",
+        })
+        self.assertEqual(repeated_registration.status_code, 403)
+        self.assertEqual(repeated_registration.get_json(), {"error": "ACCOUNT_REGISTRATION_DISABLED"})
+
+    def test_first_verified_apple_login_returns_only_an_enrollment_fingerprint(self):
+        store = _CloudStore()
+        app = create_app(
+            {
+                **self.config,
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role-test-key",
+                "RHYTHMOS_MOBILE_SESSION_SIGNING_KEY": "a" * 48,
+                "RHYTHMOS_APPLE_AUDIENCE": "com.rhythmos.ios",
+            },
+            cloud_store_factory=lambda _settings: store,
+            apple_identity_verifier=lambda _token, _nonce: "apple-owner-subject",
+        )
+        response = app.test_client().post("/v1/mobile/auth/apple", json={
+            "identity_token": "identity-token", "nonce": "n" * 32,
+            "device_id": "ios-device-1234567890",
+        })
+        body = response.get_json()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(body["error"], "ACCOUNT_ENROLLMENT_REQUIRED")
+        self.assertEqual(len(body["owner_claim_sha256"]), 64)
+        self.assertNotIn("apple-owner-subject", str(body))
+
     def test_sync_returns_only_safe_summary(self):
         response = self.client.post("/v1/mobile/sync", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"success": True, "run_id": "safe-run-id", "records_imported": 4})
+
+    def test_sync_and_reviewed_screenshot_refresh_cloud_recovery_history(self):
+        store = _CloudStore()
+        history = {
+            "kind": "rhythmos.mobile_recovery_history",
+            "version": 1,
+            "generated_at": "2026-09-08T00:00:00Z",
+            "days": [{"date": "2026-09-07"}],
+        }
+        app = create_app(
+            {**self.config, "POLAR_MEMBER_ID": "test-member"},
+            runner_factory=lambda: _Runner(),
+            snapshot_builder=lambda **kwargs: self.snapshot,
+            screenshot_importer=lambda payload: {"date": payload["date"]},
+            history_builder=lambda **kwargs: history,
+            cloud_store_factory=lambda _settings: store,
+        )
+        client = app.test_client()
+
+        self.assertEqual(client.post("/v1/mobile/sync", headers=self.headers).status_code, 200)
+        self.assertEqual(
+            store.documents[("test-member", "recovery_history", "days:28")].payload,
+            history,
+        )
+        screenshot = {
+            "date": "2026-09-07", "rmssd": 42.5, "mean_hr": 57,
+            "image_sha256": "a" * 64, "user_confirmed": True,
+        }
+        self.assertEqual(
+            client.post("/v1/mobile/kubios-screenshot-import", headers=self.headers, json=screenshot).status_code,
+            201,
+        )
+        self.assertEqual(store.documents[("test-member", "recovery_history", "days:28")].revision, 2)
 
     def test_manual_nutrition_entry_requires_auth_and_returns_refreshed_snapshot(self):
         payload = {"date": "2026-09-07", "food_name": "午餐", "calories_kcal": 620}
@@ -132,6 +288,115 @@ class MobileSyncServerTests(unittest.TestCase):
         self.assertEqual(response.get_json(), self.snapshot)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.nutrition_entry_saver.assert_called_once_with(payload)
+
+    def test_repeated_idempotent_mobile_write_replays_without_duplicate_local_save(self):
+        store = _CloudStore()
+        app = create_app(
+            {**self.config, "POLAR_MEMBER_ID": "test-member"},
+            snapshot_builder=lambda **kwargs: self.snapshot,
+            nutrition_entry_saver=self.nutrition_entry_saver,
+            cloud_store_factory=lambda _settings: store,
+        )
+        client = app.test_client()
+        payload = {"date": "2026-09-07", "food_name": "午餐", "calories_kcal": 620}
+        headers = {**self.headers, "Idempotency-Key": "ios-write-5f238171"}
+
+        first = client.post("/v1/mobile/nutrition-entry", headers=headers, json=payload)
+        repeated = client.post("/v1/mobile/nutrition-entry", headers=headers, json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.get_json(), self.snapshot)
+        self.nutrition_entry_saver.assert_called_once_with(payload)
+        self.assertIn(
+            ("test-member", "mobile_request", "ios:nutrition_entry:ios-write-5f238171"),
+            store.documents,
+        )
+        self.assertIn(
+            ("test-member", "mobile_change", "ios:ios-write-5f238171"),
+            store.documents,
+        )
+
+    def test_idempotency_key_cannot_be_reused_for_a_different_write_body(self):
+        store = _CloudStore()
+        app = create_app(
+            {**self.config, "POLAR_MEMBER_ID": "test-member"},
+            snapshot_builder=lambda **kwargs: self.snapshot,
+            nutrition_entry_saver=self.nutrition_entry_saver,
+            cloud_store_factory=lambda _settings: store,
+        )
+        client = app.test_client()
+        headers = {**self.headers, "Idempotency-Key": "ios-write-5f238171"}
+        client.post(
+            "/v1/mobile/nutrition-entry", headers=headers,
+            json={"date": "2026-09-07", "food_name": "午餐", "calories_kcal": 620},
+        )
+        conflict = client.post(
+            "/v1/mobile/nutrition-entry", headers=headers,
+            json={"date": "2026-09-07", "food_name": "午餐", "calories_kcal": 621},
+        )
+
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.get_json(), {"error": "IDEMPOTENCY_KEY_CONFLICT"})
+        self.nutrition_entry_saver.assert_called_once()
+
+    def test_nutrition_plan_cell_edit_requires_auth_and_returns_refreshed_snapshot(self):
+        payload = {"week_start": "2026-09-07", "weekday": 0, "meal_slot": "breakfast"}
+        self.assertEqual(self.client.post("/v1/mobile/nutrition-plan-entry", json=payload).status_code, 401)
+
+        response = self.client.post("/v1/mobile/nutrition-plan-entry", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), self.snapshot)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.nutrition_plan_entry_saver.assert_called_once_with(payload)
+
+    def test_nutrition_plan_cycle_edit_requires_auth_and_returns_refreshed_snapshot(self):
+        payload = {
+            "original_start_date": "2026-08-03", "name": "2026 适应期",
+            "start_date": "2026-08-03", "duration_weeks": 8,
+        }
+        self.assertEqual(self.client.post("/v1/mobile/nutrition-plan-cycle", json=payload).status_code, 401)
+
+        response = self.client.post("/v1/mobile/nutrition-plan-cycle", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), self.snapshot)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.nutrition_plan_cycle_saver.assert_called_once_with(payload)
+
+    def test_nutrition_history_uses_the_authenticated_history_boundary(self):
+        self.assertEqual(self.client.get("/v1/mobile/nutrition-history").status_code, 401)
+
+        response = self.client.get("/v1/mobile/nutrition-history?days=28", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["kind"], "rhythmos.mobile_nutrition_history")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.nutrition_history_builder.assert_called_once_with(days=28)
+
+    def test_personal_profile_and_body_edits_require_auth_and_return_a_fresh_snapshot(self):
+        profile = {"name": "测试用户", "gender": "male", "birth_date": "1995-06-01", "height_cm": 175}
+        body = {"date": "2026-09-07", "height_cm": 175, "weight_kg": 80.5}
+        self.assertEqual(self.client.post("/v1/mobile/personal-profile", json=profile).status_code, 401)
+        self.assertEqual(self.client.post("/v1/mobile/body-measurement", json=body).status_code, 401)
+
+        profile_response = self.client.post("/v1/mobile/personal-profile", headers=self.headers, json=profile)
+        body_response = self.client.post("/v1/mobile/body-measurement", headers=self.headers, json=body)
+
+        self.assertEqual(profile_response.status_code, 200)
+        self.assertEqual(body_response.status_code, 200)
+        self.assertEqual(profile_response.get_json(), self.snapshot)
+        self.assertEqual(body_response.get_json(), self.snapshot)
+        self.personal_profile_saver.assert_called_once_with(profile)
+        self.body_measurement_saver.assert_called_once_with(body)
+
+    def test_personal_history_requires_auth_and_has_a_bounded_range(self):
+        self.assertEqual(self.client.get("/v1/mobile/personal-history").status_code, 401)
+        response = self.client.get("/v1/mobile/personal-history?days=28", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["kind"], "rhythmos.mobile_personal_history")
+        self.assertEqual(self.client.get("/v1/mobile/personal-history?days=29", headers=self.headers).status_code, 400)
 
     def test_food_label_parse_and_library_share_the_mobile_token_boundary(self):
         payload = {"raw_text": "每100g 蛋白质 3.2g"}
@@ -208,13 +473,57 @@ class MobileSyncServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["requested_days"], 7)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+        response = self.client.get("/v1/mobile/recovery-history?days=29", headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "INVALID_HISTORY_RANGE"})
         response = self.client.get("/v1/mobile/recovery-history?days=bad", headers=self.headers)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json(), {"error": "INVALID_HISTORY_RANGE"})
 
+    def test_recovery_history_rebuilds_a_cloud_document_missing_sleep_details(self):
+        store = _CloudStore()
+        legacy_history = {
+            "kind": "rhythmos.mobile_recovery_history",
+            "version": 1,
+            "days": [{"date": "2026-09-07", "details": {}}],
+        }
+        complete_history = {
+            "kind": "rhythmos.mobile_recovery_history",
+            "version": 1,
+            "days": [{
+                "date": "2026-09-07",
+                "details": {},
+                "sleep_details": {
+                    field: None for field in (
+                        "duration_minutes", "score", "sleep_start_time", "wake_time",
+                        "actual_duration_minutes", "deep_duration_minutes", "rem_duration_minutes",
+                        "average_hr_bpm", "nightly_hrv_rmssd_ms", "resting_hr_bpm",
+                        "respiration_rate_bpm", "regularity_score",
+                    )
+                },
+            }],
+        }
+        store.save("test-member", "recovery_history", "days:28", legacy_history, "old-device")
+        builder = Mock(return_value=complete_history)
+        app = create_app(
+            {**self.config, "POLAR_MEMBER_ID": "test-member"},
+            history_builder=builder,
+            cloud_store_factory=lambda _settings: store,
+        )
+
+        response = app.test_client().get("/v1/mobile/recovery-history?days=28", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), complete_history)
+        builder.assert_called_once_with(days=28)
+        self.assertEqual(store.documents[("test-member", "recovery_history", "days:28")].revision, 2)
+
     def test_training_history_is_token_protected_and_range_checked(self):
         response = self.client.get("/v1/mobile/training-history")
         self.assertEqual(response.status_code, 401)
+        response = self.client.get("/v1/mobile/training-history", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["requested_days"], 28)
         response = self.client.get("/v1/mobile/training-history?days=7", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["requested_days"], 7)
