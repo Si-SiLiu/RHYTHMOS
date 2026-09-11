@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, time, timedelta
 import json
 import math
 from typing import Any
@@ -19,6 +19,52 @@ _MEAL_SLOTS = {
     "breakfast", "morning_snack", "lunch", "afternoon_snack", "dinner", "evening_snack",
 }
 _MARKER = "__nutrition_manual_recipe__"
+
+
+def save_mobile_nutrition_plan_cycle(
+    payload: dict[str, Any], *, db_path: str | None = None,
+) -> dict[str, str]:
+    """Edit the same cycle name and date range exposed by the desktop app."""
+    if not isinstance(payload, dict):
+        raise MobileNutritionPlanInputError("INVALID_NUTRITION_CYCLE_PAYLOAD")
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > 120:
+        raise MobileNutritionPlanInputError("INVALID_NUTRITION_CYCLE_NAME")
+    try:
+        original_start = date.fromisoformat(str(payload.get("original_start_date") or ""))
+        requested_start = date.fromisoformat(str(payload.get("start_date") or ""))
+    except (TypeError, ValueError) as error:
+        raise MobileNutritionPlanInputError("INVALID_NUTRITION_CYCLE_DATE") from error
+    duration_weeks = payload.get("duration_weeks")
+    if isinstance(duration_weeks, bool) or not isinstance(duration_weeks, int) or not 1 <= duration_weeks <= 52:
+        raise MobileNutritionPlanInputError("INVALID_NUTRITION_CYCLE_DURATION")
+    normalized_start = requested_start - timedelta(days=requested_start.weekday())
+    end = normalized_start + timedelta(days=duration_weeks * 7 - 1)
+
+    connection = connect(db_path)
+    try:
+        cycle = connection.execute(
+            """SELECT id FROM nutrition_plan_cycles
+               WHERE start_date=? AND status IN ('active','planned')
+               ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,id DESC LIMIT 1""",
+            (original_start.isoformat(),),
+        ).fetchone()
+        if not cycle:
+            raise MobileNutritionPlanInputError("NUTRITION_PLAN_CYCLE_UNAVAILABLE")
+        connection.execute(
+            """UPDATE nutrition_plan_cycles
+               SET name=?,start_date=?,end_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+            (name, normalized_start.isoformat(), end.isoformat(), cycle["id"]),
+        )
+        connection.execute(
+            """UPDATE user_weekly_plans SET title=?,updated_at=CURRENT_TIMESTAMP
+               WHERE nutrition_cycle_id=? AND deleted_at IS NULL""",
+            (name, cycle["id"]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"date": date.today().isoformat()}
 
 
 def _number(value: Any, error: str) -> float:
