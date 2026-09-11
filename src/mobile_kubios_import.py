@@ -23,6 +23,12 @@ class MobileKubiosImportError(ValueError):
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _DIRECT_SOURCES = {"ios_bluetooth_hrv", "ios_healthkit_hrv"}
+_SCREENSHOT_FIELDS = (
+    "date", "rmssd", "mean_hr", "sdnn", "pns_index", "sns_index",
+    "stress_index", "mean_rr_ms", "poincare_sd1_ms", "poincare_sd2_ms",
+    "respiratory_rate_bpm", "lf_power_ms2", "hf_power_ms2", "lf_power_nu",
+    "hf_power_nu", "lf_hf_ratio", "physiological_age", "measurement_quality",
+)
 
 
 def _validated_fields(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -31,12 +37,7 @@ def _validated_fields(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     image_sha256 = str(payload.get("image_sha256") or "").lower()
     if not _SHA256.fullmatch(image_sha256):
         raise MobileKubiosImportError("INVALID_SCREENSHOT_FINGERPRINT")
-    fields = {
-        "date": payload.get("date"),
-        "rmssd": payload.get("rmssd"),
-        "mean_hr": payload.get("mean_hr"),
-        "measurement_quality": payload.get("measurement_quality"),
-    }
+    fields = {name: payload.get(name) for name in _SCREENSHOT_FIELDS}
     normalized, errors = validate_confirmed_fields(fields)
     if errors:
         raise MobileKubiosImportError("INVALID_SCREENSHOT_VALUES")
@@ -74,6 +75,14 @@ def import_mobile_screenshot_measurement(
         "import_method": "ios_local_vision",
         "is_daily_preferred": True,
     }
+    # Keep the reviewed extended values in the normalized Kubios measurement
+    # model as well as the compact legacy row.  The normalizer maps ``sdnn``
+    # and the other screenshot field names to its canonical columns.
+    row.update({
+        name: fields.get(name)
+        for name in _SCREENSHOT_FIELDS
+        if name not in {"date", "rmssd", "mean_hr", "measurement_quality"}
+    })
     connection = connect(db_path)
     try:
         connection.execute(

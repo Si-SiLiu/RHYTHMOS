@@ -12,7 +12,11 @@ from .mobile_snapshot import build_mobile_daily_snapshot
 
 CONTRACT_KIND = "rhythmos.mobile_recovery_history"
 CONTRACT_VERSION = 1
-MAX_DAYS = 30
+# Recovery readiness is calibrated from the most recent 28 daily records.  Keep
+# the mobile history contract within that same window so a longer list cannot
+# imply a different personal baseline.
+MAX_DAYS = 28
+DEFAULT_DAYS = 28
 
 
 class MobileRecoveryHistoryError(ValueError):
@@ -22,7 +26,7 @@ class MobileRecoveryHistoryError(ValueError):
 def build_mobile_recovery_history(
     db_path: Path | str | None = None,
     *,
-    days: int = 14,
+    days: int = DEFAULT_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_DAYS:
@@ -57,8 +61,16 @@ def build_mobile_recovery_history(
             "confidence_level": (recovery["confidence"] or {}).get("level"),
             "morning_hrv_rmssd_ms": recovery["morning_hrv_rmssd_ms"],
             "morning_resting_hr_bpm": recovery["morning_resting_hr_bpm"],
+            # Keep the same permitted, resolved Kubios detail fields as the
+            # daily projection. This lets a historical date show the same
+            # recovery evidence as today's date without exposing raw samples.
+            "details": recovery["details"],
             "sleep_duration_minutes": sleep["duration_minutes"],
             "sleep_score": sleep["score"],
+            # Historical sleep rows use exactly the same safe daily sleep
+            # projection as the "今日睡眠数据" disclosure. This keeps fields,
+            # sources, and missing-value semantics consistent by date.
+            "sleep_details": sleep,
         })
     created = generated_at or datetime.now(timezone.utc)
     return {

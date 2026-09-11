@@ -12,6 +12,7 @@ from src.mobile_snapshot import (
     CONTRACT_VERSION,
     MobileSnapshotContractError,
     build_mobile_daily_snapshot,
+    list_mobile_snapshot_dates,
     validate_mobile_daily_snapshot,
     write_mobile_daily_snapshot,
 )
@@ -113,6 +114,25 @@ class MobileDailySnapshotTests(unittest.TestCase):
         self.assertNotIn("raw_json", json.dumps(snapshot))
         self.assertNotIn("session-1", json.dumps(snapshot))
 
+    def test_snapshot_date_inventory_is_not_capped_by_the_mobile_history_window(self):
+        for day in ("2026-06-01", "2026-06-02", "2026-09-07"):
+            self.connection.execute(
+                "INSERT INTO daily_recovery_metrics(date) VALUES(?)", (day,)
+            )
+        self.connection.execute(
+            "INSERT INTO meal_events(date,meal_type,actual_meal_time) VALUES('2026-07-01','lunch','12:00')"
+        )
+        self.connection.commit()
+
+        self.assertEqual(
+            list_mobile_snapshot_dates(self.path),
+            ["2026-06-01", "2026-06-02", "2026-07-01", "2026-09-07"],
+        )
+        self.assertEqual(
+            list_mobile_snapshot_dates(self.path, maximum_dates=2),
+            ["2026-07-01", "2026-09-07"],
+        )
+
     def test_explicit_empty_date_remains_explicitly_unavailable(self):
         snapshot = build_mobile_daily_snapshot(
             self.path,
@@ -165,6 +185,36 @@ class MobileDailySnapshotTests(unittest.TestCase):
             "duration_minutes": 55.0,
             "calories_kcal": 320.0,
             "sports": ["strength_training"],
+        })
+
+    def test_profile_projects_basic_information_and_the_latest_body_status(self):
+        self.connection.execute(
+            """INSERT INTO personal_profile(id,name,gender,birth_date,height_cm)
+               VALUES(1,'测试用户','male','1995-06-01',175)"""
+        )
+        self.connection.execute(
+            """INSERT INTO body_measurements(
+                   date,height_cm,weight_kg,body_fat_percent,waist_cm,is_primary
+               ) VALUES('2026-09-06',175,80.65,25,89,1)"""
+        )
+        self.connection.execute(
+            """INSERT INTO body_measurements(
+                   date,height_cm,weight_kg,body_fat_percent,waist_cm,is_primary
+               ) VALUES('2026-09-08',175,81,26,90,1)"""
+        )
+        self.connection.commit()
+
+        snapshot = build_mobile_daily_snapshot(self.path, "2026-09-07")
+
+        self.assertEqual(snapshot["profile"], {
+            "basic": {
+                "name": "测试用户", "gender": "male",
+                "birth_date": "1995-06-01", "height_cm": 175,
+            },
+            "body": {
+                "date": "2026-09-06", "weight_kg": 80.65,
+                "body_fat_percent": 25, "waist_cm": 89,
+            },
         })
 
     def test_nutrition_uses_the_same_daily_feedback_as_desktop(self):
@@ -230,6 +280,20 @@ class MobileDailySnapshotTests(unittest.TestCase):
                ) VALUES('breakfast-1','nutrition-week-1',0,'燕麦、酸奶','08:00','08:45','meal',
                          '__nutrition_manual_recipe__:breakfast|{}')"""
         )
+        self.connection.execute(
+            "UPDATE user_weekly_plan_items SET notes=? WHERE item_id='breakfast-1'",
+            ("__nutrition_manual_recipe__:breakfast|" + json.dumps({
+                "version": 1,
+                "items": [{
+                    "food_catalog_id": None, "custom_food_name": "燕麦", "item_type": "food",
+                    "quantity": 50.555, "unit": "g",
+                }],
+                "supplements": [{
+                    "supplement_product_id": None, "custom_product_name": "肌酸", "product_kind": "supplement",
+                    "quantity": 5, "unit": "g",
+                }],
+            }, ensure_ascii=False),),
+        )
         self.connection.commit()
 
         plan = build_mobile_daily_snapshot(self.path, "2026-09-07")["nutrition"]["plan"]
@@ -239,7 +303,10 @@ class MobileDailySnapshotTests(unittest.TestCase):
         self.assertEqual((plan["week_index"], plan["week_count"]), (1, 4))
         self.assertEqual(plan["entries"], [{
             "weekday": 0, "meal_slot": "breakfast", "start_time": "08:00",
-            "end_time": "08:45", "title": "燕麦、酸奶",
+            "end_time": "08:45", "title": "燕麦、酸奶", "details": [
+                {"kind": "food", "name": "燕麦", "quantity": 50.55, "unit": "g"},
+                {"kind": "supplement", "name": "肌酸", "quantity": 5.0, "unit": "g"},
+            ],
         }])
 
     def test_missing_database_has_no_implicit_snapshot(self):

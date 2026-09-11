@@ -175,7 +175,8 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
         snapshot,
         {"kind", "version", "generated_at", "date", "recovery", "sleep", "training"}
         | ({"feedback"} if isinstance(snapshot, dict) and "feedback" in snapshot else set())
-        | ({"nutrition"} if isinstance(snapshot, dict) and "nutrition" in snapshot else set()),
+        | ({"nutrition"} if isinstance(snapshot, dict) and "nutrition" in snapshot else set())
+        | ({"profile"} if isinstance(snapshot, dict) and "profile" in snapshot else set()),
         "snapshot",
     )
     if root["kind"] != CONTRACT_KIND:
@@ -296,10 +297,41 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
         value is not None for value in (training["duration_minutes"], training["calories_kcal"])
     ):
         raise MobileSnapshotContractError("empty training summaries cannot contain duration or calories")
+    if "profile" in root:
+        profile = _require_exact_keys(root["profile"], {"basic", "body"}, "snapshot.profile")
+        basic = _require_exact_keys(
+            profile["basic"], {"name", "gender", "birth_date", "height_cm"}, "snapshot.profile.basic",
+        )
+        _require_string(basic["name"], "snapshot.profile.basic.name")
+        if basic["gender"] not in {"male", "female", "non_binary", "prefer_not_to_say"}:
+            raise MobileSnapshotContractError("snapshot.profile.basic.gender is unsupported")
+        birth_date = _require_string(basic["birth_date"], "snapshot.profile.basic.birth_date")
+        try:
+            born = date.fromisoformat(birth_date)
+        except ValueError as error:
+            raise MobileSnapshotContractError("snapshot.profile.basic.birth_date must be an ISO calendar date") from error
+        if born.isoformat() != birth_date or born > parsed_date:
+            raise MobileSnapshotContractError("snapshot.profile.basic.birth_date is invalid")
+        _require_number(basic["height_cm"], "snapshot.profile.basic.height_cm", minimum=50, maximum=300)
+        body = profile["body"]
+        if body is not None:
+            body = _require_exact_keys(
+                body, {"date", "weight_kg", "body_fat_percent", "waist_cm"}, "snapshot.profile.body",
+            )
+            measurement_date = _require_string(body["date"], "snapshot.profile.body.date")
+            try:
+                measured = date.fromisoformat(measurement_date)
+            except ValueError as error:
+                raise MobileSnapshotContractError("snapshot.profile.body.date must be an ISO calendar date") from error
+            if measured.isoformat() != measurement_date or measured > parsed_date:
+                raise MobileSnapshotContractError("snapshot.profile.body.date is invalid")
+            _require_number(body["weight_kg"], "snapshot.profile.body.weight_kg", minimum=1, maximum=500)
+            _require_number(body["body_fat_percent"], "snapshot.profile.body.body_fat_percent", allow_none=True, minimum=0, maximum=100)
+            _require_number(body["waist_cm"], "snapshot.profile.body.waist_cm", allow_none=True, minimum=1, maximum=300)
     if "nutrition" in root:
         nutrition = _require_exact_keys(
             root["nutrition"],
-            {"recorded_meals", "food_count", "identified_food_count", "unidentified_food_count", "metrics", "plan", "meals"},
+            {"recorded_meals", "food_count", "identified_food_count", "unidentified_food_count", "metrics", "plan", "meals", "energy"},
             "snapshot.nutrition",
         )
         counts = {
@@ -365,6 +397,13 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
                 meal_food_count += 1
         if meal_food_count != counts["food_count"]:
             raise MobileSnapshotContractError("snapshot.nutrition meal items are inconsistent with food count")
+        energy = _require_exact_keys(
+            nutrition["energy"],
+            {"intake_calories", "training_calories", "resting_calories", "active_calories", "total_expenditure", "calorie_surplus", "calorie_gap"},
+            "snapshot.nutrition.energy",
+        )
+        for key, value in energy.items():
+            _require_number(value, f"snapshot.nutrition.energy.{key}", allow_none=True, minimum=0)
         plan = nutrition["plan"]
         if plan is not None:
             _require_exact_keys(
@@ -389,11 +428,19 @@ def validate_mobile_daily_snapshot(snapshot: Any) -> dict[str, Any]:
             if not isinstance(plan["entries"], list):
                 raise MobileSnapshotContractError("snapshot.nutrition.plan.entries must be an array")
             for entry in plan["entries"]:
-                _require_exact_keys(entry, {"weekday", "meal_slot", "start_time", "end_time", "title"}, "snapshot.nutrition.plan.entry")
+                _require_exact_keys(entry, {"weekday", "meal_slot", "start_time", "end_time", "title", "details"}, "snapshot.nutrition.plan.entry")
                 if isinstance(entry["weekday"], bool) or not isinstance(entry["weekday"], int) or not 0 <= entry["weekday"] <= 6:
                     raise MobileSnapshotContractError("snapshot.nutrition.plan entry weekday is invalid")
                 for key in ("meal_slot", "start_time", "end_time", "title"):
                     _require_string(entry[key], f"snapshot.nutrition.plan.entry.{key}")
+                if not isinstance(entry["details"], list):
+                    raise MobileSnapshotContractError("snapshot.nutrition.plan entry details must be an array")
+                for detail in entry["details"]:
+                    _require_exact_keys(detail, {"kind", "name", "quantity", "unit"}, "snapshot.nutrition.plan.entry.detail")
+                    _require_string(detail["kind"], "snapshot.nutrition.plan.entry.detail.kind")
+                    _require_string(detail["name"], "snapshot.nutrition.plan.entry.detail.name")
+                    _require_number(detail["quantity"], "snapshot.nutrition.plan.entry.detail.quantity", allow_none=True, minimum=0.01)
+                    _require_string(detail["unit"], "snapshot.nutrition.plan.entry.detail.unit")
     if "feedback" in root:
         feedback = _require_exact_keys(root["feedback"], {
             "date", "source", "summary", "domain_feedback", "limitations", "ai_stale",
@@ -443,6 +490,15 @@ def _normalize_date(value: date | str) -> str:
     return date.fromisoformat(str(value)).isoformat()
 
 
+def _rounded_optional_number(value: Any) -> float | None:
+    """Keep optional desktop plan quantities JSON-safe and consistently precise."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, 2) if math.isfinite(number) and number > 0 else None
+
+
 def _latest_date(db_path: Path | str | None) -> str | None:
     """Find a factual date without causing a schema migration or write."""
     connection = connect_readonly(db_path)
@@ -464,6 +520,77 @@ def _latest_date(db_path: Path | str | None) -> str | None:
         except sqlite3.OperationalError:
             return None
         return row[0] if row else None
+    finally:
+        connection.close()
+
+
+# A daily mobile projection can contain recovery, sleep, training, nutrition,
+# or activity information.  Keep the date inventory in one place so archival
+# sync does not accidentally inherit the 28-day *UI* history limit.
+_SNAPSHOT_DATE_SOURCES: tuple[tuple[str, str], ...] = (
+    ("daily_recovery_metrics", "date"),
+    ("recovery_scores", "date"),
+    ("polar_daily_activity_raw", "date"),
+    ("polar_training_sessions_raw", "date"),
+    ("polar_sleep_raw", "date"),
+    ("polar_nightly_recharge_raw", "date"),
+    ("kubios_morning_hrv_raw", "date"),
+    ("manual_recovery_logs", "date"),
+    ("manual_sleep_logs", "sleep_date"),
+    ("manual_activity_sessions", "date"),
+    ("daily_nutrition_summary", "date"),
+    ("daily_training_summary", "date"),
+    ("nutrition_logs", "date"),
+    ("meal_events", "date"),
+    ("meal_records", "date"),
+)
+
+
+def list_mobile_snapshot_dates(
+    db_path: Path | str | None = None,
+    *,
+    maximum_dates: int | None = None,
+) -> list[str]:
+    """List factual dates eligible for durable mobile snapshot archival.
+
+    ``maximum_dates`` is an optional operational batch size, not a retention
+    policy.  Passing ``None`` returns the complete local date inventory so the
+    cloud archive can outlive the iPhone's 28-day presentation window.  Legacy
+    databases may not yet contain every optional source table; those sources
+    are simply omitted rather than making a read-only sync fail.
+    """
+    if maximum_dates is not None and (
+        isinstance(maximum_dates, bool)
+        or not isinstance(maximum_dates, int)
+        or not 1 <= maximum_dates <= 10_000
+    ):
+        raise ValueError("maximum_dates must be between 1 and 10000")
+
+    connection = connect_readonly(db_path)
+    try:
+        existing_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        selects = [
+            f"SELECT {column} AS log_date FROM {table} "
+            f"WHERE {column} IS NOT NULL AND trim({column}) <> ''"
+            for table, column in _SNAPSHOT_DATE_SOURCES
+            if table in existing_tables
+        ]
+        if not selects:
+            return []
+        query = "SELECT log_date FROM (" + " UNION ".join(selects) + ") ORDER BY log_date DESC"
+        parameters: tuple[int, ...] = ()
+        if maximum_dates is not None:
+            query += " LIMIT ?"
+            parameters = (maximum_dates,)
+        rows = connection.execute(query, parameters).fetchall()
+        # Publish old-to-new. It produces a readable audit trail and leaves the
+        # most recent day as the final document in a first-time backfill.
+        return [str(row[0]) for row in reversed(rows)]
     finally:
         connection.close()
 
@@ -595,6 +722,7 @@ def _mobile_nutrition_summary(db_path: Path | str | None, day: str) -> dict[str,
     service = NutritionFeedbackService(records, day, "zh-CN", targets=targets)
     summary = service.today_summary()
     details = service.daily_metrics()
+    daily_metrics = get_day_metrics(day, db_path) or {}
     return {
         "recorded_meals": int(summary["recorded_meals"]),
         "food_count": int(summary["food_count"]),
@@ -602,6 +730,7 @@ def _mobile_nutrition_summary(db_path: Path | str | None, day: str) -> dict[str,
         "unidentified_food_count": int(summary["unidentified_food_count"]),
         "plan": plan,
         "meals": _mobile_nutrition_meals(records, day, catalog),
+        "energy": _mobile_nutrition_energy(records, day, daily_metrics),
         "metrics": [
             {
                 "metric": metric,
@@ -614,6 +743,45 @@ def _mobile_nutrition_summary(db_path: Path | str | None, day: str) -> dict[str,
             }
             for metric in NUTRITION_METRICS
         ],
+    }
+
+
+def _mobile_nutrition_energy(
+    records: list[dict[str, Any]], day: str, daily_metrics: dict[str, Any],
+) -> dict[str, float | None]:
+    """Mirror the desktop's today/historical energy-balance table exactly."""
+    intake_values = []
+    for record in records:
+        if record.get("date") != day:
+            continue
+        value = (record.get("summary") or {}).get("calories_kcal")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            intake_values.append(number)
+    intake = round(sum(intake_values), 2) if intake_values else None
+
+    def value(key: str) -> float | None:
+        try:
+            number = float(daily_metrics.get(key))
+        except (TypeError, ValueError):
+            return None
+        return round(number, 2) if math.isfinite(number) and number >= 0 else None
+
+    total = value("calories")
+    active = value("active_calories")
+    resting = round(total - active, 2) if total is not None and active is not None and total >= active else None
+    balance = round(total - intake, 2) if total is not None and intake is not None else None
+    return {
+        "intake_calories": intake,
+        "training_calories": value("training_calories"),
+        "resting_calories": resting,
+        "active_calories": active,
+        "total_expenditure": total,
+        "calorie_surplus": abs(balance) if balance is not None and balance < 0 else None,
+        "calorie_gap": balance if balance is not None and balance > 0 else None,
     }
 
 
@@ -655,7 +823,7 @@ def _mobile_nutrition_meals(records: list[dict[str, Any]], day: str, catalog: di
 
 
 def _mobile_nutrition_plan(connection: sqlite3.Connection, day: str) -> dict[str, Any] | None:
-    """Return the current desktop nutrition-cycle week without free-text notes."""
+    """Return the current desktop nutrition-cycle week and safe item details."""
     target = date.fromisoformat(day)
     monday = target - timedelta(days=target.weekday())
     try:
@@ -692,6 +860,14 @@ def _mobile_nutrition_plan(connection: sqlite3.Connection, day: str) -> dict[str
         (plan["plan_id"],),
     ).fetchall()
     markers = ("__nutrition_auto_recipe__:", "__nutrition_manual_recipe__:")
+    food_by_id = food_catalog_by_id(connection)
+    try:
+        products_by_id = {
+            str(product["id"]): product["product_name"]
+            for product in connection.execute("SELECT id,product_name FROM supplement_products").fetchall()
+        }
+    except sqlite3.OperationalError:
+        products_by_id = {}
     entries = []
     for row in rows:
         notes = str(row["notes"] or "")
@@ -701,9 +877,36 @@ def _mobile_nutrition_plan(connection: sqlite3.Connection, day: str) -> dict[str
         meal_slot = notes[len(marker):].split("|", 1)[0].strip()
         if not meal_slot:
             continue
+        details = []
+        raw_detail = notes.split("|", 1)[1] if "|" in notes else ""
+        try:
+            payload = json.loads(raw_detail)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("version") == 1:
+            for item in payload.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                catalog = food_by_id.get(item.get("food_catalog_id"))
+                name = food_display_name(catalog) if catalog else str(item.get("custom_food_name") or "").strip()
+                if name:
+                    details.append({
+                        "kind": str(item.get("item_type") or "food"), "name": name,
+                        "quantity": _rounded_optional_number(item.get("quantity")), "unit": str(item.get("unit") or ""),
+                    })
+            for item in payload.get("supplements") or []:
+                if not isinstance(item, dict):
+                    continue
+                name = products_by_id.get(str(item.get("supplement_product_id"))) or str(item.get("custom_product_name") or "").strip()
+                if name:
+                    details.append({
+                        "kind": str(item.get("product_kind") or "supplement"), "name": name,
+                        "quantity": _rounded_optional_number(item.get("quantity")), "unit": str(item.get("unit") or ""),
+                    })
         entries.append({
             "weekday": int(row["weekday"]), "meal_slot": meal_slot,
             "start_time": row["start_time"], "end_time": row["end_time"], "title": row["title"],
+            "details": details,
         })
     duration_days = (date.fromisoformat(cycle["end_date"]) - date.fromisoformat(cycle["start_date"])).days + 1
     return {
@@ -712,6 +915,50 @@ def _mobile_nutrition_plan(connection: sqlite3.Connection, day: str) -> dict[str
         "week_index": (target - date.fromisoformat(cycle["start_date"])).days // 7 + 1,
         "week_count": max(1, duration_days // 7), "entries": entries,
     }
+
+
+def _mobile_profile_summary(db_path: Path | str | None, day: str) -> dict[str, Any] | None:
+    """Return only the profile fields rendered by the mobile ``我的`` overview.
+
+    The client receives no desktop row IDs, update metadata, goals, or history;
+    the single body measurement is bounded to the snapshot date so a historical
+    Today import cannot accidentally display a later measurement.
+    """
+    connection = connect_readonly(db_path)
+    try:
+        try:
+            profile = connection.execute(
+                "SELECT name,gender,birth_date,height_cm FROM personal_profile WHERE id=1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not profile:
+            return None
+        try:
+            body = connection.execute(
+                """SELECT date,weight_kg,body_fat_percent,waist_cm
+                   FROM body_measurements WHERE date<=?
+                   ORDER BY date DESC,is_primary DESC,id DESC LIMIT 1""",
+                (day,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            body = None
+        return {
+            "basic": {
+                "name": profile["name"],
+                "gender": profile["gender"],
+                "birth_date": profile["birth_date"],
+                "height_cm": profile["height_cm"],
+            },
+            "body": {
+                "date": body["date"],
+                "weight_kg": body["weight_kg"],
+                "body_fat_percent": body["body_fat_percent"],
+                "waist_cm": body["waist_cm"],
+            } if body else None,
+        }
+    finally:
+        connection.close()
 
 
 def build_mobile_daily_snapshot(
@@ -841,8 +1088,11 @@ def build_mobile_daily_snapshot(
             "calories_kcal": training.get("calories"),
             "sports": training.get("sports") or [],
         },
+        "profile": _mobile_profile_summary(db_path, target_date),
         "nutrition": _mobile_nutrition_summary(db_path, target_date),
     }
+    if snapshot["profile"] is None:
+        del snapshot["profile"]
     from .mobile_feedback import build_mobile_feedback
     snapshot["feedback"] = build_mobile_feedback(db_path, target_date)
     return validate_mobile_daily_snapshot(snapshot)

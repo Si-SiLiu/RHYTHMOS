@@ -12,7 +12,7 @@ from .domain_dashboard_data import get_training_history
 
 CONTRACT_KIND = "rhythmos.mobile_training_history"
 CONTRACT_VERSION = 1
-MAX_DAYS = 30
+MAX_DAYS = 28
 
 
 class MobileTrainingHistoryError(ValueError):
@@ -32,6 +32,7 @@ def _session_projection(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": "polar" if session.get("polar_external_id") else "manual",
         "sport": session.get("sport") if isinstance(session.get("sport"), str) else None,
+        "polar_sport": session.get("polar_sport") if isinstance(session.get("polar_sport"), str) else None,
         "start_time": session.get("start_time") if isinstance(session.get("start_time"), str) else None,
         "duration_minutes": _finite_number(session.get("duration_minutes"), minimum=0),
         "calories_kcal": _finite_number(session.get("calories"), minimum=0),
@@ -46,7 +47,7 @@ def _session_projection(session: dict[str, Any]) -> dict[str, Any]:
 def build_mobile_training_history(
     db_path: Path | str | None = None,
     *,
-    days: int = 14,
+    days: int = 28,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build recent training days using the desktop's canonical resolved projection."""
@@ -64,6 +65,9 @@ def build_mobile_training_history(
         ]
         start_times = sorted(session["start_time"] for session in sessions if session["start_time"])
         distances = [session["distance_meters"] for session in sessions if session["distance_meters"] is not None]
+        polar_sports = list(dict.fromkeys(
+            session["polar_sport"] for session in sessions if session["polar_sport"]
+        ))
         entries.append({
             "date": training["date"],
             "session_count": len(sessions),
@@ -74,6 +78,7 @@ def build_mobile_training_history(
             "maximum_hr_bpm": _finite_number(training.get("maximum_hr_bpm"), minimum=0),
             "distance_meters": sum(distances) if distances else None,
             "sports": [sport for sport in training.get("sports", []) if isinstance(sport, str) and sport],
+            "polar_sports": polar_sports,
             "sessions": sessions,
         })
 

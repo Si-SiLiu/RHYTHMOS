@@ -42,8 +42,9 @@ class MobileTrainingHistoryTests(unittest.TestCase):
         self.assertEqual(history["generated_at"], "2026-09-07T00:00:00Z")
         self.assertEqual([item["date"] for item in history["days"]], ["2026-09-05", "2026-09-06"])
         self.assertEqual(history["days"][0]["duration_minutes"], 45.0)
+        self.assertEqual(history["days"][0]["polar_sports"], ["running"])
         self.assertEqual(history["days"][1]["sessions"], [{
-            "source": "manual", "sport": "strength_training", "start_time": None, "duration_minutes": 55.0,
+            "source": "manual", "sport": "strength_training", "polar_sport": None, "start_time": None, "duration_minutes": 55.0,
             "calories_kcal": 320.0, "average_hr_bpm": None, "maximum_hr_bpm": None,
             "distance_meters": None, "fat_burn_percentage": None, "session_rpe": 7.0,
         }])
