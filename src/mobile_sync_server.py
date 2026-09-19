@@ -197,6 +197,11 @@ def create_app(
             current.get("RHYTHMOS_ACCOUNT_REGISTRATION_ENABLED", "")
         ).lower() in {"1", "true", "yes", "enabled"}
 
+    def registration_code_matches(value: object) -> bool:
+        expected = str(service_settings().get("RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256") or "")
+        presented = sha256(value.encode("utf-8")).hexdigest() if isinstance(value, str) and value else ""
+        return bool(expected) and hmac.compare_digest(presented, expected)
+
     def session_issuer() -> MobileSessionIssuer | None:
         signing_key = service_settings().get("RHYTHMOS_MOBILE_SESSION_SIGNING_KEY")
         if not signing_key:
@@ -501,12 +506,7 @@ def create_app(
             account_name = normalize_account_name(payload.get("account_name"))
             password_record = password_hash(payload.get("password"))
             registration_code = payload.get("registration_code")
-            expected_code_hash = str(service_settings().get("RHYTHMOS_ACCOUNT_REGISTRATION_CODE_SHA256") or "")
-            presented_code_hash = (
-                sha256(registration_code.encode("utf-8")).hexdigest()
-                if isinstance(registration_code, str) and registration_code else ""
-            )
-            if not hmac.compare_digest(presented_code_hash, expected_code_hash):
+            if not registration_code_matches(registration_code):
                 return jsonify(error="ACCOUNT_REGISTRATION_DISABLED"), 403
             if load_cloud_document_for(
                 AUTH_REGISTRY_ACCOUNT_ID, "mobile_account", owner_registration_key(),
@@ -543,6 +543,46 @@ def create_app(
         except MobileAccountAuthError:
             return jsonify(error="INVALID_ACCOUNT_CREDENTIALS"), 400
         return session_response(session_value, status=201)
+
+    @app.post("/v1/mobile/auth/account/reset")
+    def reset_rhythmos_account() -> Response:
+        """Reset the closed-test account password with the private invite code.
+
+        This endpoint is intentionally separate from registration. The invite
+        code authorizes recovery of the one shared test account but does not
+        create additional accounts or reveal whether a submitted name exists.
+        """
+        if not account_auth_ready():
+            return jsonify(error="ACCOUNT_AUTH_NOT_CONFIGURED"), 503
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="INVALID_AUTH_PAYLOAD"), 400
+        try:
+            device_id = validate_device_id(payload.get("device_id"))
+            account_name = normalize_account_name(payload.get("account_name"))
+            password_record = password_hash(payload.get("password"))
+            if not registration_code_matches(payload.get("registration_code")):
+                return jsonify(error="ACCOUNT_RECOVERY_CODE_INVALID"), 403
+            credential_key = account_credential_key(account_name)
+            credential = load_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID, "mobile_credential", credential_key,
+            )
+            if not isinstance(credential, dict) or not isinstance(credential.get("account_id"), str):
+                return jsonify(error="ACCOUNT_RECOVERY_CODE_INVALID"), 403
+            if not save_cloud_document_for(
+                AUTH_REGISTRY_ACCOUNT_ID,
+                "mobile_credential",
+                credential_key,
+                {"version": 1, "account_id": credential["account_id"], "password_scrypt": password_record},
+            ):
+                return jsonify(error="ACCOUNT_RECOVERY_UNAVAILABLE"), 503
+            issued = issue_account_session(credential["account_id"], device_id)
+            if issued is None:
+                return jsonify(error="ACCOUNT_RECOVERY_UNAVAILABLE"), 503
+            _issuer, session_value = issued
+        except MobileAccountAuthError:
+            return jsonify(error="INVALID_ACCOUNT_CREDENTIALS"), 400
+        return session_response(session_value)
 
     @app.post("/v1/mobile/auth/account/login")
     def login_rhythmos_account() -> Response:

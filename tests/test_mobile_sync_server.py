@@ -211,6 +211,21 @@ class MobileSyncServerTests(unittest.TestCase):
         unknown_account = client.post("/v1/mobile/auth/account/login", json={**payload, "account_name": "unknown.account"})
         self.assertEqual(bad_password.get_json(), {"error": "INVALID_ACCOUNT_CREDENTIALS"})
         self.assertEqual(unknown_account.get_json(), {"error": "INVALID_ACCOUNT_CREDENTIALS"})
+
+        reset = client.post("/v1/mobile/auth/account/reset", json={
+            **payload, "password": "a-new-safe-password",
+        })
+        self.assertEqual(reset.status_code, 200)
+        reset_login = client.post("/v1/mobile/auth/account/login", json={
+            **payload, "password": "a-new-safe-password",
+        })
+        self.assertEqual(reset_login.status_code, 200)
+        rejected_reset = client.post("/v1/mobile/auth/account/reset", json={
+            **payload, "password": "another-safe-password", "registration_code": "wrong-invite",
+        })
+        self.assertEqual(rejected_reset.status_code, 403)
+        self.assertEqual(rejected_reset.get_json(), {"error": "ACCOUNT_RECOVERY_CODE_INVALID"})
+
         repeated_registration = client.post("/v1/mobile/auth/account/register", json={
             **payload, "account_name": "another.tester",
         })
